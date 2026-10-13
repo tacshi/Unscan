@@ -21,9 +21,10 @@ import (
 // made white; the ink of each line read is measured, so that its text can
 // be set over it at the same size; the lines printed on plain paper are
 // erased; and what remains of the page (pictures, rules, logos, and text
-// on color, such as a cover's title) is cut out into images. Text on color
-// stays as printed, since retyping it would deface the design, under
-// invisible text that makes it searchable as the rest.
+// on color, such as a cover's title), but for the marks the scan's edges
+// leave, is cut out into images. Text on color stays as printed, since
+// retyping it would deface the design, under invisible text that makes it
+// searchable as the rest.
 
 // pixels is an RGB image, 3 bytes a pixel.
 type pixels struct {
@@ -639,6 +640,31 @@ func (p *pixels) pictures(dpi float64) []image.Rectangle {
 	return mergeRects(rects)
 }
 
+// edgeMark reports whether r, a piece of what is left of a page w×h pixels
+// large at dpi, whose lines read span text, is a mark of the scan's edge
+// rather than of the page: the shadow of the paper's edge or the scanner's
+// lid, as a line along an edge or a speck on it. It lies in the outer half
+// of the margin, within 15 mm of the edge, and runs along the edge, four
+// times as long as it is thick, or lies within 3 mm of it, unlike a folio
+// the recognizer missed.
+func edgeMark(r, text image.Rectangle, w, h int, dpi float64) bool {
+	mm := dpi / 25.4
+	for _, e := range [4]struct{ near, far, margin, along int }{
+		{r.Min.X, r.Max.X, text.Min.X, r.Dy()},
+		{w - r.Max.X, w - r.Min.X, w - text.Max.X, r.Dy()},
+		{r.Min.Y, r.Max.Y, text.Min.Y, r.Dx()},
+		{h - r.Max.Y, h - r.Min.Y, h - text.Max.Y, r.Dx()},
+	} {
+		if float64(e.far) > min(15*mm, float64(e.margin)/2) {
+			continue
+		}
+		if float64(e.near) <= 3*mm || e.along >= 4*(e.far-e.near) {
+			return true
+		}
+	}
+	return false
+}
+
 // pictureDPI is the most resolution photos keep: that of most scans. Line
 // art keeps the page's.
 const pictureDPI = 200
@@ -788,20 +814,23 @@ func (d *textDoc) redrawPage(img image.Image, lines []ocr.Line, width, height fl
 	page.sx, page.sy = width/float64(p.w), height/float64(p.h)
 	p.whiten()
 
-	// Measure every line before erasing any, as boxes may overlap.
+	// Measure every line before erasing any, as boxes may overlap. Lines
+	// are measured, and erased below, in the text fonts, whatever fonts
+	// they are set in (see ref).
+	ref := d.ref
 	for _, l := range lines {
 		f := lineFrame(l.Box)
-		text, in, keep := trimLeaders(l.Text, p.measure(f, d.shape(l.Text, serif).aspect()))
+		text, in, keep := trimLeaders(l.Text, p.measure(f, ref.shape(l.Text, serif).aspect()))
 		in.tops = nil // for trimLeaders only: kept, a long document's would fill memory
-		page.measured = append(page.measured, measuredLine{text: text, frame: f, ink: in, keep: keep, refs: d.refs(text, f, in)})
+		page.measured = append(page.measured, measuredLine{text: text, frame: f, ink: in, keep: keep, refs: ref.refs(text, f, in)})
 	}
 	// Erase the lines on plain paper, set provisionally in the serif face to
 	// find the ink no character is matched to (see place), which stays.
 	shapes := make([]shape, len(page.measured))
 	sizes := make([]float64, len(page.measured))
 	for i, m := range page.measured {
-		shapes[i] = d.shape(m.text, serif)
-		sizes[i] = d.size(shapes[i], m.frame, m.ink)
+		shapes[i] = ref.shape(m.text, serif)
+		sizes[i] = ref.size(shapes[i], m.frame, m.ink)
 	}
 	sizes = evenSizes(sizes)
 	for i, m := range page.measured {
@@ -809,7 +838,7 @@ func (d *textDoc) redrawPage(img image.Image, lines []ocr.Line, width, height fl
 		if f.length == 0 || f.height == 0 || !shapes[i].inked || !in.plain {
 			continue
 		}
-		_, _, bare := d.place(shapes[i], f, in, sizes[i])
+		_, _, bare := ref.place(shapes[i], f, in, sizes[i])
 		bare = append(bare, m.keep...)
 		slices.SortFunc(bare, func(a, b [2]float64) int { return cmp.Compare(a[0], b[0]) })
 		// The box, and the ink that runs past it, with a pixel to spare,
@@ -826,8 +855,23 @@ func (d *textDoc) redrawPage(img image.Image, lines []ocr.Line, width, height fl
 		p.fill(f, from, s1+1, t0-1, t1+1, white)
 	}
 
+	// What the lines span, which the margins lie outside of: the page's
+	// middle, for a page of none.
+	text := image.Rect(p.w/2, p.h/2, p.w/2, p.h/2)
+	if len(lines) > 0 {
+		x0, y0, x1, y1 := math.Inf(1), math.Inf(1), math.Inf(-1), math.Inf(-1)
+		for _, l := range lines {
+			for _, pt := range l.Box {
+				x0, y0, x1, y1 = min(x0, pt.X), min(y0, pt.Y), max(x1, pt.X), max(y1, pt.Y)
+			}
+		}
+		text = image.Rect(int(x0), int(y0), int(math.Ceil(x1)), int(math.Ceil(y1)))
+	}
 	dpi := 72 / ((page.sx + page.sy) / 2)
 	for _, r := range p.pictures(dpi) {
+		if edgeMark(r, text, p.w, p.h, dpi) {
+			continue
+		}
 		img := p.encode(r, dpi)
 		img.x, img.y = float64(r.Min.X)*page.sx, height-float64(r.Max.Y)*page.sy
 		img.w, img.h = float64(r.Dx())*page.sx, float64(r.Dy())*page.sy
@@ -862,7 +906,7 @@ func (d *textDoc) setLines() {
 			i++
 		}
 	}
-	for i, fi := range d.styles(texts, frames, inks, refs, pages) {
+	for i, fi := range d.ref.styles(texts, frames, inks, refs, pages) {
 		all[i].face = fi
 	}
 
@@ -907,7 +951,8 @@ func (d *textDoc) setLines() {
 	}
 }
 
-// shape is a line of text set in a face at 1 em, in font units.
+// shape is a line of text set in a face at 1 em, in the face's units:
+// those of glyphs from other faces of other units (see glyphFace) too.
 type shape struct {
 	face        int
 	glyphs      []glyph
@@ -919,7 +964,7 @@ type shape struct {
 
 type glyph struct {
 	r       rune
-	face    int // the face its glyph is from: the line's, or the one it takes Latin from
+	face    int // the face its glyph is from (see glyphFace)
 	advance int
 	bounds  [4]int // its outline's, when inked
 	inked   bool
@@ -927,23 +972,24 @@ type glyph struct {
 	space   bool
 }
 
-// shape sets text in face, but for the characters the face takes from
-// another (see latin): those that it sets narrower than CJK characters,
-// or lacks.
+// shape sets text in face, but for the characters it takes from other
+// faces (see glyphFace).
 func (d *textDoc) shape(text string, face int) shape {
 	sh := shape{face: face}
 	em := d.fonts[face].ttf.UnitsPerEm
 	for _, r := range strings.TrimSpace(text) {
-		fi := face
-		if from := latin(face); from != face {
-			own := d.fonts[face].ttf
-			if g := own.Glyph(r); g == 0 || !wide(r, own.Advance(g), em) {
-				fi = from
-			}
-		}
-		font := d.fonts[fi].ttf
+		fi := d.glyphFace(face, r)
+		font := d.font(fi).ttf
 		g := font.Glyph(r)
 		b, inked := font.Bounds(g)
+		adv := font.Advance(g)
+		if font.UnitsPerEm != em {
+			k := float64(em) / float64(font.UnitsPerEm)
+			for i := range b {
+				b[i] = int(math.Round(float64(b[i]) * k))
+			}
+			adv = int(math.Round(float64(adv) * k))
+		}
 		if inked {
 			if !sh.inked {
 				sh.left, sh.yMin, sh.yMax = sh.advance+b[0], b[1], b[3]
@@ -952,13 +998,35 @@ func (d *textDoc) shape(text string, face int) shape {
 			sh.right = sh.advance + b[2]
 			sh.yMin, sh.yMax = min(sh.yMin, b[1]), max(sh.yMax, b[3])
 		}
-		adv := font.Advance(g)
 		sh.glyphs = append(sh.glyphs, glyph{r: r, face: fi, advance: adv, bounds: b, inked: inked,
 			wide: wide(r, adv, em), space: unicode.IsSpace(r)})
 		sh.advance += adv
 	}
 	sh.inked = sh.inked && sh.yMax > sh.yMin
 	return sh
+}
+
+// glyphFace is the face that sets r in a line set in face: the face, but
+// for what it takes from another (see latin), what it sets narrower than
+// CJK characters or lacks, and, for a font of the user's, the text font
+// behind it (see fallbacks) for what it lacks, as Chinese characters in a
+// Latin font. A Kai font of the user's takes the Chinese characters it
+// lacks from the text fonts' Kai face, and the rest from the serif face.
+func (d *textDoc) glyphFace(face int, r rune) int {
+	if from := latin(face); from != face {
+		for _, fi := range []int{face, fallback + face} {
+			if fc := d.font(fi); fc != nil {
+				if g := fc.ttf.Glyph(r); g != 0 && wide(r, fc.ttf.Advance(g), fc.ttf.UnitsPerEm) {
+					return fi
+				}
+			}
+		}
+		face = from
+	}
+	if fc := d.font(fallback + face); fc != nil && d.fonts[face].ttf.Glyph(r) == 0 && fc.ttf.Glyph(r) != 0 {
+		return fallback + face
+	}
+	return face
 }
 
 // wide reports whether r is set as a CJK character: ideographs, kana,
@@ -1224,7 +1292,8 @@ func (d *textDoc) place(sh shape, f frame, in ink, size float64) (tl textLine, o
 // them at origins, set at size pixels an em (see place): before Tz, which
 // scales them as it does the glyphs, in whole hundredths of an em, so that
 // lines share codes, with what rounding drops carried on to the next
-// glyph. The last keeps its own.
+// glyph. The last keeps its own. Advances are in the units of the face
+// each character is set in.
 func (d *textDoc) number(s *cidSet, sh shape, origins []float64, size float64) []uint16 {
 	em := float64(d.fonts[sh.face].ttf.UnitsPerEm)
 	q := max(1, d.fonts[sh.face].ttf.UnitsPerEm/100)
@@ -1239,7 +1308,12 @@ func (d *textDoc) number(s *cidSet, sh shape, origins []float64, size float64) [
 		want := width - float64(g.advance) + carry
 		add := int(math.Round(want/float64(q))) * q
 		carry = want - float64(add)
-		cids = append(cids, d.cid(s, g.face, g.r, g.advance+add))
+		font := d.font(g.face).ttf
+		own := font.Advance(font.Glyph(g.r))
+		if font.UnitsPerEm != int(em) {
+			add = int(math.Round(float64(add) * float64(font.UnitsPerEm) / em))
+		}
+		cids = append(cids, d.cid(s, g.face, g.r, own+add))
 	}
 	return cids
 }

@@ -53,6 +53,7 @@ func (a *app) view(c *ui.Context) {
 		case done:
 			a.document(c, dragging)
 		}
+		a.fontsDialog(c)
 	})
 }
 

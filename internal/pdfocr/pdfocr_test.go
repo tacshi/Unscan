@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode"
 
 	"github.com/klippa-app/go-pdfium"
 	"github.com/klippa-app/go-pdfium/references"
@@ -352,7 +353,7 @@ func TestConvertText(t *testing.T) {
 func TestTrackedText(t *testing.T) {
 	c := newTestConverter(t)
 	d, fonts := testTextDoc(t)
-	sf, err := opentype.Parse(fonts.Serif)
+	sf, err := opentype.Parse(fonts.Serif.Data)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -431,7 +432,7 @@ func TestTrackedText(t *testing.T) {
 func TestCIDSets(t *testing.T) {
 	c := newTestConverter(t)
 	_, fonts := testTextDoc(t)
-	sf, err := opentype.Parse(fonts.Serif)
+	sf, err := opentype.Parse(fonts.Serif.Data)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -516,7 +517,7 @@ func TestCIDSets(t *testing.T) {
 func TestAlignedLabel(t *testing.T) {
 	c := newTestConverter(t)
 	d, fonts := testTextDoc(t)
-	sf, err := opentype.Parse(fonts.Serif)
+	sf, err := opentype.Parse(fonts.Serif.Data)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -730,3 +731,96 @@ func contains(q ocr.Quad, p ocr.Point) bool {
 }
 
 func abs(v float64) float64 { return max(v, -v) }
+
+// TestUserFonts redraws a line in a font of the user's, Times from a
+// collection, of 2048 units an em where the text fonts' are 1000, and
+// without Chinese characters, which come from Noto Serif SC: both are
+// embedded, the text extracts as read, and the type, rendered, covers the
+// scan's ink, from its first character to its last where they were drawn.
+// Times's Latin is narrower than the scan's, which the spacing takes up.
+func TestUserFonts(t *testing.T) {
+	c := newTestConverter(t)
+	_, fonts := testTextDoc(t)
+	if err := c.SetTextFonts(fonts); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.SetUserFonts(TextFonts{Serif: Font{Data: systemFont(t, "/System/Library/Fonts/Times.ttc")}}); err != nil {
+		t.Fatal(err)
+	}
+	d := newTextDoc(c.fonts, c.user)
+	sf, err := opentype.Parse(fonts.Serif.Data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	face, err := opentype.NewFace(sf, &opentype.FaceOptions{Size: 40, DPI: 72, Hinting: font.HintingNone})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer face.Close()
+	const w, h, x0, base = 900, 200, 60, 120
+	img := image.NewRGBA(image.Rect(0, 0, w, h))
+	draw.Draw(img, img.Rect, image.White, image.Point{}, draw.Src)
+	text := "深入理解 Linux 内核"
+	dr := font.Drawer{Dst: img, Src: image.Black, Face: face, Dot: fixed.P(x0, base)}
+	var centers []float64
+	for _, r := range text {
+		b, _, _ := face.GlyphBounds(r)
+		centers = append(centers, float64(dr.Dot.X+(b.Min.X+b.Max.X)/2)/64)
+		dr.DrawString(string(r))
+	}
+	right := dr.Dot.X.Round()
+	box := ocr.Quad{{X: x0 - 10, Y: base - 46}, {X: float64(right + 10), Y: base - 46},
+		{X: float64(right + 10), Y: base + 14}, {X: x0 - 10, Y: base + 14}}
+	scan := inkBounds(img, img.Rect)
+	page := d.redraw(img, []ocr.Line{{Box: box, Text: text}}, w, h)
+	d.setLines()
+	if len(page.lines) != 1 || page.lines[0].face != serif {
+		t.Fatalf("lines %+v: want one, in the serif face", page.lines)
+	}
+	data := d.build()
+	for _, name := range []string{"+Times-Roman", "+NotoSerifSC-Regular"} {
+		if !bytes.Contains(data, []byte(name)) {
+			t.Errorf("no %s embedded", name)
+		}
+	}
+
+	inst, err := c.pool.GetInstance(time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer inst.Close()
+	pg := requests.Page{ByIndex: &requests.PageByIndex{Document: openDoc(t, inst, data), Index: 0}}
+	got, err := inst.GetPageText(&requests.GetPageText{Page: pg})
+	if err != nil || strings.Join(strings.Fields(got.Text), "") != strings.Join(strings.Fields(text), "") {
+		t.Errorf("extracted %q (%v), want %q", got.Text, err, text)
+	}
+	out := renderRGBA(t, inst, pg, 72)
+	if ink := inkBounds(out, out.Rect); abs(float64(ink.Min.X-scan.Min.X)) > 2 || abs(float64(ink.Max.X-scan.Max.X)) > 2 ||
+		abs(float64(ink.Min.Y-scan.Min.Y)) > 2 || abs(float64(ink.Max.Y-scan.Max.Y)) > 2 {
+		t.Errorf("type covers %v, the scan's ink %v", ink, scan)
+	}
+	st, err := inst.GetPageTextStructured(&requests.GetPageTextStructured{Page: pg, Mode: requests.GetPageTextStructuredModeChars})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mids []float64
+	for _, ch := range st.Chars {
+		if strings.TrimSpace(ch.Text) != "" {
+			mids = append(mids, (ch.PointPosition.Left+ch.PointPosition.Right)/2)
+		}
+	}
+	var drawn []float64
+	for i, r := range []rune(text) {
+		if !unicode.IsSpace(r) {
+			drawn = append(drawn, centers[i])
+		}
+	}
+	if len(mids) != len(drawn) {
+		t.Fatalf("%d characters, want %d", len(mids), len(drawn))
+	}
+	for _, i := range []int{0, len(drawn) - 1} {
+		if math.Abs(mids[i]-drawn[i]) > 2.5 {
+			t.Errorf("character %d is centered at %.1f, drawn at %.1f", i, mids[i], drawn[i])
+		}
+	}
+}

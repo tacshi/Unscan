@@ -58,7 +58,8 @@ type Output struct {
 	// their text set in a real font where it was printed, and what else
 	// they show (pictures, rules, logos) kept as images under it. Other
 	// pages are as they were. It needs the fonts given to
-	// Converter.SetTextFonts.
+	// Converter.SetTextFonts, and is set in those given to
+	// Converter.SetUserFonts where there are any.
 	TextPDF io.Writer
 }
 
@@ -86,9 +87,12 @@ type Progress func(done, pages int)
 
 // Converter turns scanned PDFs into searchable ones.
 type Converter struct {
-	pool  pdfium.Pool
-	ocr   *ocr.Engine
+	pool pdfium.Pool
+	ocr  *ocr.Engine
+
+	mu    sync.Mutex   // guards the fonts, which conversions take as they start
 	fonts [faces]*face // for text PDFs
+	user  [faces]*face // the user's, or nil
 }
 
 // New starts PDFium. Compiling its WebAssembly takes a few seconds the
@@ -129,13 +133,34 @@ func DefaultCacheDir() string {
 func (c *Converter) Close() error { return c.pool.Close() }
 
 // SetTextFonts sets the fonts that text PDFs are set in, such as those
-// LoadTextFonts reads. Set them before converting.
+// LoadTextFonts reads, of which the serif face is needed. Set them before
+// converting.
 func (c *Converter) SetTextFonts(f TextFonts) error {
 	fonts, err := parseFaces(f)
 	if err != nil {
 		return err
 	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.fonts = fonts
+	return nil
+}
+
+// SetUserFonts sets fonts of the user's that text PDFs are set in instead
+// of the text fonts, of any faces: a kind given either weight of is set in
+// it, a weight left out in the other, and other kinds in the text fonts.
+// The text fonts set the characters a font of the user's lacks, and lines
+// are judged against them all the same, as it is their faces that tell
+// the kinds and weights apart (see styles). Fonts set as a conversion runs
+// take effect from the next one; TextFonts{} sets none.
+func (c *Converter) SetUserFonts(f TextFonts) error {
+	user, err := parseUserFaces(f)
+	if err != nil {
+		return err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.user = user
 	return nil
 }
 
@@ -155,10 +180,13 @@ func (c *Converter) Convert(ctx context.Context, input io.ReadSeeker, out Output
 	}
 	var text *textDoc
 	if out.TextPDF != nil {
-		if c.fonts[serif] == nil {
+		c.mu.Lock()
+		fonts, user := c.fonts, c.user
+		c.mu.Unlock()
+		if fonts[serif] == nil {
 			return nil, errors.New("a text PDF needs fonts: call SetTextFonts first")
 		}
-		text = newTextDoc(c.fonts)
+		text = newTextDoc(fonts, user)
 	}
 	size, err := input.Seek(0, io.SeekEnd)
 	if err != nil {

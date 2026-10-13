@@ -7,6 +7,7 @@ import (
 	"image"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"testing"
 	"time"
@@ -55,10 +56,12 @@ func newFixture(t *testing.T, convert func(ctx context.Context, path string, p p
 			suggested = append(suggested, name)
 			return name, nil
 		},
-		reveal: func(path string) { f.revealed = append(f.revealed, path) },
-		menu:   func(open, save bool) { f.menus = append(f.menus, [2]bool{open, save}) },
-		dock:   func(p float64) { f.dock = append(f.dock, p) },
-		attend: func() {},
+		reveal:     func(path string) { f.revealed = append(f.revealed, path) },
+		menu:       func(open, save bool) { f.menus = append(f.menus, [2]bool{open, save}) },
+		dock:       func(p float64) { f.dock = append(f.dock, p) },
+		attend:     func() {},
+		chooseFont: func() (string, error) { return "", nil },
+		saveFonts:  func(fontChoices) error { return nil },
 	}
 	return f
 }
@@ -370,6 +373,166 @@ func TestTimeLeft(t *testing.T) {
 	} {
 		if got := timeLeft(c.spent, c.done, c.pages); got != c.want {
 			t.Errorf("timeLeft(%v, %d, %d) = %q, not %q", c.spent, c.done, c.pages, got, c.want)
+		}
+	}
+}
+
+// fakeFonts reads font files by their names: Songti.ttc holds Songti SC
+// Black, Bold and Regular, Arial.ttf one font, and others none it can use.
+func fakeFonts(fonts fontChoices) fontChoices {
+	for i := range fonts {
+		f := &fonts[i]
+		f.names, f.name, f.err = nil, "", ""
+		if f.Path == "" {
+			continue
+		}
+		switch filepath.Base(f.Path) {
+		case "Songti.ttc":
+			f.names = []string{"Songti SC Black", "Songti SC Bold", "Songti SC Regular"}
+		case "Arial.ttf":
+			f.names = []string{"Arial"}
+		default:
+			f.err = "Not a TrueType font (.ttf or .ttc)."
+			continue
+		}
+		if f.Index < 0 {
+			f.Index = pdfocr.PickFont(f.names, fontFaces[i].bold)
+		}
+		f.name = f.names[f.Index]
+	}
+	return fonts
+}
+
+// TestFonts chooses fonts in the Fonts dialog: a collection's regular one,
+// then another of it from its menu, a font file of one font, one that
+// cannot be used, and the built-in font again, saving each choice. Fonts
+// chosen before the models load are used once they have.
+func TestFonts(t *testing.T) {
+	f := newFixture(t, nil)
+	var saved []fontChoices
+	f.fx.saveFonts = func(fonts fontChoices) error {
+		saved = append(saved, fonts)
+		return nil
+	}
+	var chosen string
+	f.fx.chooseFont = func() (string, error) { return chosen, nil }
+	tt := ui.NewTester(f.view, 960, 720)
+	f.openFonts()
+	tt.Frame()
+	wantTexts(t, tt, "Fonts", "Serif bold", "Noto Serif SC Bold", "LXGW WenKai", "Built in")
+
+	// Before the models load, a font file chosen shows by its name.
+	chosen = "/Library/Fonts/Songti.ttc"
+	click(t, tt, "Choose…")
+	wantTexts(t, tt, "Songti.ttc")
+	if f.fonts[0].Path != chosen || f.fonts[0].Index != -1 || len(saved) != 1 || saved[0][0].Path != chosen {
+		t.Fatalf("fonts %+v, saved %+v", f.fonts[0], saved)
+	}
+	var used []fontChoices
+	f.fx.useFonts = func(fonts fontChoices) fontChoices {
+		used = append(used, fonts)
+		return fakeFonts(fonts)
+	}
+	f.loaded(nil)
+	tt.Frame()
+	if len(used) != 1 || used[0][0].Path != chosen {
+		t.Fatalf("used %+v once the models loaded", used)
+	}
+	wantTexts(t, tt, "Songti SC Regular", "Songti.ttc")
+	if f.fonts[0].Index != 2 {
+		t.Errorf("index %d, want Songti SC Regular's", f.fonts[0].Index)
+	}
+
+	// Another font of the collection, from its menu.
+	click(t, tt, "Songti SC Regular")
+	click(t, tt, "Songti SC Black")
+	tt.Frame()
+	if f.fonts[0].Index != 0 || len(saved) != 2 || saved[1][0].Index != 0 || len(used) != 2 {
+		t.Errorf("index %d, saved %d times, used %d times", f.fonts[0].Index, len(saved), len(used))
+	}
+
+	// A font file for Kai, and one that cannot be used for sans-serif.
+	chosen = "/Library/Fonts/Arial.ttf"
+	f.chooseFont(4)
+	chosen = "/Library/Fonts/Hiragino.otf"
+	f.chooseFont(2)
+	tt.Frame()
+	wantTexts(t, tt, "Arial", "Arial.ttf", "Not a TrueType font (.ttf or .ttc).")
+
+	// The built-in font again.
+	click(t, tt, "Reset")
+	if !reflect.DeepEqual(f.fonts[0], fontChoice{}) || saved[len(saved)-1][0].Path != "" {
+		t.Errorf("serif %+v after Reset", f.fonts[0])
+	}
+	wantTexts(t, tt, "Noto Serif SC")
+	click(t, tt, "Done")
+	if f.fontsOpen || tt.HasText("Serif bold") {
+		t.Error("the dialog stays open")
+	}
+}
+
+// TestFontsQueued uses fonts chosen while others are being read once they
+// have been, and only then.
+func TestFontsQueued(t *testing.T) {
+	f := newFixture(t, nil)
+	var pending []func()
+	f.fx.spawn = func(fn func()) { pending = append(pending, fn) }
+	var used []string
+	f.fx.useFonts = func(fonts fontChoices) fontChoices {
+		used = append(used, fonts[0].Path)
+		return fakeFonts(fonts)
+	}
+	f.fonts[0] = fontChoice{Path: "/a/Songti.ttc", Index: -1}
+	f.fontsChanged()
+	f.fonts[0] = fontChoice{Path: "/b/Arial.ttf", Index: -1}
+	f.fontsChanged()
+	for len(pending) > 0 {
+		fn := pending[0]
+		pending = pending[1:]
+		fn()
+	}
+	if want := []string{"/a/Songti.ttc", "/b/Arial.ttf"}; !slices.Equal(used, want) {
+		t.Errorf("used %q, want %q", used, want)
+	}
+	if f.fonts[0].Path != "/b/Arial.ttf" || f.fonts[0].name != "Arial" || f.usingFonts {
+		t.Errorf("fonts %+v", f.fonts[0])
+	}
+}
+
+// TestSavedFonts saves the fonts chosen and reads them back, but for what
+// is learned of their files; a damaged file chooses none.
+func TestSavedFonts(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "fonts.json")
+	var fonts fontChoices
+	fonts[1] = fontChoice{Path: "/Library/Fonts/Songti.ttc", Index: 1, names: []string{"a", "b"}, name: "b"}
+	fonts[4] = fontChoice{Path: "/Library/Fonts/Kai.ttf", Index: -1}
+	if err := saveFonts(path, fonts); err != nil {
+		t.Fatal(err)
+	}
+	got := loadFonts(path)
+	fonts[1].names, fonts[1].name = nil, ""
+	if !reflect.DeepEqual(got, fonts) {
+		t.Errorf("read %+v, want %+v", got, fonts)
+	}
+	if err := os.WriteFile(path, []byte("{"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := loadFonts(path); !reflect.DeepEqual(got, fontChoices{}) {
+		t.Errorf("read %+v from a damaged file", got)
+	}
+}
+
+func TestFontError(t *testing.T) {
+	for _, c := range []struct {
+		err  error
+		want string
+	}{
+		{&os.PathError{Op: "open", Path: "/x.ttf", Err: os.ErrNotExist}, "The file isn’t there anymore."},
+		{&os.PathError{Op: "open", Path: "/x.ttf", Err: os.ErrPermission}, "Permission denied."},
+		{errors.New("not a TrueType font (.ttf or .ttc)"), "Not a TrueType font (.ttf or .ttc)."},
+	} {
+		if got := fontError(c.err); got != c.want {
+			t.Errorf("fontError(%v) = %q, want %q", c.err, got, c.want)
 		}
 	}
 }

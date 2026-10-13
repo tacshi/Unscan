@@ -1,16 +1,19 @@
 // Unscan turns scanned PDFs into searchable ones on the user's machine:
 // PP-OCRv6 reads each page, and its text goes invisibly over the page. It
-// also retypes them as a text PDF, the text set in a real font.
+// also retypes them as a text PDF, the text set in real fonts, built in or
+// the user's.
 package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"image"
 	"io"
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -52,6 +55,13 @@ type effects struct {
 	menu    func(open, save bool)  // enable the menu bar's Open and Save
 	dock    func(progress float64) // the Dock's progress bar; negative removes it
 	attend  func()                 // draw the user back to the window
+
+	chooseFont func() (string, error) // ask for a font file; "" when canceled
+	// useFonts sets retyped PDFs in the fonts chosen that can be read, and
+	// returns them with the fonts in each file (see useFonts); nil until
+	// the models load.
+	useFonts  func(fontChoices) fontChoices
+	saveFonts func(fontChoices) error // remember the fonts chosen
 }
 
 // app is the state the window shows.
@@ -78,6 +88,10 @@ type app struct {
 	rendering bool // a preview is being rendered
 
 	menuOpen, menuSave bool // what the menu bar was last told
+
+	fonts                  fontChoices // for retyped PDFs, the user's
+	fontsOpen              bool        // the Fonts dialog shows
+	usingFonts, fontsAgain bool        // useFonts runs; the fonts changed meanwhile
 }
 
 // toast is a message about what the user just did.
@@ -160,10 +174,13 @@ func (a *app) start(path string) {
 }
 
 // loaded is called once the models have loaded, with the error if they
-// could not; the PDF chosen meanwhile is read then.
+// could not; the PDF chosen meanwhile is read then, in the fonts chosen.
 func (a *app) loaded(err error) {
 	waiting := a.waiting
 	a.waiting = false
+	if err == nil {
+		a.useFonts()
+	}
 	switch {
 	case err != nil:
 		a.broken = err.Error()
@@ -449,12 +466,29 @@ func main() {
 		do := func(fn func()) func(*mygo.MenuItem, *mygo.Window) {
 			return func(*mygo.MenuItem, *mygo.Window) { win.Update(fn) }
 		}
+		// The fonts chosen show in Settings, in the app menu, which only
+		// macOS has: elsewhere they show in the File menu.
+		mac := runtime.GOOS == "darwin"
 		menu := mygo.NewMenu([]*mygo.MenuItem{
-			{Role: mygo.RoleAppMenu},
+			{Role: mygo.RoleAppMenu, Submenu: []*mygo.MenuItem{
+				{Role: mygo.RoleAbout},
+				mygo.Separator(),
+				{Label: "Settings…", Accelerator: "CmdOrCtrl+,", Click: do(a.openFonts)},
+				mygo.Separator(),
+				{Role: mygo.RoleServices},
+				mygo.Separator(),
+				{Role: mygo.RoleHide},
+				{Role: mygo.RoleHideOthers},
+				{Role: mygo.RoleUnhide},
+				mygo.Separator(),
+				{Role: mygo.RoleQuit},
+			}},
 			{Label: "File", Submenu: []*mygo.MenuItem{
 				{ID: "open", Label: "Open…", Accelerator: "CmdOrCtrl+O", Click: do(a.choose)},
 				{ID: "save", Label: "Save…", Accelerator: "CmdOrCtrl+S", Disabled: true, Click: do(a.save)},
 				mygo.Separator(),
+				{Label: "Fonts…", Hidden: mac, Click: do(a.openFonts)},
+				{Type: mygo.MenuItemSeparator, Hidden: mac},
 				{Role: mygo.RoleClose},
 			}},
 			{Role: mygo.RoleEditMenu},
@@ -463,6 +497,12 @@ func main() {
 		})
 		mygo.App.SetMenu(menu)
 		pdfFilter := []mygo.FileFilter{{Name: "PDF", Extensions: []string{"pdf"}}}
+		fontFilter := []mygo.FileFilter{{Name: "TrueType Font", Extensions: []string{"ttf", "ttc"}}}
+		fontsPath := ""
+		if dir, err := mygo.App.Path(mygo.PathUserData); err == nil {
+			fontsPath = filepath.Join(dir, "fonts.json")
+			a.fonts = loadFonts(fontsPath)
+		}
 		a.fx = effects{
 			update: func(fn func()) { win.Update(fn) },
 			spawn:  func(fn func()) { go fn() },
@@ -486,6 +526,19 @@ func main() {
 				if !win.IsFocused() {
 					win.FlashFrame(true)
 				}
+			},
+			chooseFont: func() (string, error) {
+				paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{Parent: win, Title: "Choose a Font", Filters: fontFilter})
+				if err != nil || len(paths) == 0 {
+					return "", err
+				}
+				return paths[0], nil
+			},
+			saveFonts: func(fonts fontChoices) error {
+				if fontsPath == "" {
+					return errors.New("there is no folder to save settings in")
+				}
+				return saveFonts(fontsPath, fonts)
 			},
 		}
 		win = mygo.NewWindow(mygo.WindowOptions{
@@ -515,6 +568,7 @@ func main() {
 					a.fx.render = func(path string, page int) (image.Image, error) {
 						return conv.Preview(path, page, previewSize)
 					}
+					a.fx.useFonts = func(fonts fontChoices) fontChoices { return useFonts(conv, fonts) }
 				}
 				a.loaded(err)
 			})
