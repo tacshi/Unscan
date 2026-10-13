@@ -3,6 +3,9 @@
   "identifier": "app.capyvibe.unscan",
   "version": "0.1.0",
   "out": "build",
+  "macos": {
+    "entitlements": "entitlements.plist"
+  },
   "updates": {
     "publicKey": "eDN+heaZh+5iCKgMWrL9j7IopMh8CK6lkF9HOw8/oFg=",
     "github": "tacshi/Unscan"

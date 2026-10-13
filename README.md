@@ -227,7 +227,7 @@ these environment variables:
 
 | Variable | Effect |
 |---|---|
-| `MACOS_SIGNING_IDENTITY` | Signs with this Developer ID identity, with the hardened runtime. Without it the app is signed ad hoc and runs on the Mac that built it only. |
+| `MACOS_SIGNING_IDENTITY` | Signs with this Developer ID identity, with the hardened runtime and the entitlement in `entitlements.plist`, which PDFium's WebAssembly needs under it. Without it the app is signed ad hoc and runs on the Mac that built it only. |
 | `NOTARY_PROFILE` | Notarizes the disk image with this keychain profile, made by `xcrun notarytool store-credentials`, and staples the ticket to it and to the app. |
 | `MYGO_UPDATER_PRIVATE_KEY` | Signs the update that installed apps download, with this key of `go tool mygo keygen`: the app archived (`unscan-<version>-darwin-arm64.tar.gz`), deltas from the last three versions published, and `update-darwin-arm64.json`, which lists them. |
 | `SKIP_TESTS=1` | Builds without running the tests first. |

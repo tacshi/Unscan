@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+The entitlements the app is signed with. Under the hardened runtime, which
+signing with a Developer ID turns on, PDFium runs as WebAssembly that wazero
+compiles to machine code in memory it maps without MAP_JIT, then makes
+executable: without this entitlement, the system kills the app with "Code
+Signature Invalid" the first time it runs that code, as PDFium starts.
+-->
+<plist version="1.0">
+<dict>
+	<key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+	<true/>
+</dict>
+</plist>

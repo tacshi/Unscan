@@ -310,3 +310,13 @@ text extracts and search finds words on every page.
 - **go-pdfium bug:** v1.21.3 passes `FPDF_NewXObjectFromPage`'s documents
   to PDFium in the wrong order. `overlayPage` swaps them to compensate
   (see the comment there). Remove the swap once go-pdfium fixes it.
+- **Hardened runtime:** wazero compiles PDFium's WebAssembly to machine
+  code in memory mapped without `MAP_JIT`, which the hardened runtime of a
+  Developer ID build runs only under
+  `com.apple.security.cs.allow-unsigned-executable-memory`, in
+  `entitlements.plist`. Without it the app is killed with "Code Signature
+  Invalid" as PDFium starts, about two seconds after launch, while ad-hoc
+  development builds, without the hardened runtime, work.
+  `scripts/build-mac-release.sh` checks the app is signed with it. Should
+  wazero map its code with `MAP_JIT`, `com.apple.security.cs.allow-jit`
+  would do instead.
