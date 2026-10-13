@@ -114,6 +114,19 @@ When it is done, browse the document a page at a time, as the
 **Searchable PDF**, the **Retyped PDF** or the **Text**; the arrow keys
 turn the pages. **Save…** (⌘S) saves the one shown.
 
+**Compare with Original** (the button beside **Save…**, or **View ›
+Compare with Original**) shows the scanned page beside the retyped page
+or its text, to check what was read; drag the line between them to
+resize them. The searchable PDF looks just like the scan, so it shows
+alone.
+
+Every PDF read stays in the sidebar (**View › Hide Sidebar**, ⌥⌘S),
+newest first, to open again without reading it again. Its searchable and
+retyped PDFs are kept in `history/` in the app's user data folder
+(`~/Library/Application Support/Unscan` on macOS) until you remove them:
+**Remove from History…** in a row's context menu, or Delete, removes one,
+and **Clear…** removes them all. The scans themselves are never touched.
+
 ### Command line
 
 ```sh
@@ -237,7 +250,8 @@ what each package's tests check.
 
 ```
 main.go                  the app: state, actions, effects (dialogs, the menu bar, the Dock)
-view.go                  the window: the PDF asked for, the progress, the pages in each form
+view.go                  the window: the PDF asked for, the progress, the pages in each form, compared
+history.go               the PDFs read before: kept on disk, listed in the sidebar, removed
 fonts.go                 the user's fonts for retyped PDFs: the Fonts dialog, and the choice saved
 cmd/unscan/              the command line version
 cmd/fetchdeps/           downloads and checks the models and runtimes

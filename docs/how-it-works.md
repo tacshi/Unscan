@@ -21,17 +21,19 @@ every core.
 
 PDFium reads the scanned PDF from its file as it needs it, rather than
 from a copy in memory, and the PDFs made are written to files as they
-are saved; the app keeps them in a temporary directory until they are
-saved where the user chooses, and the command line version writes them
-beside where they go and moves them there once whole. PDFium keeps what
-it reads of a document, the scan of every page it renders, until the
-document is closed, so the pipeline opens it anew every 32 pages. Its
-WebAssembly memory is mapped whole at the start, on macOS and Linux,
-and filled in as it grows, rather than grown as a Go slice, which is
-copied each time and leaves the copies to the garbage collector. Only
-the pages along the pipeline are in memory at once, so while pages are
-read, memory does not grow with the document: it is mostly what the
-models need, about 3 GB.
+are saved; the app keeps them in its history folder, with the text of
+each page, until the user removes them, and the command line version
+writes them beside where they go and moves them there once whole. The
+history needs no copy of the scan: the searchable PDF keeps its pages as
+they were, under invisible text, so the app shows the original from it.
+PDFium keeps what it reads of a document, the scan of every page it
+renders, until the document is closed, so the pipeline opens it anew
+every 32 pages. Its WebAssembly memory is mapped whole at the start, on
+macOS and Linux, and filled in as it grows, rather than grown as a Go
+slice, which is copied each time and leaves the copies to the garbage
+collector. Only the pages along the pipeline are in memory at once, so
+while pages are read, memory does not grow with the document: it is
+mostly what the models need, about 3 GB.
 
 Adding the text layer at the end has PDFium load every page once more,
 keeping its scan until the document is closed, in memory that is 2 GB
