@@ -1,0 +1,67 @@
+name: CI
+
+# Once per commit: a pull request's, and main's as they land, rather than
+# a branch's push and its pull request both.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A pull request's newer commit stops the run of the one before.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  check:
+    # Apple silicon, which the app is built for: Core ML's code builds on
+    # macOS only, and the OCR tests set their pages in macOS's fonts.
+    runs-on: macos-latest
+    timeout-minutes: 45
+    env:
+      CGO_ENABLED: "0"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Install the checkers
+        run: |
+          go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0
+          go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
+          go install github.com/securego/gosec/v2/cmd/gosec@v2.29.0
+
+      - name: Check
+        run: make check
+
+      # The code of other systems, which this runner's checks skip.
+      - name: Build for Linux and Windows
+        run: |
+          for goos in linux windows; do
+            GOOS=$goos GOARCH=amd64 go build ./cmd/... ./internal/...
+          done
+
+      # About 320 MB, pinned by cmd/fetchdeps, which checks them all the same.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            resources/models
+            resources/fonts
+            resources/darwin-arm64
+          key: resources-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('cmd/fetchdeps/main.go') }}
+
+      - name: Fetch the models, fonts and ONNX Runtime
+        run: go run ./cmd/fetchdeps
+
+      # A package at a time: each loads the models, about 3 GB, on a runner
+      # of 7, which reads on the CPU, as a Mac of less than 16 GB does.
+      - name: Test
+        run: go test -p 1 -timeout 30m ./...
