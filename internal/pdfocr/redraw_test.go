@@ -3,6 +3,7 @@ package pdfocr
 import (
 	"bytes"
 	"compress/zlib"
+	"errors"
 	"image"
 	"image/color"
 	"image/draw"
@@ -14,6 +15,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strings"
 	"testing"
 
 	"golang.org/x/image/font"
@@ -29,11 +31,11 @@ func testTextDoc(t *testing.T) (*textDoc, TextFonts) {
 	if err != nil {
 		t.Skipf("%v: run go run ./cmd/fetchdeps first", err)
 	}
-	faces, err := parseFaces(fonts)
+	parsed, err := parseFaces(fonts)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return newTextDoc(faces), fonts
+	return newTextDoc(parsed, [faces]*face{}), fonts
 }
 
 // TestRedraw sets a line in the text font on yellowed paper, beside a
@@ -41,7 +43,7 @@ func testTextDoc(t *testing.T) (*textDoc, TextFonts) {
 // same place and size, the picture as an image, and the rest white.
 func TestRedraw(t *testing.T) {
 	d, fonts := testTextDoc(t)
-	sf, err := opentype.Parse(fonts.Serif)
+	sf, err := opentype.Parse(fonts.Serif.Data)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +146,7 @@ func TestRedraw(t *testing.T) {
 // the band stays as printed, letters and all, under invisible text.
 func TestRedrawOnColor(t *testing.T) {
 	d, fonts := testTextDoc(t)
-	sf, err := opentype.Parse(fonts.Serif)
+	sf, err := opentype.Parse(fonts.Serif.Data)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -227,7 +229,7 @@ func decodeImage(t *testing.T, im pageImage) image.Image {
 // where its ink does.
 func TestRedrawSqueezed(t *testing.T) {
 	d, fonts := testTextDoc(t)
-	sf, err := opentype.Parse(fonts.Serif)
+	sf, err := opentype.Parse(fonts.Serif.Data)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -272,6 +274,68 @@ func TestRedrawSqueezed(t *testing.T) {
 	}
 	if right := l.x + end/em*l.size*l.scale; math.Abs(right-float64(inkRight)) > 2 {
 		t.Errorf("the line ends at %.1f, its ink at %d", right, inkRight)
+	}
+}
+
+// TestEdgeMarks redraws a page whose scan shows the paper's edge, as a
+// broken line down the left edge, a speck on the right edge and a shadow
+// along the bottom: they are dropped, while a rule over the text, a folio
+// the recognizer missed and a picture printed to the edge are kept.
+func TestEdgeMarks(t *testing.T) {
+	d, fonts := testTextDoc(t)
+	sf, err := opentype.Parse(fonts.Serif.Data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	face, err := opentype.NewFace(sf, &opentype.FaceOptions{Size: 40, DPI: 72, Hinting: font.HintingNone})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer face.Close()
+	// An A5 page at 150 DPI.
+	const w, h, dpi = 874, 1240, 150
+	img := image.NewRGBA(image.Rect(0, 0, w, h))
+	draw.Draw(img, img.Rect, image.White, image.Point{}, draw.Src)
+	const text = "深入理解 Linux 内核"
+	var lines []ocr.Line
+	for _, base := range []float64{300, 900} {
+		dr := font.Drawer{Dst: img, Src: image.Black, Face: face, Dot: fixed.P(200, int(base))}
+		right := float64(212 + dr.MeasureString(text).Ceil())
+		dr.DrawString(text)
+		lines = append(lines, ocr.Line{Text: text, Box: ocr.Quad{{X: 188, Y: base - 48}, {X: right, Y: base - 48},
+			{X: right, Y: base + 16}, {X: 188, Y: base + 16}}})
+	}
+	marks := []image.Rectangle{
+		image.Rect(6, 80, 10, 500),       // the paper's edge, down the left
+		image.Rect(40, 560, 43, 860),     // and on, further in
+		image.Rect(866, 700, 872, 706),   // a speck on the right edge
+		image.Rect(300, 1230, 700, 1240), // a shadow along the bottom
+	}
+	kept := []image.Rectangle{
+		image.Rect(188, 200, 560, 202),   // a rule over the text
+		image.Rect(430, 1180, 442, 1196), // a folio the recognizer missed
+		image.Rect(0, 1000, 120, 1100),   // a picture printed to the edge
+	}
+	for _, r := range slices.Concat(marks, kept) {
+		draw.Draw(img, r, image.NewUniform(color.Gray{40}), image.Point{}, draw.Src)
+	}
+
+	page := d.redraw(img, lines, w*72.0/dpi, h*72.0/dpi)
+	// The images where they lie on the scan, in pixels, y down.
+	var got []image.Rectangle
+	for _, im := range page.images {
+		x0, y0 := int(math.Round(im.x/page.sx)), h-int(math.Round((im.y+im.h)/page.sy))
+		got = append(got, image.Rect(x0, y0, x0+int(math.Round(im.w/page.sx)), y0+int(math.Round(im.h/page.sy))))
+	}
+	for _, r := range kept {
+		if !slices.ContainsFunc(got, r.In) {
+			t.Errorf("%v is gone: images %v", r, got)
+		}
+	}
+	for _, r := range marks {
+		if slices.ContainsFunc(got, r.Overlaps) {
+			t.Errorf("the edge's mark %v is kept: images %v", r, got)
+		}
 	}
 }
 
@@ -451,7 +515,7 @@ func scanLine(t *testing.T, sf *opentype.Font, text string, size float64) (*imag
 // their ink: within 1.5%.
 func TestSize(t *testing.T) {
 	d, fonts := testTextDoc(t)
-	sf, err := opentype.Parse(fonts.Serif)
+	sf, err := opentype.Parse(fonts.Serif.Data)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -487,7 +551,7 @@ func TestSize(t *testing.T) {
 // and the leaders are kept as printed.
 func TestLeaders(t *testing.T) {
 	d, fonts := testTextDoc(t)
-	sf, err := opentype.Parse(fonts.Serif)
+	sf, err := opentype.Parse(fonts.Serif.Data)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -657,7 +721,7 @@ func TestKai(t *testing.T) {
 // where they were drawn.
 func TestCommaGap(t *testing.T) {
 	d, fonts := testTextDoc(t)
-	cjkFont, err := opentype.Parse(fonts.Serif)
+	cjkFont, err := opentype.Parse(fonts.Serif.Data)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -739,5 +803,146 @@ func TestCommaGap(t *testing.T) {
 				t.Errorf("tracked %d px (parted %v): the gap after %q adds %.1f px, the median %.1f", track, parted, d.sets[0].codes[cids[i]-1].r, a, median)
 			}
 		}
+	}
+}
+
+// systemFont reads a font of macOS's, or skips the test without it.
+func systemFont(t *testing.T, path string) []byte {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Skipf("%v: a macOS font", err)
+	}
+	return data
+}
+
+// TestUserFaces sets lines in fonts of the user's: a kind given one weight
+// is set in it in both, other kinds in the text fonts, and characters a
+// font lacks, as Chinese ones in Times, in the text font behind it. A Kai
+// font of the user's takes those from the text fonts' Kai face, and its
+// Latin from the serif face, the user's. Lines are measured in the text
+// fonts all the same.
+func TestUserFaces(t *testing.T) {
+	_, fonts := testTextDoc(t)
+	text, err := parseFaces(fonts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	times := systemFont(t, "/System/Library/Fonts/Times.ttc")
+	user, err := parseUserFaces(TextFonts{Serif: Font{Data: times}, Kai: Font{Data: times, Index: 1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := newTextDoc(text, user)
+	if d.fonts[serif] != user[serif] || d.fonts[serifBold] != user[serif] || d.fonts[sans] != text[sans] ||
+		d.fonts[kai] != user[kai] || d.fonts[kaiBold] != user[kai] {
+		t.Error("faces not set in the user's fonts as given")
+	}
+	if d.fallbacks[serif] != text[serif] || d.fallbacks[serifBold] != text[serifBold] || d.fallbacks[sans] != nil ||
+		d.fallbacks[kai] != text[kai] {
+		t.Error("fallbacks not the text fonts behind the user's")
+	}
+	if d.ref == d || d.ref.fonts != text || d.ref.ref != d.ref {
+		t.Error("lines not measured in the text fonts")
+	}
+	if user[serif].ttf.UnitsPerEm == text[serif].ttf.UnitsPerEm {
+		t.Fatalf("Times has %d units per em, as the text font", user[serif].ttf.UnitsPerEm)
+	}
+
+	sh := d.shape("Linux 内核", serif)
+	var got []int
+	for _, g := range sh.glyphs {
+		got = append(got, g.face)
+	}
+	want := []int{serif, serif, serif, serif, serif, serif, fallback + serif, fallback + serif}
+	if !slices.Equal(got, want) {
+		t.Errorf("serif faces %v, want %v", got, want)
+	}
+	// The line in the units of Times, 2048 an em, the Noto Serif's
+	// characters too, which are 1000.
+	em, notoEm := user[serif].ttf.UnitsPerEm, text[serif].ttf.UnitsPerEm
+	if l := user[serif].ttf.Advance(user[serif].ttf.Glyph('L')); sh.glyphs[0].advance != l {
+		t.Errorf("L advances %d, want %d", sh.glyphs[0].advance, l)
+	}
+	nei := text[serif].ttf.Advance(text[serif].ttf.Glyph('内'))
+	if want := int(math.Round(float64(nei*em) / float64(notoEm))); sh.glyphs[6].advance != want {
+		t.Errorf("内 advances %d, want %d", sh.glyphs[6].advance, want)
+	}
+	// Numbered at their own advances, in their own fonts' units.
+	s := &cidSet{cids: map[code]uint16{}}
+	origins := make([]float64, len(sh.glyphs)+1)
+	for i, g := range sh.glyphs {
+		origins[i+1] = origins[i] + float64(g.advance)/float64(em)*40
+	}
+	for i, c := range d.number(s, sh, origins, 40) {
+		k := s.codes[c-1]
+		font := d.font(k.face).ttf
+		if k.face != got[i] || k.width != font.Advance(font.Glyph(k.r)) {
+			t.Errorf("%q numbered in face %d at %d, want %d at its own advance", k.r, k.face, k.width, got[i])
+		}
+	}
+
+	got = got[:0]
+	for _, g := range d.shape("Linux 内核，2.6", kai).glyphs {
+		got = append(got, g.face)
+	}
+	want = []int{serif, serif, serif, serif, serif, serif, fallback + kai, fallback + kai, fallback + kai, serif, serif, serif}
+	if !slices.Equal(got, want) {
+		t.Errorf("Kai faces %v, want %v", got, want)
+	}
+	if ref := d.ref.shape("Linux 内核", serif); ref.glyphs[0].face != serif || ref.glyphs[6].face != serif ||
+		ref.glyphs[0].advance != text[serif].ttf.Advance(text[serif].ttf.Glyph('L')) {
+		t.Error("lines measured in the user's fonts")
+	}
+	if d := newTextDoc(text, [faces]*face{}); d.ref != d || d.fallbacks != [faces]*face{} {
+		t.Error("a document without fonts of the user's is not its own reference")
+	}
+}
+
+// TestFontNames names the fonts of a collection, picks the regular and
+// bold ones of them, and refuses fonts of PostScript outlines.
+func TestFontNames(t *testing.T) {
+	names, err := FontNames(systemFont(t, "/System/Library/Fonts/Supplemental/Songti.ttc"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(names) < 2 || names[PickFont(names, false)] != "Songti SC Regular" || names[PickFont(names, true)] != "Songti SC Bold" {
+		t.Errorf("names %q", names)
+	}
+	if got := PickFont([]string{"Heiti SC Medium"}, true); got != 0 {
+		t.Errorf("picked %d of one font", got)
+	}
+	if _, err := FontNames(systemFont(t, "/System/Library/Fonts/Hiragino Sans GB.ttc")); err == nil {
+		t.Error("named the fonts of PostScript outlines")
+	}
+	if _, err := parseUserFaces(TextFonts{Sans: Font{Data: []byte("not a font")}}); err == nil ||
+		!strings.Contains(err.Error(), "sans-serif font") {
+		t.Errorf("error %v: want one naming the face", err)
+	}
+}
+
+// TestReadFont reads the font of a collection a face's weight picks, or
+// one asked for, but not one whose license forbids embedding it, as Songti
+// SC Black's does: the names come back, to choose another from.
+func TestReadFont(t *testing.T) {
+	const songti = "/System/Library/Fonts/Supplemental/Songti.ttc"
+	data := systemFont(t, songti)
+	f, names, err := ReadFont(songti, -1, true)
+	if err != nil || names[f.Index] != "Songti SC Bold" || len(f.Data) != len(data) {
+		t.Errorf("font %d of %q (%v), want Songti SC Bold", f.Index, names, err)
+	}
+	f, names, err = ReadFont(songti, 0, false)
+	if !errors.Is(err, errNotEmbeddable) || f.Data != nil || f.Index != 0 || names[0] != "Songti SC Black" {
+		t.Errorf("Songti SC Black: font %d of %q (%v), want it refused", f.Index, names, err)
+	}
+	if _, err := parseUserFaces(TextFonts{SerifBold: Font{Data: data}}); !errors.Is(err, errNotEmbeddable) {
+		t.Errorf("Songti SC Black set: %v", err)
+	}
+	if _, _, err := ReadFont(songti, len(names), false); err == nil {
+		t.Error("read a font past the collection's")
+	}
+	if _, _, err := ReadFont("/System/Library/Fonts/Hiragino Sans GB.ttc", -1, false); err == nil ||
+		!strings.Contains(err.Error(), "PostScript (CFF)") {
+		t.Errorf("Hiragino: %v, want PostScript outlines refused", err)
 	}
 }

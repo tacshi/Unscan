@@ -108,3 +108,79 @@ func TestSubset(t *testing.T) {
 		t.Errorf("an unused glyph has %d segments (%v)", len(segs), err)
 	}
 }
+
+// TestCollection reads the fonts of a collection, by their English names,
+// and subsets one into a font file of its own; a collection of PostScript
+// outlines fails with ErrCFF.
+func TestCollection(t *testing.T) {
+	data, err := os.ReadFile("/System/Library/Fonts/Times.ttc")
+	if err != nil {
+		t.Skipf("%v: a macOS font", err)
+	}
+	n, err := NumFonts(data)
+	if err != nil || n < 2 {
+		t.Fatalf("%d fonts (%v)", n, err)
+	}
+	var names []string
+	for i := range n {
+		f, err := ParseIndex(data, i)
+		if err != nil {
+			t.Fatalf("font %d: %v", i, err)
+		}
+		names = append(names, f.FullName)
+	}
+	if names[0] != "Times Roman" || names[1] != "Times Bold" {
+		t.Errorf("names %q", names)
+	}
+	if _, err := ParseIndex(data, n); err == nil {
+		t.Errorf("font %d of %d parsed", n, n)
+	}
+	bold, err := ParseIndex(data, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := bold.Glyph('R')
+	got, err := sfnt.Parse(bold.Subset([]uint16{g}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	name, err := got.Name(nil, sfnt.NameIDFull)
+	if err != nil || name != "Times Bold" {
+		t.Errorf("subset of %q (%v)", name, err)
+	}
+	var b sfnt.Buffer
+	if adv, err := got.GlyphAdvance(&b, sfnt.GlyphIndex(g), fixed.I(bold.UnitsPerEm), 0); err != nil || adv.Round() != bold.Advance(g) {
+		t.Errorf("R advances %v in the subset, want %d (%v)", adv, bold.Advance(g), err)
+	}
+	if one, _ := NumFonts([]byte("\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00")); one != 1 {
+		t.Errorf("a font file holds %d fonts", one)
+	}
+
+	cff, err := os.ReadFile("/System/Library/Fonts/Hiragino Sans GB.ttc")
+	if err != nil {
+		t.Skipf("%v: a macOS font", err)
+	}
+	if _, err := Parse(cff); err != ErrCFF {
+		t.Errorf("PostScript outlines: %v, want ErrCFF", err)
+	}
+}
+
+// TestEmbeddable lets documents embed subsets of fonts whose licenses
+// allow more than restricted embedding, of outlines, in subsets: where
+// several levels are given, the least restrictive.
+func TestEmbeddable(t *testing.T) {
+	for fsType, want := range map[uint16]bool{
+		0x0000: true,  // installable
+		0x0002: false, // restricted
+		0x0004: true,  // preview & print
+		0x0008: true,  // editable
+		0x0006: true,
+		0x000E: true,
+		0x0108: false, // not in subsets
+		0x0204: false, // bitmaps only
+	} {
+		if got := (&Font{fsType: fsType}).Embeddable(); got != want {
+			t.Errorf("fsType %#04x: embeddable %v, want %v", fsType, got, want)
+		}
+	}
+}

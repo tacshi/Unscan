@@ -1,7 +1,9 @@
 // Unscan is the command line version of the app: it makes scanned PDFs
-// searchable, and writes their text, or a text PDF of them.
+// searchable, and writes their text, or a text PDF of them, in the text
+// fonts or fonts of the user's.
 //
 //	go run ./cmd/unscan -o searchable.pdf -txt text.txt -text text.pdf scan.pdf
+//	go run ./cmd/unscan -text text.pdf -serif Songti.ttc -serif-bold Songti.ttc scan.pdf
 package main
 
 import (
@@ -12,6 +14,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -27,6 +30,11 @@ func main() {
 	resources := flag.String("resources", "resources", "the directory of the models and ONNX Runtime")
 	dpi := flag.Int("dpi", 300, "the resolution pages are read at")
 	force := flag.Bool("force", false, "read pages that already have text too")
+	var fontFiles [len(userFonts)]string
+	for i, f := range userFonts {
+		flag.StringVar(&fontFiles[i], f.flag, "", fmt.Sprintf("a font file to set the text PDF's %s lines in, "+
+			"instead of %s: TrueType (.ttf), or a collection (.ttc), file.ttc#n for its font n from 0", f.lines, f.builtIn))
+	}
 	flag.Usage = func() {
 		fmt.Fprintf(flag.CommandLine.Output(), "usage: unscan [flags] scan.pdf\n")
 		flag.PrintDefaults()
@@ -63,6 +71,13 @@ func main() {
 		if err := conv.SetTextFonts(fonts); err != nil {
 			log.Fatal(err)
 		}
+		user, err := readUserFonts(fontFiles)
+		if err != nil {
+			log.Fatal(err)
+		}
+		if err := conv.SetUserFonts(user); err != nil {
+			log.Fatal(err)
+		}
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
@@ -94,6 +109,49 @@ func main() {
 	if *textPDF != "" {
 		log.Printf("text PDF → %s", *textPDF)
 	}
+}
+
+// userFonts are the faces of the text PDF that the user may give fonts of
+// their own for, by flag, in the order of pdfocr.TextFonts.
+var userFonts = [...]struct {
+	flag, lines, builtIn string
+	bold                 bool
+}{
+	{"serif", "serif", "Noto Serif SC", false},
+	{"serif-bold", "bold serif", "Noto Serif SC Bold", true},
+	{"sans", "sans-serif", "Noto Sans SC", false},
+	{"sans-bold", "bold sans-serif", "Noto Sans SC Bold", true},
+	{"kai", "Kai (楷体)", "LXGW WenKai", false},
+}
+
+// readUserFonts reads the font files given by flag, each a path, or a
+// collection's path and #n for its font n: without, the one the face's
+// weight picks.
+func readUserFonts(files [len(userFonts)]string) (pdfocr.TextFonts, error) {
+	var fonts [len(userFonts)]pdfocr.Font
+	for i, arg := range files {
+		if arg == "" {
+			continue
+		}
+		path, index := arg, -1
+		if at := strings.LastIndexByte(arg, '#'); at >= 0 {
+			if _, err := os.Stat(arg); err != nil {
+				if n, err := strconv.Atoi(arg[at+1:]); err == nil && n >= 0 {
+					path, index = arg[:at], n
+				}
+			}
+		}
+		f, names, err := pdfocr.ReadFont(path, index, userFonts[i].bold)
+		if err != nil {
+			return pdfocr.TextFonts{}, fmt.Errorf("-%s %s: %w", userFonts[i].flag, arg, err)
+		}
+		if len(names) > 1 {
+			log.Printf("%s lines in %s, font %d of %s's %d", userFonts[i].lines, names[f.Index], f.Index,
+				filepath.Base(path), len(names))
+		}
+		fonts[i] = f
+	}
+	return pdfocr.TextFonts{Serif: fonts[0], SerifBold: fonts[1], Sans: fonts[2], SansBold: fonts[3], Kai: fonts[4]}, nil
 }
 
 // convert converts the PDF at in, writing the searchable PDF to out and,

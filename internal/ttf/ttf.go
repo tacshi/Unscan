@@ -1,6 +1,6 @@
-// Package ttf reads TrueType fonts (glyf outlines) and subsets them for
-// embedding in PDFs: just enough of the format to set lines of text and to
-// keep the glyphs a document uses.
+// Package ttf reads TrueType fonts (glyf outlines), alone or in
+// collections, and subsets them for embedding in PDFs: just enough of the
+// format to set lines of text and to keep the glyphs a document uses.
 package ttf
 
 import (
@@ -19,11 +19,13 @@ type Font struct {
 	loca       []uint32 // numGlyphs+1 offsets into glyf
 	advances   []uint16
 	cmap       []cmapGroup // sorted by first
+	fsType     uint16      // OS/2's: what embedding the font's license allows
 	UnitsPerEm int
 	// Metrics in font units, as PDF font descriptors want them.
 	Ascent, Descent, CapHeight int
 	BBox                       [4]int // xMin, yMin, xMax, yMax
 	PostScriptName             string
+	FullName                   string // in English where the font names itself in several languages
 }
 
 // cmapGroup maps the runes first through last to consecutive glyphs from
@@ -35,29 +37,70 @@ type cmapGroup struct {
 
 var errFormat = errors.New("ttf: malformed font")
 
-// Parse reads a TrueType font. Collections and CFF outlines are not
-// supported.
-func Parse(data []byte) (*Font, error) {
+// ErrCFF is the error for fonts of PostScript outlines (CFF), as many
+// OpenType fonts (.otf) are, which the package cannot subset.
+var ErrCFF = errors.New("ttf: the font has PostScript (CFF) outlines, not TrueType ones")
+
+const collectionTag = 0x74746366 // 'ttcf'
+
+// Parse reads a TrueType font, or the first of a collection.
+func Parse(data []byte) (*Font, error) { return ParseIndex(data, 0) }
+
+// NumFonts is how many fonts data holds: those of a TrueType collection
+// (.ttc), or 1 for a font file.
+func NumFonts(data []byte) (int, error) {
 	if len(data) < 12 {
+		return 0, errFormat
+	}
+	if u32(data, 0) != collectionTag {
+		return 1, nil
+	}
+	n := int(u32(data, 8))
+	if n == 0 || len(data) < 12+4*n {
+		return 0, errFormat
+	}
+	return n, nil
+}
+
+// ParseIndex reads font i of a TrueType collection (.ttc), or of a font
+// file, whose one font is 0. The font's tables are slices of data.
+func ParseIndex(data []byte, i int) (*Font, error) {
+	n, err := NumFonts(data)
+	if err != nil {
+		return nil, err
+	}
+	if i < 0 || i >= n {
+		return nil, fmt.Errorf("ttf: no font %d of %d", i, n)
+	}
+	at := 0 // where the font's table directory starts
+	if u32(data, 0) == collectionTag {
+		at = int(u32(data, 12+4*i))
+	}
+	if at < 0 || len(data) < at+12 {
 		return nil, errFormat
 	}
-	switch v := binary.BigEndian.Uint32(data); v {
+	switch v := u32(data, at); v {
 	case 0x00010000, 0x74727565: // 1.0, 'true'
+	case 0x4F54544F: // 'OTTO'
+		return nil, ErrCFF
 	default:
 		return nil, fmt.Errorf("ttf: not a TrueType font (version %#x)", v)
 	}
-	n := int(u16(data, 4))
-	if len(data) < 12+16*n {
+	n = int(u16(data, at+4))
+	if len(data) < at+12+16*n {
 		return nil, errFormat
 	}
 	f := &Font{tables: map[string][]byte{}}
 	for i := range n {
-		r := data[12+16*i:]
+		r := data[at+12+16*i:]
 		off, length := int(u32(r, 8)), int(u32(r, 12))
 		if off < 0 || length < 0 || off+length > len(data) {
 			return nil, fmt.Errorf("ttf: table %q is out of bounds", r[:4])
 		}
 		f.tables[string(r[:4])] = data[off : off+length]
+	}
+	if f.tables["glyf"] == nil && (f.tables["CFF "] != nil || f.tables["CFF2"] != nil) {
+		return nil, ErrCFF
 	}
 	for _, tag := range []string{"head", "hhea", "hmtx", "maxp", "loca", "glyf", "cmap"} {
 		if f.tables[tag] == nil {
@@ -117,6 +160,9 @@ func Parse(data []byte) (*Font, error) {
 		f.advances[g] = u16(hmtx, 4*min(g, metrics-1))
 	}
 
+	if os2 := f.tables["OS/2"]; len(os2) >= 10 {
+		f.fsType = u16(os2, 8)
+	}
 	if os2 := f.tables["OS/2"]; len(os2) >= 72 {
 		f.Ascent, f.Descent = int(i16(os2, 68)), int(i16(os2, 70))
 		if u16(os2, 0) >= 2 && len(os2) >= 90 {
@@ -127,12 +173,26 @@ func Parse(data []byte) (*Font, error) {
 		f.CapHeight = f.Ascent
 	}
 
-	var err error
 	if f.cmap, err = parseCmap(f.tables["cmap"]); err != nil {
 		return nil, err
 	}
-	f.PostScriptName = postScriptName(f.tables["name"])
+	f.PostScriptName = name(f.tables["name"], 6)
+	f.FullName = name(f.tables["name"], 4)
 	return f, nil
+}
+
+// Embeddable reports whether the font's license lets documents embed
+// subsets of its outlines, as its OS/2 table's fsType tells: it does not
+// unless it allows more than restricted embedding, and embedding outlines
+// rather than bitmaps only, in subsets.
+func (f *Font) Embeddable() bool {
+	const (
+		restricted = 0x0002
+		levels     = 0x000F // installable (0), restricted, preview & print, editable
+		noSubsets  = 0x0100
+		bitmaps    = 0x0200 // only
+	)
+	return f.fsType&levels != restricted && f.fsType&(noSubsets|bitmaps) == 0
 }
 
 // NumGlyphs is how many glyphs the font has.
@@ -308,35 +368,48 @@ func parseCmap(cmap []byte) ([]cmapGroup, error) {
 	return groups, nil
 }
 
-// postScriptName is name ID 6, which PDFs use as the font's BaseFont.
-func postScriptName(name []byte) string {
-	if len(name) < 6 {
+// name is the font's name of an ID, such as 4, its full name, or 6, the
+// PostScript name that PDFs use as the font's BaseFont: in English (US)
+// where the font names itself in several languages, as Chinese fonts do.
+func name(table []byte, id uint16) string {
+	if len(table) < 6 {
 		return ""
 	}
-	count, strings := int(u16(name, 2)), int(u16(name, 4))
+	count, strings := int(u16(table, 2)), int(u16(table, 4))
+	best, bestRank := "", 0
 	for i := range count {
 		r := 6 + 12*i
-		if r+12 > len(name) {
+		if r+12 > len(table) {
 			break
 		}
-		platform, id := u16(name, r), u16(name, r+6)
-		length, off := int(u16(name, r+8)), strings+int(u16(name, r+10))
-		if id != 6 || off+length > len(name) {
+		platform, lang := u16(table, r), u16(table, r+4)
+		length, off := int(u16(table, r+8)), strings+int(u16(table, r+10))
+		if u16(table, r+6) != id || off+length > len(table) {
 			continue
 		}
-		s := name[off : off+length]
+		s := table[off : off+length]
+		var text string
 		switch platform {
-		case 1:
-			return string(s)
-		case 0, 3:
+		case 1: // Macintosh, in Mac Roman, of which ASCII is what names use
+			text = string(s)
+		case 0, 3: // Unicode, Windows
 			units := make([]uint16, len(s)/2)
 			for j := range units {
 				units[j] = u16(s, 2*j)
 			}
-			return string(utf16.Decode(units))
+			text = string(utf16.Decode(units))
+		default:
+			continue
+		}
+		rank := 1
+		if platform == 3 && lang == 0x409 || platform == 1 && lang == 0 {
+			rank = 2 // English
+		}
+		if rank > bestRank && text != "" {
+			best, bestRank = text, rank
 		}
 	}
-	return ""
+	return best
 }
 
 func u16(b []byte, off int) uint16 { return binary.BigEndian.Uint16(b[off:]) }

@@ -14,7 +14,8 @@ and running heads), on white paper, so that the page reads like one exported fro
 word processor. What else the page shows (pictures, rules, logos) is kept
 as images under the text. Text printed on color or over a picture, such as
 a cover's title, stays as printed, since retyping it would deface the
-design, with invisible text over it that keeps it searchable.
+design, with invisible text over it that keeps it searchable. Its fonts
+can be the user's own instead (see [Your own fonts](#your-own-fonts)).
 
 Everything builds with `CGO_ENABLED=0`, as MyGo requires:
 
@@ -80,6 +81,33 @@ shows the document a page at a time, as the **Searchable PDF**, the
 **Retyped PDF** (the text PDF) or the **Text**, and **Save…** saves the
 one shown; the arrow keys turn the pages. Pages that already have text,
 such as born-digital ones, are left alone, in the text PDF too.
+
+### Your own fonts
+
+The text PDF can be set in the user's own fonts instead of the built-in
+ones: TrueType fonts, a `.ttf` file or one font of a `.ttc` collection,
+such as macOS's Songti SC or Times, of any units per em. In the app,
+**Unscan › Settings…** (⌘,) chooses a font file for each face: serif and
+sans-serif, regular and bold, and Kai. Of a collection, the font named
+Regular or Bold, as the face is, is chosen, and a menu chooses another.
+The choice is kept in `fonts.json` in the app's user data folder, and
+applies to the PDFs read from then on. The command line version takes
+the fonts as flags:
+
+```sh
+go run ./cmd/unscan -text out-text.pdf -sans /System/Library/Fonts/Supplemental/Arial.ttf \
+    -serif /System/Library/Fonts/Supplemental/Songti.ttc -serif-bold /System/Library/Fonts/Supplemental/Songti.ttc#1 scan.pdf
+```
+
+where `#n` chooses a collection's font n, from 0. A kind given one weight
+only is set in it in both. Lines are measured and judged against the
+built-in fonts all the same, as the judging is tuned to their faces (see
+below), and the user's fonts only set them. The built-in font of a face
+sets the characters its user's font lacks, such as Chinese in a Latin
+font, so Times or Arial can set the Latin of a Chinese book. Fonts of
+PostScript outlines (CFF), as `.otf` files and Hiragino's mostly are, are
+refused, and so are fonts whose licenses forbid embedding them (by their
+OS/2 `fsType`), as Songti SC Black's does: their subsets go into the PDFs.
 
 ### Long documents
 
@@ -173,7 +201,10 @@ For each scanned page, at the resolution it was read at:
    black prints black.
 5. Lines on plain paper are erased. What is left that is not white is cut
    into images: line art (rules, dot leaders) losslessly, the rest as JPEG
-   at 200 DPI at most. Specks of dust are dropped.
+   at 200 DPI at most. Specks of dust are dropped, and so are the marks
+   the scan's edges leave, the shadow of the paper's edge or the
+   scanner's lid: what lies in the outer half of a margin, within 15 mm
+   of the edge, as a line along it or a speck within 3 mm of it.
 
 Each face is subset to the glyphs set in it, keeping their IDs, and only
 faces a document uses are embedded; each character gets its own CID,
@@ -194,13 +225,19 @@ CGO_ENABLED=0 go test ./...
   pages.
 - `internal/ttf`: glyphs, advances and bounds agree with
   `golang.org/x/image/font/sfnt`, and a subset keeps the outlines of the
-  glyphs used (composites with their parts) and drops the rest.
+  glyphs used (composites with their parts) and drops the rest. The fonts
+  of a collection read by their English names, and one subsets into a font
+  of its own; fonts of PostScript outlines are refused, and fonts are
+  embeddable as their `fsType` says.
 - `internal/pdfocr` (text PDF): a line set in the font on yellowed paper
   comes back at its size and place, in a loose box or a tight one, with
   the picture beside it kept and the dust dropped; white text on a red
   band stays as printed under invisible text; a word set tighter than the
-  font is squeezed to end where its ink does. A line tracked as books
-  are, and a label set apart from what it labels after a bullet, are
+  font is squeezed to end where its ink does. The marks of a scan's
+  edges (a broken line down one, a speck on another, a shadow along a
+  third) are dropped, while a rule over the text, a folio the recognizer
+  missed and a picture printed to the edge are kept. A line tracked as
+  books are, and a label set apart from what it labels after a bullet, are
   redrawn unstretched, each character within 2–2.5 pixels of where it
   was drawn at 40 pixels an em, and extract from PDFium as they read.
   Lines measure within 1.5% of their size, from 24 to 64 pixels an em.
@@ -217,6 +254,13 @@ CGO_ENABLED=0 go test ./...
   pages keep their size, whose text extracts, whose type covers the
   scan's ink within half a millimeter at each edge, whose picture is
   kept, and whose paper is white; pages with text are kept as they were.
+  Lines set in a font of the user's, Times of 2048 units an em from a
+  collection, take the Chinese characters it lacks from the text font, as
+  Kai's do from the text fonts' Kai face, are measured in the text fonts,
+  embed both, extract as read, and render over the scan's ink from their
+  first character to their last. Of Songti SC's collection, the regular
+  and bold fonts are chosen by name, and its Black, whose license forbids
+  embedding it, is refused.
 - `internal/pdfocr`: a four-page scanned PDF (pages rotated 0°, 90°,
   180° and 270°, one with an offset MediaBox) is converted, then checked.
   The test confirms that PDFium extracts the text, that the text lies
@@ -224,7 +268,10 @@ CGO_ENABLED=0 go test ./...
   before, that the file grows by kilobytes only, and that a second run
   skips every page. A page turned by its `/Rotate` previews upright, as
   large as asked.
-- `main_test.go`: the window's flow, run headless with `ui.NewTester`.
+- `main_test.go`: the window's flow, run headless with `ui.NewTester`,
+  and the Fonts dialog's: a collection's font chosen, then another of it,
+  a file that cannot be used, the built-in font again, fonts chosen before
+  the models load or while others are read, and the choice saved.
 
 The OCR tests use macOS fonts and skip where those are missing. The
 converted PDF was also checked in Apple's PDFKit (Preview's engine): its
@@ -235,11 +282,12 @@ text extracts and search finds words on every page.
 ```
 main.go                  the app: state, actions, effects (dialogs, the menu bar, the Dock)
 view.go                  the window: the PDF asked for, the progress, the pages in each form
+fonts.go                 the user's fonts for retyped PDFs: the Fonts dialog, and the choice saved
 cmd/unscan/              the command line version
 cmd/fetchdeps/           downloads and checks the models and runtimes
 internal/ocr/            PP-OCRv6: detection, cropping, recognition, reading order
 internal/pdfocr/         rendering, the text layer, grafting it onto the PDF, the text PDF, and previews
-internal/ttf/            TrueType parsing and subsetting, for the text PDF
+internal/ttf/            TrueType parsing (fonts and collections) and subsetting, for the text PDF
 internal/testscan/       synthetic scans and scanned PDFs for tests
 ```
 
@@ -273,6 +321,13 @@ internal/testscan/       synthetic scans and scanned PDFs for tests
   the recognizer misses (such as some dashes) are erased with their line.
   Vertical text is set turned, not stacked. Covers and other designed pages
   come out mostly as images, since their text is on color.
+- **Your own fonts:** fonts of PostScript outlines (CFF) cannot be used, as
+  `internal/ttf` subsets TrueType outlines only; a CFF subsetter, with
+  `FontFile3`, would take them. Fonts chosen apply to the PDFs read after:
+  setting the text PDF again in them means reading the scan again, though
+  the lines measured are the same whatever the fonts; keeping them would
+  retype the PDF in seconds. A kind given in one weight sets its bold
+  lines in that weight, as no bold is synthesized.
 - **go-pdfium bug:** v1.21.3 passes `FPDF_NewXObjectFromPage`'s documents
   to PDFium in the wrong order. `overlayPage` swaps them to compensate
   (see the comment there). Remove the swap once go-pdfium fixes it.
@@ -283,6 +338,8 @@ PP-OCRv6 models: Apache-2.0. ONNX Runtime: MIT. PDFium: Apache-2.0 / BSD.
 Noto Serif SC, Noto Sans SC and LXGW WenKai: SIL Open Font License 1.1,
 which `fonts/NotoSerifSC-OFL.txt`, `fonts/NotoSansSC-OFL.txt` and
 `fonts/LXGWWenKai-OFL.txt` carry into the app; subsets of them are
-embedded in text PDFs, as the license allows.
+embedded in text PDFs, as the license allows. Subsets of the user's own
+fonts are embedded under those fonts' licenses, which the user answers
+for; fonts that forbid embedding are refused.
 go-pdfium, onnxruntime_purego, purego: MIT / Apache-2.0. Check the
 dependencies' own terms before you ship.

@@ -144,7 +144,8 @@ func strokeStats(w, h int, cover func(x, y int) float64, oblique bool) strokes {
 
 // strokes draws a line as sh sets it, each glyph in its face, at size
 // pixels an em, at its own advances, and measures its ink as the scan's
-// is, its edges too if oblique.
+// is, its edges too if oblique. The faces must be the text fonts, whose
+// outlines are parsed.
 func (d *textDoc) strokes(sh shape, size float64, oblique bool) strokes {
 	k := size / float64(d.fonts[sh.face].ttf.UnitsPerEm)
 	const pad = 2
@@ -160,7 +161,7 @@ func (d *textDoc) strokes(sh shape, size float64, oblique bool) strokes {
 	ppem := fixed.Int26_6(math.Round(size * 64))
 	for _, g := range sh.glyphs {
 		if g.inked {
-			fc := d.fonts[g.face]
+			fc := d.font(g.face)
 			segs, err := fc.outline.LoadGlyph(&buf, sfnt.GlyphIndex(fc.ttf.Glyph(g.r)), ppem, nil)
 			if err == nil {
 				at := func(p fixed.Point26_6) (float32, float32) {

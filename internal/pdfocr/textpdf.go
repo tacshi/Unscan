@@ -2,6 +2,7 @@ package pdfocr
 
 import (
 	"bytes"
+	"cmp"
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -28,16 +29,99 @@ const (
 	kai
 	kaiBold
 	faces
+	// Fallback+fi is the text font behind face fi where that is one of
+	// the user's, which sets the characters it lacks (see textDoc.font).
+	fallback = faces
+	allFaces = 2 * faces
 )
 
-// TextFonts are the TrueType files that text PDFs are set in: a serif face
-// and a sans-serif one, each regular and bold, and a Kai face, with the
-// same characters and units per em, such as Noto Serif SC, Noto Sans SC
-// and LXGW WenKai. Serif is needed; a face left out is set in the one
-// nearest it. Lines set in Kai take their Latin letters, digits and
-// narrow punctuation from the serif face, as books set them.
+// A Font is a TrueType font: a font file's data, and which of the fonts
+// in it to use, as a collection (.ttc) holds several. Fonts of PostScript
+// outlines (CFF), as many OpenType ones (.otf) are, cannot be used.
+type Font struct {
+	Data  []byte
+	Index int // 0 for a file of one font
+}
+
+// TextFonts are the fonts that text PDFs are set in: a serif face and a
+// sans-serif one, each regular and bold, and a Kai face, such as Noto
+// Serif SC, Noto Sans SC and LXGW WenKai. Lines set in Kai take their
+// Latin letters, digits and narrow punctuation from the serif face, as
+// books set them. A face left out has no Data.
 type TextFonts struct {
-	Serif, SerifBold, Sans, SansBold, Kai []byte
+	Serif, SerifBold, Sans, SansBold, Kai Font
+}
+
+// fonts lists the fonts by face.
+func (f TextFonts) fonts() [faces]Font {
+	return [faces]Font{f.Serif, f.SerifBold, f.Sans, f.SansBold, f.Kai, {}}
+}
+
+// FontNames names the fonts in a font file by their full names, as "Songti
+// SC Regular": a TrueType font's (.ttf) one, or a collection's (.ttc)
+// several. It fails for a file that text PDFs cannot be set in, such as an
+// OpenType font of PostScript outlines.
+func FontNames(data []byte) ([]string, error) {
+	n, err := ttf.NumFonts(data)
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, n)
+	for i := range n {
+		f, err := ttf.ParseIndex(data, i)
+		if err != nil {
+			return nil, err
+		}
+		names[i] = cmp.Or(f.FullName, f.PostScriptName, fmt.Sprintf("Font %d", i+1))
+	}
+	return names, nil
+}
+
+// PickFont picks which of a font file's fonts, by their names, to set a
+// face in, regular or bold: the first named so, as "Songti SC Regular" or
+// "Times Bold", or else the first.
+func PickFont(names []string, bold bool) int {
+	weight := " Regular"
+	if bold {
+		weight = " Bold"
+	}
+	for i, name := range names {
+		if strings.HasSuffix(name, weight) {
+			return i
+		}
+	}
+	return 0
+}
+
+// ReadFont reads font i of the font file at path, or for i < 0 the one
+// PickFont picks of it for a face, bold or not, and names the fonts in the
+// file (see FontNames). It fails for a font whose license does not let
+// documents embed it, but for the font's Index and the names, from which
+// the user may choose another. Its errors are for the user who chose the
+// file.
+func ReadFont(path string, i int, bold bool) (Font, []string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return Font{}, nil, err
+	}
+	names, err := FontNames(data)
+	switch {
+	case errors.Is(err, ttf.ErrCFF):
+		return Font{}, nil, errors.New("its outlines are PostScript (CFF) ones, which text PDFs cannot embed: " +
+			"choose a TrueType font (.ttf or .ttc)")
+	case err != nil:
+		return Font{}, nil, errors.New("not a TrueType font (.ttf or .ttc)")
+	}
+	if i < 0 {
+		i = PickFont(names, bold)
+	}
+	if i >= len(names) {
+		return Font{}, nil, fmt.Errorf("%s has fonts 0 to %d, not %d", filepath.Base(path), len(names)-1, i)
+	}
+	if f, err := ttf.ParseIndex(data, i); err != nil || !f.Embeddable() {
+		return Font{Index: i}, names, cmp.Or(err, errNotEmbeddable)
+	}
+	return Font{Data: data, Index: i}, names, nil
 }
 
 // textFontFiles are the fonts' names in cmd/fetchdeps's fonts directory,
@@ -61,7 +145,8 @@ func LoadTextFonts(resources string) (TextFonts, error) {
 		}
 		data[i] = b
 	}
-	return TextFonts{data[serif], data[serifBold], data[sans], data[sansBold], data[kai]}, nil
+	return TextFonts{Font{Data: data[serif]}, Font{Data: data[serifBold]}, Font{Data: data[sans]},
+		Font{Data: data[sansBold]}, Font{Data: data[kai]}}, nil
 }
 
 // latin is the face that a line set in fi takes its Latin letters, digits
@@ -75,39 +160,48 @@ func latin(fi int) int {
 }
 
 // face is one of the text PDF's fonts, parsed for its metrics and
-// subsetting, and for its outlines, which style draws.
+// subsetting, and, for the text fonts, for its outlines, which style draws.
 type face struct {
 	ttf     *ttf.Font
-	outline *sfnt.Font
+	outline *sfnt.Font // nil for the user's fonts
 	bold    bool
 	serif   bool
 }
 
+// parseFace parses the font for face fi, with its outlines if outlines.
+func parseFace(f Font, fi int, outlines bool) (*face, error) {
+	t, err := ttf.ParseIndex(f.Data, f.Index)
+	if err != nil {
+		return nil, err
+	}
+	fc := &face{ttf: t, bold: fi == serifBold || fi == sansBold, serif: fi == serif || fi == serifBold}
+	if outlines {
+		c, err := sfnt.ParseCollection(f.Data)
+		if err != nil {
+			return nil, err
+		}
+		if fc.outline, err = c.Font(f.Index); err != nil {
+			return nil, err
+		}
+	}
+	return fc, nil
+}
+
+// parseFaces parses the text fonts. Serif is needed; a face left out is
+// set in the one nearest it.
 func parseFaces(f TextFonts) ([faces]*face, error) {
 	var out [faces]*face
-	for i, data := range [faces][]byte{f.Serif, f.SerifBold, f.Sans, f.SansBold, f.Kai} {
-		if data == nil {
+	for i, font := range f.fonts() {
+		if font.Data == nil {
 			continue
 		}
-		t, err := ttf.Parse(data)
-		if err != nil {
+		var err error
+		if out[i], err = parseFace(font, i, true); err != nil {
 			return out, err
 		}
-		o, err := sfnt.Parse(data)
-		if err != nil {
-			return out, err
-		}
-		out[i] = &face{ttf: t, outline: o, bold: i == serifBold || i == sansBold, serif: i == serif || i == serifBold}
 	}
 	if out[serif] == nil {
 		return out, errors.New("text fonts: no serif face")
-	}
-	// A line mixes faces, a Kai one with the serif one, by their units.
-	for _, fc := range out {
-		if fc != nil && fc.ttf.UnitsPerEm != out[serif].ttf.UnitsPerEm {
-			return out, fmt.Errorf("text fonts: %s has %d units per em, %s %d", fc.ttf.PostScriptName,
-				fc.ttf.UnitsPerEm, out[serif].ttf.PostScriptName, out[serif].ttf.UnitsPerEm)
-		}
 	}
 	// A face left out is set in the one nearest it: the other weight of
 	// its kind, or the serif one of its weight.
@@ -120,10 +214,44 @@ func parseFaces(f TextFonts) ([faces]*face, error) {
 	return out, nil
 }
 
+// faceNames name the faces in errors.
+var faceNames = [faces]string{"serif", "serif bold", "sans-serif", "sans-serif bold", "Kai", "Kai bold"}
+
+// errNotEmbeddable is the error for a font whose license does not let text
+// PDFs embed it.
+var errNotEmbeddable = errors.New("its license doesn’t allow embedding it in documents")
+
+// parseUserFaces parses the user's fonts, nil for a face left out.
+func parseUserFaces(f TextFonts) ([faces]*face, error) {
+	var out [faces]*face
+	for i, font := range f.fonts() {
+		if font.Data == nil {
+			continue
+		}
+		fc, err := parseFace(font, i, false)
+		if err == nil && !fc.ttf.Embeddable() {
+			err = errNotEmbeddable
+		}
+		if err != nil {
+			return out, fmt.Errorf("%s font: %w", faceNames[i], err)
+		}
+		out[i] = fc
+	}
+	return out, nil
+}
+
 // textDoc collects the pages of a text PDF: scanned pages redrawn with
 // their text set in real fonts, over what remains of the scan.
 type textDoc struct {
 	fonts [faces]*face
+	// Fallbacks are the text fonts behind those of fonts that are the
+	// user's, which set the characters they lack; nil behind the others.
+	fallbacks [faces]*face
+	// Ref is the document set in the text fonts alone, which lines are
+	// measured and judged in (see styles), whatever fonts they are set
+	// in: those are the faces the judging is tuned to, and the user's
+	// may be of any kind. It is the document itself where they are.
+	ref   *textDoc
 	sets  []*cidSet // what the pages' characters are numbered in
 	pages []*textPage
 }
@@ -194,8 +322,35 @@ type textLine struct {
 	hidden bool // invisible, over the line as printed
 }
 
-func newTextDoc(fonts [faces]*face) *textDoc {
-	return &textDoc{fonts: fonts}
+// newTextDoc starts a document set in the text fonts, but for the faces the
+// user has fonts of their own for, nil where not. A kind the user gives
+// either weight of is set in it, a weight left out in the other; other
+// kinds are set in the text fonts.
+func newTextDoc(fonts, user [faces]*face) *textDoc {
+	d := &textDoc{fonts: fonts}
+	d.ref = d
+	for k := serif; k < faces; k += 2 {
+		reg, bold := user[k], user[k+1]
+		if reg == nil && bold == nil {
+			continue
+		}
+		if d.ref == d {
+			d.ref = &textDoc{fonts: fonts}
+			d.ref.ref = d.ref
+		}
+		d.fonts[k], d.fonts[k+1] = cmp.Or(reg, bold), cmp.Or(bold, reg)
+		d.fallbacks[k], d.fallbacks[k+1] = fonts[k], fonts[k+1]
+	}
+	return d
+}
+
+// font is the document's face i, or for fallback+i, the text font behind
+// face i (see fallbacks).
+func (d *textDoc) font(i int) *face {
+	if i >= fallback {
+		return d.fallbacks[i-fallback]
+	}
+	return d.fonts[i]
 }
 
 // cid numbers characters as the text sets them, from 1: a character in a
@@ -214,7 +369,7 @@ func (d *textDoc) cid(s *cidSet, f int, r rune, width int) uint16 {
 	if len(s.codes) >= maxCIDs {
 		// Out of CIDs, on a page of more characters than a set numbers: the
 		// character at its own advance, if it has one.
-		font := d.fonts[f].ttf
+		font := d.font(f).ttf
 		if c, ok := s.cids[code{f, r, font.Advance(font.Glyph(r))}]; ok {
 			return c
 		}
@@ -241,7 +396,8 @@ func (d *textDoc) build() []byte {
 		sets = []*cidSet{{}} // no text, but a ToUnicode map all the same
 	}
 	// The faces each set's pages set text in, by what the pages call them:
-	// F1 to F6 in the first set, F7 to F12 in the next, and so on.
+	// F1 to F12 in the first set, F13 to F24 in the next, and so on, the
+	// fallbacks after the faces.
 	fontNames := make([]string, len(sets))
 	for si, s := range sets {
 		tu := toUnicode
@@ -255,7 +411,7 @@ func (d *textDoc) build() []byte {
 		}
 		w.stream(tu, "", toUnicodeCMap(runes))
 		var names strings.Builder
-		for fi := range faces {
+		for fi := range allFaces {
 			var cids []int
 			for i, c := range s.codes {
 				if c.face == fi {
@@ -265,7 +421,7 @@ func (d *textDoc) build() []byte {
 			if len(cids) == 0 {
 				continue
 			}
-			fmt.Fprintf(&names, " /F%d %d 0 R", si*faces+fi+1, d.writeFont(w, s, fi, cids, tu))
+			fmt.Fprintf(&names, " /F%d %d 0 R", si*allFaces+fi+1, d.writeFont(w, s, fi, cids, tu))
 		}
 		fontNames[si] = names.String()
 	}
@@ -299,7 +455,7 @@ func (d *textDoc) build() []byte {
 // writeFont writes face fi, subset to the glyphs of cids in set s, as a
 // Type 0 font and returns its object's ID.
 func (d *textDoc) writeFont(w *pdfWriter, s *cidSet, fi int, cids []int, toUnicode int) int {
-	fc := d.fonts[fi]
+	fc := d.font(fi)
 	f := fc.ttf
 	font, cidFont, descriptor, fontFile, cidToGID := w.nextID, w.nextID+1, w.nextID+2, w.nextID+3, w.nextID+4
 	w.nextID += 5
@@ -391,7 +547,7 @@ func (p *textPage) content(s *cidSet) []byte {
 				if in >= 0 {
 					b.WriteString("> Tj\n")
 				}
-				fmt.Fprintf(&b, "/F%d %s Tf\n<", p.set*faces+f+1, num(l.size))
+				fmt.Fprintf(&b, "/F%d %s Tf\n<", p.set*allFaces+f+1, num(l.size))
 				in = f
 			}
 			fmt.Fprintf(&b, "%04X", c)
