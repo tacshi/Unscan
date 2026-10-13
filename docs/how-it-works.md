@@ -53,7 +53,10 @@ measurable to its peak memory.
 For each scanned page, at the resolution it was read at:
 
 1. The paper's color, the page's most common light color, is mapped to
-   white, with the faint noise around it.
+   white, with the faint noise around it: what lies within about four
+   times the noise's standard deviation of it, which the paper's pixels
+   show, from 4 to 16 levels. A clean scan keeps a panel printed in a
+   pale tint, which a grainy one's noise would hide.
 2. Each line's ink is measured inside its box, and past it where a tight
    box cuts glyphs: the box's edge gives the background, and the pixels
    that differ from it by half the ink's contrast are the ink, its edges
@@ -92,7 +95,8 @@ For each scanned page, at the resolution it was read at:
    follow each other down a page, as high as each other, in one script):
    a paragraph is set in the kind most of its lines lean to, and regular
    if most of them are, but for a CJK line leaning surely to the other
-   kind, as a heading does, or a line surely heavier. A line too short to
+   kind, as a heading does, or a line surely heavier, or a first line a
+   fifth heavier, as a heading run into its paragraph is. A line too short to
    judge, as a paragraph's last of one character, takes its paragraph's,
    and a paragraph of such lines, as a page number alone, the kind most
    of the document's lines of its script lean to. So does a heading or a
@@ -119,7 +123,15 @@ For each scanned page, at the resolution it was read at:
    characters abut and text extraction finds no spaces that were not
    read. A line in Kai takes its Latin letters, digits and narrow
    punctuation from the serif face, as books set them in Times beside
-   Kai, since LXGW WenKai's own are a casual hand. Each character is set
+   Kai, since LXGW WenKai's own are a casual hand. A document in
+   traditional Chinese, which more characters of its alone than of
+   simplified's tell, is set in Noto Serif TC and Noto Sans TC, which
+   center its punctuation in the em and draw its characters as it
+   does, but for characters they lack; its lines are measured and judged
+   in the SC faces all the same. On a page in it, characters the
+   recognizer reads in the forms of Japanese or simplified Chinese, a
+   stroke or two apart, as 説 for 說, are read as traditional Chinese
+   draws them, in every output. Each character is set
    in the color of its ink, as a heading in black with its translation in
    blue is, measured across its advance where it is first set, and a word
    of Latin letters or digits in the color most of its characters are,
@@ -127,12 +139,13 @@ For each scanned page, at the resolution it was read at:
    for gray on a page printed black, as a contents page's section numbers
    are, which stays gray.
 5. Lines on plain paper are erased, but for those that type would not
-   match, which stay as printed under invisible text, as text on color
-   does: a line whose ink is framed, as a letter in a box is; one whose
+   match, which stay as printed under invisible text, as text on color,
+   a pale tint's too, does: a line whose ink is framed, as a letter in a box is; one whose
    glyphs, at the size its ink gives them, would have to be squeezed to
    less than four fifths of their width, as handwriting or lettering in a
    picture would; and one the recognizer read with less than 85%
-   confidence. What is left that is not white is cut
+   confidence. What is left that is not white, a pale tint too, whole,
+   as a panel behind a picture or text, is cut
    into images: line art (rules, dot leaders) losslessly, the rest as JPEG
    at 200 DPI at most. Specks of dust are dropped, but for rows of four or
    more alike, level and evenly spaced, as dot leaders and dotted lines
@@ -183,7 +196,13 @@ CGO_ENABLED=0 go test ./...
   of its letters were measured in, a gray section number in gray, and a
   line in one color, its thin 。 measured lighter, in it alone. Dot
   leaders at 300 DPI, too far apart to join, are kept as a picture, while
-  a speck of dust and three specks in a row are not. The marks of a scan's
+  a speck of dust and three specks in a row are not. A line printed on a
+  panel of a pale tint, scanned clean, stays as printed on it, and the
+  panel is kept whole, in its tint, as one picture. A line in traditional
+  Chinese is set in the TC faces, which center its 。, and judged in the
+  SC ones, and a line in simplified Chinese in the SC faces; traditional
+  Chinese is told from simplified, and from Japanese, whose 説 is left
+  as read on its pages. The marks of a scan's
   edges (a broken line down one, a speck on another, a shadow along a
   third) are dropped, while a rule over the text, a folio the recognizer
   missed and a picture printed to the edge are kept. A line tracked as
@@ -199,7 +218,9 @@ CGO_ENABLED=0 go test ./...
   too, and a bold Song heading as slanted as Kai's least is not. In a
   sans-serif document, a heading leaning a little to serif, a page number
   and a line whose ink was not found are sans-serif; in a serif one, a
-  heading leaning a little to sans-serif stays so. Gray ink keeps its
+  heading leaning a little to sans-serif stays so. A paragraph mostly
+  regular keeps a first line a fifth heavier bold, but not a later one,
+  unless surely heavier. Gray ink keeps its
   gray on a page printed black, and is set black on one printed lighter.
   A line
   set in Kai takes its Latin and digits from the serif face, and switches

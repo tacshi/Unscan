@@ -83,9 +83,23 @@ func chroma(c rgb) int {
 	return int(max(c[0], c[1], c[2])) - int(min(c[0], c[1], c[2]))
 }
 
+// tint reports whether c is a pale color, as a panel is printed in: as
+// near white as text's paper is taken to be (see measure), but further
+// than the paper's noise, and with color, unlike the gray of a shadow the
+// scanner casts.
+func tint(c rgb) bool {
+	d := diff(c, white)
+	return d > 8 && d <= 40 && chroma(c) >= 6
+}
+
 // whiten maps the paper's color, the page's most common light color, to
 // white, along with the faint noise around it, so that pages come out
-// white however yellow or gray the scanned paper was.
+// white however yellow or gray the scanned paper was. In each channel,
+// the paper's level is the median of the pixels near its color, and the
+// noise what lies within about four times its standard deviation of it,
+// from 4 to 16 levels: six times how far from it those pixels lie, by
+// their median. A clean scan keeps a panel printed in a pale tint, which
+// a noisy one's grain would hide.
 func (p *pixels) whiten() {
 	var counts [4096]int
 	var sums [4096][3]int
@@ -112,9 +126,25 @@ func (p *pixels) whiten() {
 	if luma(paper) < 160 {
 		return // a dark page, such as a photo: no paper to whiten
 	}
+	var levels [3][256]int
+	near := 0
+	for i := 0; i < len(p.pix); i += 3 {
+		if diff(rgb(p.pix[i:i+3]), paper) <= 32 {
+			near++
+			for c := range 3 {
+				levels[c][p.pix[i+c]]++
+			}
+		}
+	}
 	var lut [3][256]uint8
 	for c := range 3 {
-		top := max(int(paper[c])-16, 64)
+		level := percentile(levels[c][:], near, 0.5)
+		var devs [256]int
+		for v, n := range levels[c] {
+			devs[absInt(v-level)] += n
+		}
+		noise := min(16, max(4, 6*percentile(devs[:], near, 0.5)))
+		top := max(level-noise, 64)
 		for v := range 256 {
 			lut[c][v] = uint8(min(255, v*255/top))
 		}
@@ -220,7 +250,7 @@ func (p *pixels) measure(f frame, aspect float64) ink {
 	for k := range 3 {
 		in.bg[k] = uint8(percentile(hist[k][:], border, 0.5))
 	}
-	if diff(in.bg, white) <= 40 {
+	if diff(in.bg, white) <= 40 && !tint(in.bg) {
 		in.bg = white
 	}
 	in.plain = in.bg == white && colored <= border/10
@@ -703,18 +733,34 @@ func (p *pixels) fill(f frame, s0, s1, t0, t1 float64, c rgb) {
 }
 
 // pictures finds what is left on a page, at dpi: everything that is not
-// white, in rectangles around the pieces that lie within a millimeter or
+// white, pale tints too, as of a panel printed behind a picture or text,
+// whole, in rectangles around the pieces that lie within a millimeter or
 // so of each other, leaving out specks of dust, but for rows of specks
 // that are dot leaders (see leaders), whose dots lie further apart.
 func (p *pixels) pictures(dpi float64) []image.Rectangle {
 	b := max(2, int(dpi/75+0.5)) // blocks of about a third of a millimeter
 	gw, gh := (p.w+b-1)/b, (p.h+b-1)/b
 	inked := make([]int32, gw*gh)
-	for y := range p.h {
-		for x := range p.w {
-			i := 3 * (y*p.w + x)
-			if min(p.pix[i], p.pix[i+1], p.pix[i+2]) < 255-40 {
-				inked[(y/b)*gw+x/b]++
+	sums := make([][3]int, gw) // a row of blocks' colors
+	for by := range gh {
+		clear(sums)
+		y0, y1 := by*b, min(p.h, by*b+b)
+		for y := y0; y < y1; y++ {
+			for x := range p.w {
+				i := 3 * (y*p.w + x)
+				if min(p.pix[i], p.pix[i+1], p.pix[i+2]) < 255-40 {
+					inked[by*gw+x/b]++
+				}
+				for c := range 3 {
+					sums[x/b][c] += int(p.pix[i+c])
+				}
+			}
+		}
+		// A block of a pale tint, as of a panel, is inked, as a pixel is.
+		for bx, sum := range sums {
+			n := (y1 - y0) * (min(p.w, bx*b+b) - bx*b)
+			if mean := (rgb{uint8(sum[0] / n), uint8(sum[1] / n), uint8(sum[2] / n)}); inked[by*gw+bx] == 0 && tint(mean) {
+				inked[by*gw+bx] = 1
 			}
 		}
 	}
@@ -915,7 +961,8 @@ func (p *pixels) encode(r image.Rectangle, dpi float64) pageImage {
 	var lossless []byte
 	if flat >= r.Dx()*r.Dy()*9/10 {
 		// Without the scan's noise, which would not compress: near white
-		// is white, near black black, and tones between come in steps of 8.
+		// is white, but for a pale tint, near black black, and tones between
+		// come in steps of 8.
 		var raw []byte
 		if g, ok := src.(*image.Gray); ok {
 			raw = make([]byte, len(g.Pix))
@@ -928,7 +975,7 @@ func (p *pixels) encode(r image.Rectangle, dpi float64) pageImage {
 			for i := 0; i < len(c.Pix); i += 4 {
 				px := c.Pix[i : i+3]
 				switch {
-				case min(px[0], px[1], px[2]) >= 224:
+				case min(px[0], px[1], px[2]) >= 224 && !tint(rgb(px)):
 					raw = append(raw, 255, 255, 255)
 				case max(px[0], px[1], px[2]) <= 48:
 					raw = append(raw, 0, 0, 0)
@@ -1287,6 +1334,10 @@ func (d *textDoc) setLines() {
 	refs, pages := make([]lineRefs, len(all)), make([]int, len(all))
 	for i, m := range all {
 		texts[i], frames[i], inks[i], refs[i] = m.text, m.frame, m.ink, m.refs
+	}
+	// A document in traditional Chinese is set in its forms' faces.
+	if len(d.sets) == 0 && d.traditional != ([faces]*face{}) && isTraditional(texts) {
+		d.setTraditional()
 	}
 	i := 0
 	for p, page := range d.pages {

@@ -90,9 +90,10 @@ type Converter struct {
 	pool pdfium.Pool
 	ocr  *ocr.Engine
 
-	mu    sync.Mutex   // guards the fonts, which conversions take as they start
-	fonts [faces]*face // for text PDFs
-	user  [faces]*face // the user's, or nil
+	mu          sync.Mutex   // guards the fonts, which conversions take as they start
+	fonts       [faces]*face // for text PDFs
+	traditional [faces]*face // in traditional Chinese's forms, or nil
+	user        [faces]*face // the user's, or nil
 }
 
 // New starts PDFium. Compiling its WebAssembly takes a few seconds the
@@ -143,9 +144,13 @@ func (c *Converter) SetTextFonts(f TextFonts) error {
 	if err != nil {
 		return err
 	}
+	tc, err := parseTraditionalFaces(f)
+	if err != nil {
+		return err
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.fonts = fonts
+	c.fonts, c.traditional = fonts, tc
 	return nil
 }
 
@@ -184,12 +189,13 @@ func (c *Converter) Convert(ctx context.Context, input io.ReadSeeker, out Output
 	var text *textDoc
 	if out.TextPDF != nil {
 		c.mu.Lock()
-		fonts, user := c.fonts, c.user
+		fonts, tc, user := c.fonts, c.traditional, c.user
 		c.mu.Unlock()
 		if fonts[serif] == nil {
 			return nil, errors.New("a text PDF needs fonts: call SetTextFonts first")
 		}
 		text = newTextDoc(fonts, user)
+		text.traditional = tc
 	}
 	size, err := input.Seek(0, io.SeekEnd)
 	if err != nil {
@@ -410,6 +416,7 @@ func (c *Converter) readPages(ctx context.Context, inst pdfium.Pdfium, input io.
 				fail(r.index, err)
 				return
 			}
+			lines = traditionalForms(lines)
 			read := r.layout(lines)
 			if text == nil {
 				if !send(reads, read) {

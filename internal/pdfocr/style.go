@@ -399,11 +399,20 @@ func (d *textDoc) styles(texts []string, frames []frame, inks []ink, lines []lin
 		}
 		heavier[i] = weights[i] / b
 	}
-	// A paragraph of a few lines or more, most of them regular, is set
-	// regular but for a line surely heavier, as a whole line set bold in
-	// it is: one a little heavier is so for its characters, as a line of
-	// Chinese among Latin ones may be. Lines of the other kind than the
-	// paragraph's, as a heading in its size, are their own.
+	paragraphWeights(paras, out, heavier)
+	return out
+}
+
+// paragraphWeights votes on the weight of paragraphs' lines, as kinds
+// returns them: out has each line in its kind's bold face where it is 15%
+// heavier than its kind's lines are (see styles), heavier says how much.
+// A paragraph of a few lines or more, most of them regular, is set
+// regular but for a line surely heavier, as a whole line set bold in
+// it is, or a first line a fifth heavier, as a heading run into its
+// paragraph is: one a little heavier is so for its characters, as a
+// line of Chinese among Latin ones may be. Lines of the other kind than
+// the paragraph's, as a heading in its size, are their own.
+func paragraphWeights(paras [][]int, out []int, heavier []float64) {
 	for _, para := range paras {
 		if len(para) < 3 {
 			continue
@@ -422,12 +431,11 @@ func (d *textDoc) styles(texts []string, frames []frame, inks []ink, lines []lin
 			continue // mostly bold
 		}
 		for _, i := range para {
-			if out[i] == kind+1 && heavier[i] < 1.3 {
+			if out[i] == kind+1 && heavier[i] < 1.3 && !(i == para[0] && heavier[i] >= 1.2) {
 				out[i] = kind
 			}
 		}
 	}
-	return out
 }
 
 // lineGeom is what kinds knows of a line: where it is, what script it is

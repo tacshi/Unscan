@@ -1288,3 +1288,161 @@ func TestLeaderDots(t *testing.T) {
 		t.Errorf("leaders in %v, drawn in (400,145)-(1385,150)", r)
 	}
 }
+
+// TestTraditional tells traditional Chinese from simplified by the
+// characters either has alone, and sets a page in traditional Chinese in
+// its forms, 說 for the 説 the recognizer reads, but leaves a page in
+// simplified Chinese, or Japanese, as it was read.
+func TestTraditional(t *testing.T) {
+	if s, tc := []rune(simplified), []rune(traditional); len(s) != len(tc) {
+		t.Fatalf("%d simplified characters, %d traditional", len(s), len(tc))
+	}
+	for _, c := range []struct {
+		texts []string
+		want  bool
+	}{
+		{[]string{"見面與問候", "說「您好。」", "Meeting and Greeting"}, true},
+		{[]string{"见面与问候", "说“您好。”"}, false},
+		{[]string{"説明書を読む"}, false},
+		{[]string{"Meeting and Greeting", "目錄"}, false}, // too little to tell
+	} {
+		if got := isTraditional(c.texts); got != c.want {
+			t.Errorf("%q traditional %v, want %v", c.texts, got, c.want)
+		}
+	}
+	page := traditionalForms([]ocr.Line{{Text: "見面與問候"}, {Text: "説「您好。」"}})
+	if page[1].Text != "說「您好。」" {
+		t.Errorf("a traditional page's 説 set as %q", page[1].Text)
+	}
+	if page := traditionalForms([]ocr.Line{{Text: "说明书"}, {Text: "説明書を読む"}}); page[1].Text != "説明書を読む" {
+		t.Errorf("another page's 説 set as %q", page[1].Text)
+	}
+}
+
+// TestTraditionalFonts sets a document in traditional Chinese in the text
+// fonts in its forms, which centers its punctuation, but for what they
+// lack, and one in simplified Chinese in the others.
+func TestTraditionalFonts(t *testing.T) {
+	_, fonts := testTextDoc(t)
+	if fonts.SansTC.Data == nil {
+		t.Skip("no fonts in traditional Chinese's forms: run go run ./cmd/fetchdeps")
+	}
+	text, err := parseFaces(fonts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tc, err := parseTraditionalFaces(fonts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sf, err := opentype.Parse(fonts.Sans.Data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	drawn, err := opentype.NewFace(sf, &opentype.FaceOptions{Size: 40, DPI: 72, Hinting: font.HintingNone})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer drawn.Close()
+	for _, c := range []struct {
+		read        string
+		traditional bool
+	}{
+		{"說「您好。」謝謝", true},
+		{"说“您好。”谢谢", false},
+	} {
+		d := newTextDoc(text, [faces]*face{})
+		d.traditional = tc
+		img := image.NewRGBA(image.Rect(0, 0, 600, 150))
+		draw.Draw(img, img.Rect, image.White, image.Point{}, draw.Src)
+		dr := font.Drawer{Dst: img, Src: image.Black, Face: drawn, Dot: fixed.P(60, 100)}
+		dr.DrawString(c.read)
+		end := float64(dr.Dot.X.Ceil() + 10)
+		box := ocr.Quad{{X: 50, Y: 52}, {X: end, Y: 52}, {X: end, Y: 112}, {X: 50, Y: 112}}
+		page := d.redraw(img, []ocr.Line{{Score: 1, Box: box, Text: c.read}}, 600, 150)
+		d.setLines()
+		if len(page.lines) != 1 {
+			t.Fatalf("%q: %d lines", c.read, len(page.lines))
+		}
+		want := text[page.lines[0].face]
+		if c.traditional {
+			want = tc[page.lines[0].face]
+		}
+		if d.fonts[page.lines[0].face] != want || d.ref.fonts[sans] != text[sans] {
+			t.Errorf("%q set in the wrong fonts, or judged in them", c.read)
+		}
+		// 。 in traditional Chinese's forms is centered in the em, low in
+		// simplified's.
+		f := d.fonts[page.lines[0].face].ttf
+		b, _ := f.Bounds(f.Glyph('。'))
+		if centered := b[3] > f.UnitsPerEm*2/5; centered != c.traditional {
+			t.Errorf("%q: 。 reaches %d units of %d", c.read, b[3], f.UnitsPerEm)
+		}
+	}
+}
+
+// TestParagraphWeights sets a paragraph mostly regular regular, but for a
+// line surely heavier, or a first line a fifth heavier, as a heading run
+// into it is; a line a fifth heavier further down is regular.
+func TestParagraphWeights(t *testing.T) {
+	for _, c := range []struct {
+		heavier []float64
+		want    []int
+	}{
+		{[]float64{1.25, 1, 1, 1}, []int{sansBold, sans, sans, sans}},
+		{[]float64{1.17, 1, 1, 1}, []int{sans, sans, sans, sans}},
+		{[]float64{1, 1.25, 1, 1}, []int{sans, sans, sans, sans}},
+		{[]float64{1, 1.35, 1, 1}, []int{sans, sansBold, sans, sans}},
+	} {
+		out := []int{sans, sans, sans, sans}
+		for i, h := range c.heavier {
+			if h >= 1.15 {
+				out[i] = sansBold
+			}
+		}
+		if paragraphWeights([][]int{{0, 1, 2, 3}}, out, c.heavier); !slices.Equal(out, c.want) {
+			t.Errorf("lines %v heavier: set %v, want %v", c.heavier, out, c.want)
+		}
+	}
+}
+
+// TestRedrawPanel redraws a line printed on a panel of a pale tint, on a
+// page scanned clean: the panel keeps its tint, whole, as one picture, and
+// the line stays on it as printed.
+func TestRedrawPanel(t *testing.T) {
+	d, fonts := testTextDoc(t)
+	sf, err := opentype.Parse(fonts.Sans.Data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	face, err := opentype.NewFace(sf, &opentype.FaceOptions{Size: 40, DPI: 72, Hinting: font.HintingNone})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer face.Close()
+	img := image.NewRGBA(image.Rect(0, 0, 1600, 1200))
+	draw.Draw(img, img.Rect, image.White, image.Point{}, draw.Src)
+	panel := image.Rect(100, 50, 700, 350)
+	draw.Draw(img, panel, image.NewUniform(color.RGBA{252, 254, 234, 255}), image.Point{}, draw.Src)
+	dr := font.Drawer{Dst: img, Src: image.Black, Face: face, Dot: fixed.P(200, 220)}
+	dr.DrawString("Read a book")
+	end := float64(dr.Dot.X.Ceil() + 10)
+	box := ocr.Quad{{X: 190, Y: 172}, {X: end, Y: 172}, {X: end, Y: 232}, {X: 190, Y: 232}}
+	page := d.redraw(img, []ocr.Line{{Score: 1, Box: box, Text: "Read a book"}}, 1600, 1200)
+	d.setLines()
+	if len(page.lines) != 1 || !page.lines[0].hidden {
+		t.Errorf("lines %+v: want one, hidden", page.lines)
+	}
+	if len(page.images) != 1 {
+		t.Fatalf("%d images: want the panel", len(page.images))
+	}
+	im := page.images[0]
+	if math.Abs(im.x-100) > 6 || math.Abs(im.w-600) > 12 || math.Abs(im.y-850) > 6 || math.Abs(im.h-300) > 12 {
+		t.Errorf("image at %.0f, %.0f, %.0f×%.0f: want the panel's 100, 850, 600×300", im.x, im.y, im.w, im.h)
+	}
+	dec := decodeImage(t, im)
+	r, g, b, _ := dec.At(dec.Bounds().Dx()/8, dec.Bounds().Dy()/8).RGBA()
+	if c := (rgb{uint8(r >> 8), uint8(g >> 8), uint8(b >> 8)}); !tint(c) {
+		t.Errorf("the panel kept in %v, not its tint", c)
+	}
+}

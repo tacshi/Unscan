@@ -30,8 +30,10 @@ cgo.
 | **Text** | The text of every page, as plain text. |
 
 The retyped PDF sets text in Noto Serif SC or Noto Sans SC, regular or
-bold, or in LXGW WenKai for Kai (楷体), the brush-written face of Chinese
-prefaces and running heads, or in [fonts of your own](#your-own-fonts).
+bold, or Noto Serif TC and Noto Sans TC for a document in traditional
+Chinese, whose punctuation they center as it is printed, or in LXGW
+WenKai for Kai (楷体), the brush-written face of Chinese prefaces and
+running heads, or in [fonts of your own](#your-own-fonts).
 Pictures, rules and logos are kept as images under the text. Text printed
 on color or over a picture, such as a cover's title, stays as printed,
 since retyping it would deface the design, with invisible text over it
@@ -66,7 +68,7 @@ such as handwriting in an illustration or a letter in a box.
   Runtime is also fetched for Linux and Windows (amd64 and arm64) for
   cross-platform builds. Intel Macs are not supported (see
   [Known limitations](#known-limitations-and-roadmap)).
-- About 145 MB of models, fonts and runtime, which `cmd/fetchdeps`
+- About 180 MB of models, fonts and runtime, which `cmd/fetchdeps`
   downloads, and about 3 GB of memory while pages are read.
 
 ## Getting started
@@ -74,7 +76,7 @@ such as handwriting in an illustration or a letter in a box.
 ```sh
 git clone https://github.com/tacshi/Unscan.git
 cd Unscan
-go run ./cmd/fetchdeps    # models, fonts and this machine's ONNX Runtime (~145 MB)
+go run ./cmd/fetchdeps    # models, fonts and this machine's ONNX Runtime (~180 MB)
 go tool mygo dev          # run the app, with live reload
 ```
 
@@ -88,8 +90,10 @@ resources/
 ├── models/rec_dict.txt        its 18,708 characters, from inference.yml
 ├── fonts/NotoSerifSC-{Regular,Bold}.ttf  the retyped PDF's serif faces (15 MB each, OFL-1.1)
 ├── fonts/NotoSansSC-{Regular,Bold}.ttf   and its sans-serif ones (11 MB each, OFL-1.1)
+├── fonts/NotoSerifTC-{Regular,Bold}.ttf  in traditional Chinese's forms (10 MB each, OFL-1.1)
+├── fonts/NotoSansTC-{Regular,Bold}.ttf   (7.1 MB each, OFL-1.1)
 ├── fonts/LXGWWenKai-Regular.ttf          and its Kai face, v1.522 (26 MB, OFL-1.1)
-├── fonts/NotoSerifSC-OFL.txt, NotoSansSC-OFL.txt, LXGWWenKai-OFL.txt  their licenses
+├── fonts/*-OFL.txt                       their licenses
 └── darwin-arm64/libonnxruntime.dylib  (or linux-*/libonnxruntime.so, windows-*/onnxruntime.dll)
 ```
 
@@ -360,10 +364,11 @@ Unscan builds on these projects, under their own licenses:
 | [ONNX Runtime](https://onnxruntime.ai) | MIT |
 | [PDFium](https://pdfium.googlesource.com/pdfium/) | Apache-2.0 / BSD |
 | [go-pdfium](https://github.com/klippa-app/go-pdfium), [onnxruntime_purego](https://github.com/getcharzp/onnxruntime_purego), [purego](https://github.com/ebitengine/purego) | MIT / Apache-2.0 |
-| [Noto Serif SC](https://fonts.google.com/noto/specimen/Noto+Serif+SC), [Noto Sans SC](https://fonts.google.com/noto/specimen/Noto+Sans+SC), [LXGW WenKai](https://github.com/lxgw/LxgwWenKai) | SIL Open Font License 1.1 |
+| [Noto Serif SC](https://fonts.google.com/noto/specimen/Noto+Serif+SC), [Noto Sans SC](https://fonts.google.com/noto/specimen/Noto+Sans+SC), [Noto Serif TC](https://fonts.google.com/noto/specimen/Noto+Serif+TC), [Noto Sans TC](https://fonts.google.com/noto/specimen/Noto+Sans+TC), [LXGW WenKai](https://github.com/lxgw/LxgwWenKai) | SIL Open Font License 1.1 |
 
 The app carries the fonts' licenses in `fonts/NotoSerifSC-OFL.txt`,
-`fonts/NotoSansSC-OFL.txt` and `fonts/LXGWWenKai-OFL.txt`, and embeds
+`fonts/NotoSansSC-OFL.txt`, `fonts/NotoSerifTC-OFL.txt`,
+`fonts/NotoSansTC-OFL.txt` and `fonts/LXGWWenKai-OFL.txt`, and embeds
 subsets of the fonts in retyped PDFs, as the license allows. Subsets of
 your own fonts are embedded under those fonts' licenses, which are yours
 to comply with; fonts that forbid embedding are refused. Check the
