@@ -203,6 +203,24 @@ func (d *textDoc) strokes(sh shape, size float64, oblique bool) strokes {
 type lineRefs struct {
 	ok   bool // false for a line that cannot be judged (see styles)
 	refs [faces]strokes
+	// words are the line's words of Latin letters or digits, which styles
+	// judges the weight of too, setting each's face, as a verb set bold
+	// in a caption is, or nil.
+	words []wordInk
+}
+
+// wordInk is a word of a line's: a run of its glyphs, from from to to
+// (not included), between spaces or CJK characters, with letters letters
+// or digits. Ink is its ink's strokes, refs its strokes set in the serif
+// and sans-serif regular faces at the size the line's ink gives each, and
+// slant how far its upright strokes lean to the right, the tangent of
+// their angle (see slant). Face is the face styles sets it in.
+type wordInk struct {
+	from, to, letters int
+	ink               strokes
+	refs              [2]strokes
+	slant             float64
+	face              int
 }
 
 // refs sets a line's text in each face, at the size its ink gives it,
@@ -269,7 +287,8 @@ func (d *textDoc) refs(text string, f frame, in ink) lineRefs {
 // kind most of the document's lines of their script are (see kinds), as
 // are lines whose ink was not found.
 // Lines gives each line's lineRefs, which styles completes with Kai's for
-// the lines it judges Kai, and pages its page, or is nil for one page.
+// the lines it judges Kai, and with the faces of their words, and pages
+// its page, or is nil for one page.
 func (d *textDoc) styles(texts []string, frames []frame, inks []ink, lines []lineRefs, pages []int) []int {
 	var gains []float64
 	for i, l := range lines {
@@ -373,6 +392,7 @@ func (d *textDoc) styles(texts []string, frames []frame, inks []ink, lines []lin
 		return ws[len(ws)/2], true
 	}
 	heavier := make([]float64, len(texts)) // than the lines of its kind, as below
+	bases := make([]float64, len(texts))
 	for i, l := range lines {
 		if !l.ok {
 			continue
@@ -398,8 +418,45 @@ func (d *textDoc) styles(texts []string, frames []frame, inks []ink, lines []lin
 			out[i]++ // the kind's bold face
 		}
 		heavier[i] = weights[i] / b
+		bases[i] = b
 	}
 	paragraphWeights(paras, out, heavier)
+
+	// A word is set in its line's face but where it is surely heavier, by
+	// a fifth, than the lines of its kind are, in a line set regular, as
+	// a verb set bold in a caption is, or no more than a tenth heavier in
+	// one set bold. A word of a letter is in the face of the word after it,
+	// or before it, as "a" is in "Take a seat", but for a line's first, as
+	// a label's, which is the line's.
+	for i, l := range lines {
+		kind := out[i] &^ 1
+		for k := range l.words {
+			w := &l.words[k]
+			w.face = out[i]
+			if !l.ok || kind == kai || w.letters < 2 && !(k == 0 && w.letters == 1) || w.refs[kind/2].across == 0 || w.refs[kind/2].down == 0 {
+				continue
+			}
+			bold := 1.2
+			if w.letters < 2 {
+				bold = 1.3 // a label's letter, which tells less surely
+			}
+			across, down := max(w.ink.across-gain, 1.0/3), max(w.ink.down-gain, 1.0/3)
+			switch h := math.Sqrt(across/w.refs[kind/2].across*down/w.refs[kind/2].down) / bases[i]; {
+			case out[i] == kind && h >= bold:
+				w.face = kind + 1
+			case out[i] == kind+1 && h < 1.1:
+				w.face = kind
+			}
+		}
+		for k := 1; k < len(l.words); k++ {
+			if l.words[k].letters < 2 {
+				l.words[k].face = l.words[min(k+1, len(l.words)-1)].face
+				if k == len(l.words)-1 {
+					l.words[k].face = l.words[k-1].face
+				}
+			}
+		}
+	}
 	return out
 }
 

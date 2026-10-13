@@ -1446,3 +1446,212 @@ func TestRedrawPanel(t *testing.T) {
 		t.Errorf("the panel kept in %v, not its tint", c)
 	}
 }
+
+// drawSheared draws text in black in face at (x, base), its rows sheared
+// right by k for each pixel above the baseline, as an italic face leans,
+// blending across pixels as a scan does, and returns where its advance
+// ends.
+func drawSheared(img *image.RGBA, face font.Face, text string, x, base int, k float64) int {
+	b := img.Bounds()
+	plain := image.NewRGBA(b)
+	draw.Draw(plain, b, image.White, image.Point{}, draw.Src)
+	dr := font.Drawer{Dst: plain, Src: image.Black, Face: face, Dot: fixed.P(x, base)}
+	dr.DrawString(text)
+	ink := make([]float64, b.Dx())
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		clear(ink)
+		shift := k * float64(base-y)
+		whole := int(math.Floor(shift))
+		frac := shift - float64(whole)
+		for px := b.Min.X; px < b.Max.X; px++ {
+			c := 1 - float64(plain.RGBAAt(px, y).R)/255
+			if i := px - b.Min.X + whole; i >= 0 && i < len(ink) {
+				ink[i] += (1 - frac) * c
+			}
+			if i := px - b.Min.X + whole + 1; i >= 0 && i < len(ink) {
+				ink[i] += frac * c
+			}
+		}
+		for i, c := range ink {
+			if c > 0 {
+				v := uint8(255 * (1 - min(1, c)))
+				old := img.RGBAAt(b.Min.X+i, y)
+				img.SetRGBA(b.Min.X+i, y, color.RGBA{min(v, old.R), min(v, old.G), min(v, old.B), 255})
+			}
+		}
+	}
+	return dr.Dot.X.Ceil()
+}
+
+// TestSlant measures how far text leans: upright text not at all, and
+// text sheared as italic is by as much.
+func TestSlant(t *testing.T) {
+	_, fonts := testTextDoc(t)
+	sf, err := opentype.Parse(fonts.Sans.Data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	face, err := opentype.NewFace(sf, &opentype.FaceOptions{Size: 40, DPI: 72, Hinting: font.HintingNone})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer face.Close()
+	for _, k := range []float64{0, 0.12, 0.2} {
+		for _, text := range []string{"Good morning", "Have a nice day", "My name is Tom"} {
+			img := image.NewRGBA(image.Rect(0, 0, 600, 100))
+			draw.Draw(img, img.Rect, image.White, image.Point{}, draw.Src)
+			drawSheared(img, face, text, 20, 70, k)
+			w, h := img.Rect.Dx(), img.Rect.Dy()
+			got := slant(w, h, func(x, y int) float64 { return 1 - float64(img.RGBAAt(x, y).G)/255 })
+			if math.Abs(got-k) > 0.04 {
+				t.Errorf("%q sheared by %.2f leans %.3f", text, k, got)
+			}
+		}
+	}
+}
+
+// TestItalics sets the words of a line italic as they lean: all of a line
+// whose words lean, but for its label and a word that leans left, and in
+// an upright line a long word that leans far, but no short one, as "you"
+// may by chance, nor a digit, slash or label.
+func TestItalics(t *testing.T) {
+	word := func(from, to, letters int, slant float64) wordInk {
+		return wordInk{from: from, to: to, letters: letters, slant: slant}
+	}
+	for _, c := range []struct {
+		name  string
+		words []wordInk
+		n     int
+		want  string // + for a slanted glyph
+	}{
+		{"an italic line after a label", []wordInk{word(0, 2, 1, -0.01), word(3, 7, 4, 0.13), word(8, 16, 7, 0.07)}, 16,
+			"   +++++++++++++"},
+		{"an example after a word upright", []wordInk{word(0, 7, 6, -0.03), word(8, 12, 4, 0.19), word(13, 15, 2, 0.21)}, 15,
+			"        +++++++"},
+		{"an upright line", []wordInk{word(0, 4, 0, 0.2), word(5, 7, 2, 0.02), word(8, 9, 0, 0.35), word(10, 13, 3, 0.18), word(14, 18, 4, -0.01)}, 18,
+			""},
+		{"a title in an upright line", []wordInk{word(0, 3, 3, 0.01), word(4, 9, 5, 0.17), word(10, 13, 3, -0.02), word(14, 18, 4, 0)}, 18,
+			"    +++++         "},
+	} {
+		slanted, lean := italics(c.words, c.n)
+		var got string
+		for _, s := range slanted {
+			got += map[bool]string{true: "+", false: " "}[s]
+		}
+		if got != c.want || (got != "") != (lean >= 0.1) {
+			t.Errorf("%s: slanted %q by %.2f, want %q", c.name, got, lean, c.want)
+		}
+	}
+}
+
+// TestWordFaces redraws a caption whose verb is set bold, "Look up", among
+// lines set regular, and sets each word in its face; and an example set
+// italic after a label set upright, whose words it slants.
+func TestWordFaces(t *testing.T) {
+	d, fonts := testTextDoc(t)
+	faceOf := func(data []byte) font.Face {
+		sf, err := opentype.Parse(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		face, err := opentype.NewFace(sf, &opentype.FaceOptions{Size: 40, DPI: 72, Hinting: font.HintingNone})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return face
+	}
+	regular, bold := faceOf(fonts.Sans.Data), faceOf(fonts.SansBold.Data)
+	defer regular.Close()
+	defer bold.Close()
+	img := image.NewRGBA(image.Rect(0, 0, 1400, 1000))
+	draw.Draw(img, img.Rect, image.White, image.Point{}, draw.Src)
+	box := func(x0, x1, base int) ocr.Quad {
+		return ocr.Quad{{X: float64(x0 - 10), Y: float64(base - 48)}, {X: float64(x1 + 10), Y: float64(base - 48)},
+			{X: float64(x1 + 10), Y: float64(base + 12)}, {X: float64(x0 - 10), Y: float64(base + 12)}}
+	}
+	var lines []ocr.Line
+	for k, text := range []string{"Understanding the kernel of a modern system", "requires a careful study of memory",
+		"and how processes are scheduled in turn", "across the processors of a single machine.", "with examples from the source itself."} {
+		dr := font.Drawer{Dst: img, Src: image.Black, Face: regular, Dot: fixed.P(60, 100+80*k)}
+		dr.DrawString(text)
+		lines = append(lines, ocr.Line{Score: 1, Text: text, Box: box(60, dr.Dot.X.Ceil(), 100+80*k)})
+	}
+	dr := font.Drawer{Dst: img, Src: image.Black, Face: regular, Dot: fixed.P(60, 600)}
+	dr.DrawString("A. ")
+	dr.Face = bold
+	dr.DrawString("Look up")
+	dr.Face = regular
+	dr.DrawString(" the word.")
+	lines = append(lines, ocr.Line{Score: 1, Text: "A. Look up the word.", Box: box(60, dr.Dot.X.Ceil(), 600)})
+	dr = font.Drawer{Dst: img, Src: image.Black, Face: bold, Dot: fixed.P(60, 800)}
+	dr.DrawString("A: ")
+	end := drawSheared(img, regular, "Good morning, Tom.", dr.Dot.X.Ceil(), 800, 0.2)
+	lines = append(lines, ocr.Line{Score: 1, Text: "A: Good morning, Tom.", Box: box(60, end, 800)})
+	page := d.redraw(img, lines, 1400, 1000)
+	d.setLines()
+	if len(page.lines) != len(lines) {
+		t.Fatalf("%d lines", len(page.lines))
+	}
+	set := func(l textLine) (text, faces, slanted string) {
+		for k, c := range l.cids {
+			code := d.sets[page.set].codes[c-1]
+			text += string(code.r)
+			faces += map[bool]string{true: "B", false: "r"}[code.face == sansBold || code.face == serifBold]
+			slanted += map[bool]string{true: "+", false: " "}[l.slanted != nil && l.slanted[k]]
+		}
+		return
+	}
+	if text, faces, _ := set(page.lines[5]); faces != "rrrBBBBBBBrrrrrrrrrr" {
+		t.Errorf("%q set in\n%q, want\n%q", text, faces, "rrrBBBBBBBrrrrrrrrrr")
+	}
+	if text, _, slanted := set(page.lines[6]); slanted != "   ++++++++++++++++++" {
+		t.Errorf("%q slanted\n%q, want\n%q", text, slanted, "   ++++++++++++++++++")
+	}
+	if content := string(page.content(d.sets[page.set])); strings.Count(content, " Tm\n") != len(lines)+1 {
+		t.Errorf("%d text matrices, want one a line and one for the slanted words", strings.Count(content, " Tm\n"))
+	}
+}
+
+// TestUnderline redraws a line with a word underlined, the rule running
+// into its letters' feet, and one with the rule apart from them: both are
+// set at their size, and their rules kept as printed.
+func TestUnderline(t *testing.T) {
+	d, fonts := testTextDoc(t)
+	sf, err := opentype.Parse(fonts.Sans.Data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	face, err := opentype.NewFace(sf, &opentype.FaceOptions{Size: 40, DPI: 72, Hinting: font.HintingNone})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer face.Close()
+	for _, gap := range []int{0, 3} {
+		img := image.NewRGBA(image.Rect(0, 0, 1000, 600))
+		draw.Draw(img, img.Rect, image.White, image.Point{}, draw.Src)
+		dr := font.Drawer{Dst: img, Src: image.Black, Face: face, Dot: fixed.P(60, 300)}
+		dr.DrawString("My name is ")
+		from := dr.Dot.X.Ceil()
+		dr.DrawString("Tom")
+		to := dr.Dot.X.Ceil()
+		dr.DrawString(".")
+		end := dr.Dot.X.Ceil()
+		rule := image.Rect(from, 300+1+gap, to, 300+4+gap)
+		draw.Draw(img, rule, image.Black, image.Point{}, draw.Src)
+		box := ocr.Quad{{X: 50, Y: 252}, {X: float64(end + 10), Y: 252}, {X: float64(end + 10), Y: 312}, {X: 50, Y: 312}}
+		page := d.redraw(img, []ocr.Line{{Score: 1, Box: box, Text: "My name is Tom."}}, 1000, 600)
+		d.setLines()
+		if len(page.lines) != 1 || page.lines[0].hidden {
+			t.Fatalf("gap %d: lines %+v, want one, set", gap, page.lines)
+		}
+		if size := page.lines[0].size; math.Abs(size/40-1) > 0.03 {
+			t.Errorf("gap %d: set at %.1f, drawn at 40", gap, size)
+		}
+		cx, cy := float64(rule.Min.X+rule.Max.X)/2, 600-float64(rule.Min.Y+rule.Max.Y)/2
+		if !slices.ContainsFunc(page.images, func(im pageImage) bool {
+			return cx >= im.x && cx <= im.x+im.w && cy >= im.y && cy <= im.y+im.h
+		}) {
+			t.Errorf("gap %d: the rule is not kept: %d images", gap, len(page.images))
+		}
+	}
+}

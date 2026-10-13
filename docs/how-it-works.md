@@ -71,7 +71,17 @@ For each scanned page, at the resolution it was read at:
    quarter of its height, are the leaders', or by a tenth after a Chinese
    character or before a digit, which a sentence's period does not follow
    or precede; and dots read that have no ink of their own, too faint
-   beside the line's, are dropped.
+   beside the line's, are dropped. Rules along a line, as an underline,
+   are told from its text's ink: bands of rows no thicker than an eighth
+   of its box's height with a run of ink a fifth longer than the box is
+   high, longer than a glyph's stroke. They are kept as printed, and the
+   text's ink lies above an underline that runs into its letters' feet,
+   so that an underlined word is not set too large. Each word of Latin
+   letters or digits is measured too, where the line is first set: its
+   strokes, as the line's, and how far they lean, the mean lean of its
+   edges that run near upright, which an upright face's round and
+   slanting strokes leave about upright, its ink sheared back upright by
+   it and read again until little lean is left.
 3. Once every page is measured, each line's face is judged from its
    strokes, against each face's glyphs drawn at the line's size.
    Printing and scanning thicken every stroke by about as much, which
@@ -103,7 +113,13 @@ For each scanned page, at the resolution it was read at:
    label, a paragraph of a line or two, that leans to serif less than
    surely, where most of the document's lines are sans-serif: a
    sans-serif face's bold has more contrast than its regular, and leans a
-   little to serif.
+   little to serif. A word of two letters or more is set bold, against
+   its own glyphs in its kind's regular face, where it is a fifth heavier
+   than the lines of its kind on its page are, as a verb set bold in a
+   caption is, and a line's label, of a letter, where it is three tenths
+   heavier; a word in a bold line is set regular where it is no more than
+   a tenth heavier. A one-letter word within a line is set as the word
+   after it.
 4. The line is set in its face so that its glyphs' outlines cover its
    ink. Their height gives the font size, which lines within 7% of
    each other on a page share, as a paragraph's do. Glyphs keep their
@@ -118,7 +134,11 @@ For each scanned page, at the resolution it was read at:
    kept as printed. A line that has nowhere to space, or is wider than its
    ink, is stretched or squeezed (`Tz`) instead; a hyphen read between its
    digits, as a page range's, is set as an en dash where that fits the
-   ink better. The spacing goes into the
+   ink better. A line whose words lean, by their mean, about half as far
+   as italic faces do is set slanted (a shear of its text matrix), as far
+   as the document's italic lines lean, by their median, but for its
+   label, as "A:", and a word that leans left; a long word in an upright
+   line that leans that far is set slanted alone. The spacing goes into the
    characters' advances, with a CID for each character and advance, so
    characters abut and text extraction finds no spaces that were not
    read. A line in Kai takes its Latin letters, digits and narrow
@@ -194,7 +214,15 @@ CGO_ENABLED=0 go test ./...
   space between them. A heading in black with its translation in blue is
   set in both, with a color for each run; a word is set in the color most
   of its letters were measured in, a gray section number in gray, and a
-  line in one color, its thin 。 measured lighter, in it alone. Dot
+  line in one color, its thin 。 measured lighter, in it alone. A
+  caption whose verb is bold among lines set regular sets the verb bold
+  and the rest regular, and an example set italic after a bold label is
+  slanted but for the label. Text sheared as italic is by 0.12 and 0.2
+  measures within 0.04 of that, and upright text about upright; a line
+  whose words lean is italic but for its label and a word leaning left,
+  and in an upright line only a long word leaning far is. A word
+  underlined, the rule running into its letters or apart from them, is
+  set at its size, and the rule kept. Dot
   leaders at 300 DPI, too far apart to join, are kept as a picture, while
   a speck of dust and three specks in a row are not. A line printed on a
   panel of a pale tint, scanned clean, stays as printed on it, and the

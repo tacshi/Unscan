@@ -378,6 +378,12 @@ type textLine struct {
 	color  rgb
 	colors []rgb // each character's, or nil where the line is in one, color
 	hidden bool  // invisible, over the line as printed
+	// Slanted says which characters are set slanted, as italic, nil for
+	// none, by slant, the tangent of the angle, set back by back points
+	// along the line; offsets are where each starts along it, in points.
+	slanted     []bool
+	slant, back float64
+	offsets     []float64
 }
 
 // newTextDoc starts a document set in the text fonts, but for the faces the
@@ -617,10 +623,21 @@ func (p *textPage) content(s *cidSet) []byte {
 			}
 			return l.color
 		}
+		slanted := func(k int) bool { return l.slanted != nil && l.slanted[k] }
+		// The text matrix at character k, slanted or not, which starts a
+		// stretch of characters slanted alike where the line has both.
+		matrix := func(k int) string {
+			x, y, c, d := l.x, l.y, -l.dy, l.dx
+			if l.slanted != nil {
+				x, y = x+l.offsets[k]*l.dx, y+l.offsets[k]*l.dy
+			}
+			if slanted(k) {
+				x, y, c, d = x-l.back*l.dx, y-l.back*l.dy, l.slant*l.dx-l.dy, l.slant*l.dy+l.dx
+			}
+			return fmt.Sprintf("%s %s %s %s %s %s Tm\n", num(l.dx), num(l.dy), num(c), num(d), num(x), num(y))
+		}
 		color := colorOf(0)
-		fmt.Fprintf(&b, "BT\n%d Tr\n%s Tz\n%s rg\n%s %s %s %s %s %s Tm\n",
-			mode, num(100*l.scale), rg(color),
-			num(l.dx), num(l.dy), num(-l.dy), num(l.dx), num(l.x), num(l.y))
+		fmt.Fprintf(&b, "BT\n%d Tr\n%s Tz\n%s rg\n%s", mode, num(100*l.scale), rg(color), matrix(0))
 		in := -1 // the face of the stretch being written
 		for k, c := range l.cids {
 			f := in
@@ -630,9 +647,13 @@ func (p *textPage) content(s *cidSet) []byte {
 			if f < 0 {
 				f = l.face // a character out of CIDs, first
 			}
-			if f != in || colorOf(k) != color {
+			turn := k > 0 && slanted(k) != slanted(k-1)
+			if f != in || colorOf(k) != color || turn {
 				if in >= 0 {
 					b.WriteString("> Tj\n")
+				}
+				if turn {
+					b.WriteString(matrix(k))
 				}
 				if colorOf(k) != color {
 					color = colorOf(k)

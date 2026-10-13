@@ -49,7 +49,8 @@ such as handwriting in an illustration or a letter in a box.
   born-digital ones, are kept as they are, in both PDFs.
 - **Matches the typeface.** Each line's kind (serif, sans-serif or Kai)
   and weight are judged from its strokes, and its size and spacing from
-  its ink, so retyped lines land where they were printed.
+  its ink, so retyped lines land where they were printed. Words set bold
+  or italic within a line are set so too, and underlines are kept.
 - **Your own fonts.** Set the retyped PDF in any embeddable TrueType font
   or collection, such as macOS's Songti SC or Times.
 - **Long documents.** Rendering, OCR and redrawing run as a pipeline, and
