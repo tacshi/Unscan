@@ -11,9 +11,10 @@
 #
 # Release notes come from release-notes/Unscan-<version>.md, used verbatim
 # when it exists. Otherwise they are drafted from the commits since the last
-# v* tag and shown for review: [y]es publishes them, [e]dit opens them in
-# $EDITOR and shows them again, anything else stops. The update window of
-# installed apps shows them too.
+# v* tag, those squashed into a pull request's commit by their own subjects
+# rather than the pull request's title, and shown for review: [y]es
+# publishes them, [e]dit opens them in $EDITOR and shows them again,
+# anything else stops. The update window of installed apps shows them too.
 #
 # Environment:
 #   MACOS_SIGNING_IDENTITY  the Developer ID to sign with (DEVELOPER_ID_APPLICATION
@@ -152,7 +153,30 @@ else
 		range=(-n 30 HEAD)
 		echo "==> Notes: drafted from the last 30 commits (no v* tag yet)"
 	fi
-	git log --no-merges --pretty=tformat:'- %s' "${range[@]}" |
+	# A pull request squashed on GitHub is one commit titled after the
+	# pull request, as "Retyped fixes (#4)", whose message lists the
+	# subjects of the commits squashed, each as "* <subject>": the notes
+	# take those. One of a single commit keeps that commit's subject, with
+	# the pull request's number, which the notes leave out.
+	git log --no-merges --format='%x1e%B' "${range[@]}" |
+		awk -v RS='\036' '
+			NF == 0 { next }
+			{
+				n = split($0, line, "\n")
+				subject = line[1]
+				listed = 0
+				if (sub(/ \(#[0-9]+\)$/, "", subject)) {
+					for (i = 2; i <= n; i++) {
+						if (line[i] ~ /^\* /) {
+							print "- " substr(line[i], 3)
+							listed = 1
+						}
+					}
+				}
+				if (!listed) {
+					print "- " subject
+				}
+			}' |
 		grep -viE '^- (chore|ci|build|test|style|refactor|docs)(\([^)]*\))?!?:' |
 		grep -viE '^- (release|bump|merge|wip)([^[:alnum:]]|$)' >"$notes" || true
 

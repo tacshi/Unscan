@@ -6,7 +6,8 @@
 #   scripts/build-mac-release.sh
 #
 # Environment:
-#   MACOS_SIGNING_IDENTITY  signs with this identity, with the hardened runtime,
+#   MACOS_SIGNING_IDENTITY  signs with this identity, with the hardened runtime
+#                           and entitlements.plist's entitlement,
 #                           e.g. "Developer ID Application: Jane Doe (TEAMID)";
 #                           without it the app is signed ad hoc and runs on this
 #                           Mac only ("security find-identity -v -p codesigning")
@@ -87,6 +88,13 @@ fi
 
 echo "==> Verifying the signature"
 codesign --verify --deep --strict "$app"
+# Under the hardened runtime, PDFium's WebAssembly, compiled to machine code
+# in memory, runs only with this entitlement: without it the app is killed
+# as it starts (see entitlements.plist).
+if ! codesign -d --entitlements - --xml "$app" 2>/dev/null | grep -q com.apple.security.cs.allow-unsigned-executable-memory; then
+	echo "error: $app is not signed with entitlements.plist, which PDFium needs under the hardened runtime" >&2
+	exit 1
+fi
 
 if [[ -n "$notary" ]]; then
 	echo "==> Verifying the notarization"

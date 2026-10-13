@@ -10,9 +10,22 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/tacshi/Unscan/releases/latest"><img src="https://img.shields.io/github/v/release/tacshi/Unscan" alt="Latest release"></a>
   <a href="go.mod"><img src="https://img.shields.io/github/go-mod/go-version/tacshi/Unscan" alt="Go version"></a>
   <img src="https://img.shields.io/badge/platform-macOS%20%28Apple%20silicon%29-lightgrey" alt="Platform: macOS on Apple silicon">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="License: MIT"></a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/tacshi/Unscan/releases/latest"><strong>Download for Mac</strong></a> ·
+  <a href="#usage">Usage</a> ·
+  <a href="#command-line">Command line</a> ·
+  <a href="#building-from-source">Building from source</a> ·
+  <a href="docs/how-it-works.md">How it works</a>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/picture-page.webp" alt="Unscan comparing a scanned page of a bilingual picture dictionary, on the left, with its retyped PDF, on the right: the pictures are kept, and the English and Chinese text, its bold labels, italics and underlines, is set in real fonts where it was printed">
 </p>
 
 Unscan is a desktop app and command-line tool that runs OCR on scanned
@@ -40,6 +53,22 @@ since retyping it would deface the design, with invisible text over it
 that keeps it searchable; and so does text that type would not match,
 such as handwriting in an illustration or a letter in a box.
 
+Each pair below is a scanned page, on the left, and its retyped PDF, on
+the right, as **Compare with Original** shows them:
+
+<table>
+  <tr>
+    <td width="33%"><img src="docs/screenshots/cover.webp" alt="A book's cover, scanned and retyped: its title tracked out as printed, its logo kept as a picture"></td>
+    <td width="33%"><img src="docs/screenshots/contents.webp" alt="A table of contents, scanned and retyped: English headings with their traditional Chinese in blue, gray section numbers and dot leaders"></td>
+    <td width="33%"><img src="docs/screenshots/acknowledgments.webp" alt="A page of acknowledgments in two dense columns, scanned and retyped, with each name set bold within its line"></td>
+  </tr>
+  <tr>
+    <td>A cover: the title tracked out as printed, the logo kept as a picture.</td>
+    <td>A contents page: each run in its color, traditional Chinese in its forms, the dot leaders kept.</td>
+    <td>Dense text in two columns, each name set bold within its line.</td>
+  </tr>
+</table>
+
 ## Features
 
 - **Local and private.** OCR runs on your CPU. Nothing is uploaded: the
@@ -55,7 +84,8 @@ such as handwriting in an illustration or a letter in a box.
 - **Your own fonts.** Set the retyped PDF in any embeddable TrueType font
   or collection, such as macOS's Songti SC or Times.
 - **Long documents.** Rendering, OCR and redrawing run as a pipeline, and
-  memory does not grow with the document.
+  memory does not grow with the document. A page of dense text takes
+  about 2 seconds on an M1 Pro.
 - **No cgo.** Everything builds with `CGO_ENABLED=0`: ONNX Runtime is
   loaded at run time with purego, and PDFium runs as WebAssembly.
 - **Updates itself.** Signed updates from GitHub releases, in a window
@@ -63,59 +93,26 @@ such as handwriting in an illustration or a letter in a box.
 - **Pinned downloads.** Models, fonts and runtimes are fetched at pinned
   versions and checked against their SHA-256.
 
-## Requirements
+## Download
 
-- Go 1.27.2 or later.
-- macOS on Apple silicon to run the app and build its releases. ONNX
-  Runtime is also fetched for Linux and Windows (amd64 and arm64) for
-  cross-platform builds. Intel Macs are not supported (see
-  [Known limitations](#known-limitations-and-roadmap)).
-- About 180 MB of models, fonts and runtime, which `cmd/fetchdeps`
-  downloads, and about 3 GB of memory while pages are read.
+Download `Unscan-<version>-arm64.dmg` from the
+[latest release](https://github.com/tacshi/Unscan/releases/latest), open
+it and drag Unscan to Applications. It runs on Macs with Apple silicon,
+and needs about 3 GB of memory while pages are read.
 
-## Getting started
-
-```sh
-git clone https://github.com/tacshi/Unscan.git
-cd Unscan
-go run ./cmd/fetchdeps    # models, fonts and this machine's ONNX Runtime (~180 MB)
-go tool mygo dev          # run the app, with live reload
-```
-
-`fetchdeps` puts its downloads in `resources/`, which `.gitignore` leaves
-out:
-
-```
-resources/
-├── models/det.onnx            PP-OCRv6_small_det (9.9 MB, Apache-2.0)
-├── models/rec.onnx            PP-OCRv6_small_rec (21 MB, Apache-2.0)
-├── models/rec_dict.txt        its 18,708 characters, from inference.yml
-├── fonts/NotoSerifSC-{Regular,Bold}.ttf  the retyped PDF's serif faces (15 MB each, OFL-1.1)
-├── fonts/NotoSansSC-{Regular,Bold}.ttf   and its sans-serif ones (11 MB each, OFL-1.1)
-├── fonts/NotoSerifTC-{Regular,Bold}.ttf  in traditional Chinese's forms (10 MB each, OFL-1.1)
-├── fonts/NotoSansTC-{Regular,Bold}.ttf   (7.1 MB each, OFL-1.1)
-├── fonts/LXGWWenKai-Regular.ttf          and its Kai face, v1.522 (26 MB, OFL-1.1)
-├── fonts/*-OFL.txt                       their licenses
-└── darwin-arm64/libonnxruntime.dylib  (or linux-*/libonnxruntime.so, windows-*/onnxruntime.dll)
-```
-
-For cross-platform builds, fetch ONNX Runtime for other platforms too;
-`mygo build` merges the target platform's directory into the app's
-resources:
-
-```sh
-go run ./cmd/fetchdeps -platforms all                         # every platform ONNX Runtime ships
-go run ./cmd/fetchdeps -platforms linux-amd64,windows-amd64   # or some of them
-```
+The app is signed with a Developer ID and notarized by Apple, and carries
+its models, fonts and runtime, so it reads PDFs offline from the first
+launch. From then on it [keeps itself up to date](#updates).
 
 ## Usage
 
 ### Desktop app
 
-Open a scanned PDF with **Choose PDF…**, **File › Open…** (⌘O), by
-dropping it anywhere on the window, or with `open -a Unscan scan.pdf`,
-even while the models are still loading. The window and the Dock icon
-show how many pages have been read and about how long the rest will take.
+**Reading.** Open a scanned PDF with **Choose PDF…**, **File › Open…**
+(⌘O), by dropping it anywhere on the window, or with
+`open -a Unscan scan.pdf`, even while the models are still loading. The
+window and the Dock icon show how many pages have been read and about how
+long the rest will take.
 
 Open or drop several PDFs, or more while one is read, and they are read
 in turn: the sidebar shows the one being read and those waiting, which
@@ -123,22 +120,33 @@ in turn: the sidebar shows the one being read and those waiting, which
 joins them as it is done. **Cancel** stops the PDF being read and goes
 on to the next, and **Cancel All** stops them all.
 
-When it is done, browse the document a page at a time, as the
-**Searchable PDF**, the **Retyped PDF** or the **Text**; the arrow keys
-turn the pages. **Save…** (⌘S) saves the one shown.
+**Viewing and saving.** When it is done, browse the document a page at a
+time, as the **Searchable PDF**, the **Retyped PDF** or the **Text**; the
+arrow keys turn the pages. **Save…** (⌘S) saves the one shown.
 
-**Compare with Original** (the button beside **Save…**, or **View ›
-Compare with Original**) shows the scanned page beside the retyped page
-or its text, to check what was read; drag the line between them to
-resize them. The searchable PDF looks just like the scan, so it shows
-alone.
+**Comparing.** The button beside **Save…**, or **View › Compare with
+Original**, shows the scanned page beside the retyped page or its text,
+to check what was read; drag the line between them to resize them. The searchable PDF looks just like the scan, so it
+shows alone.
 
-Every PDF read stays in the sidebar (**View › Hide Sidebar**, ⌥⌘S),
-newest first, to open again without reading it again. Its searchable and
-retyped PDFs are kept in `history/` in the app's user data folder
-(`~/Library/Application Support/Unscan` on macOS) until you remove them:
-**Remove from History…** in a row's context menu, or Delete, removes one,
-and **Clear…** removes them all. The scans themselves are never touched.
+**History.** Every PDF read stays in the sidebar (**View › Hide
+Sidebar**, ⌥⌘S), newest first, to open again without reading it again.
+Its searchable and retyped PDFs are kept in `history/` in the app's user
+data folder (`~/Library/Application Support/Unscan` on macOS) until you
+remove them: **Remove from History…** in a row's context menu, or Delete,
+removes one, and **Clear…** removes them all. The scans themselves are
+never touched.
+
+| Shortcut | Action |
+|---|---|
+| ⌘O | Open a PDF |
+| ⌘S | Save the form shown |
+| ← → | Turn the pages |
+| ⌥⌘S | Hide or show the sidebar |
+| Delete | Remove the PDF chosen in the sidebar from history |
+| ⌘, | Settings |
+
+#### Updates
 
 Unscan keeps itself up to date from this repository's GitHub releases.
 It checks once a day, and when a new version is out, a window shows its
@@ -153,6 +161,10 @@ with its key. It updates itself where it can replace its app, as in
 `/Applications`; development builds never do.
 
 ### Command line
+
+The command line version runs from a clone of this repository, once
+`cmd/fetchdeps` has fetched its models, fonts and runtime (see
+[Building from source](#building-from-source)):
 
 ```sh
 go run ./cmd/unscan -o searchable.pdf -txt text.txt -text retyped.pdf scan.pdf
@@ -208,7 +220,54 @@ Good to know:
   (by their OS/2 `fsType`), such as Songti SC Black, since subsets of the
   fonts go into the PDFs.
 
-## Building
+## Building from source
+
+### Requirements
+
+- Go 1.27.2 or later.
+- macOS on Apple silicon to run the app and build its releases. ONNX
+  Runtime is also fetched for Linux and Windows (amd64 and arm64) for
+  cross-platform builds. Intel Macs are not supported (see
+  [Known limitations](#known-limitations-and-roadmap)).
+- About 180 MB of models, fonts and runtime, which `cmd/fetchdeps`
+  downloads, and about 3 GB of memory while pages are read.
+
+### Getting started
+
+```sh
+git clone https://github.com/tacshi/Unscan.git
+cd Unscan
+go run ./cmd/fetchdeps    # models, fonts and this machine's ONNX Runtime (~180 MB)
+go tool mygo dev          # run the app, with live reload
+```
+
+`fetchdeps` puts its downloads in `resources/`, which `.gitignore` leaves
+out:
+
+```
+resources/
+├── models/det.onnx            PP-OCRv6_small_det (9.9 MB, Apache-2.0)
+├── models/rec.onnx            PP-OCRv6_small_rec (21 MB, Apache-2.0)
+├── models/rec_dict.txt        its 18,708 characters, from inference.yml
+├── fonts/NotoSerifSC-{Regular,Bold}.ttf  the retyped PDF's serif faces (15 MB each, OFL-1.1)
+├── fonts/NotoSansSC-{Regular,Bold}.ttf   and its sans-serif ones (11 MB each, OFL-1.1)
+├── fonts/NotoSerifTC-{Regular,Bold}.ttf  in traditional Chinese's forms (10 MB each, OFL-1.1)
+├── fonts/NotoSansTC-{Regular,Bold}.ttf   (7.1 MB each, OFL-1.1)
+├── fonts/LXGWWenKai-Regular.ttf          and its Kai face, v1.522 (26 MB, OFL-1.1)
+├── fonts/*-OFL.txt                       their licenses
+└── darwin-arm64/libonnxruntime.dylib  (or linux-*/libonnxruntime.so, windows-*/onnxruntime.dll)
+```
+
+For cross-platform builds, fetch ONNX Runtime for other platforms too;
+`mygo build` merges the target platform's directory into the app's
+resources:
+
+```sh
+go run ./cmd/fetchdeps -platforms all                         # every platform ONNX Runtime ships
+go run ./cmd/fetchdeps -platforms linux-amd64,windows-amd64   # or some of them
+```
+
+### Building
 
 ```sh
 go tool mygo build    # build/darwin-arm64/Unscan.app and a .dmg
@@ -227,7 +286,7 @@ these environment variables:
 
 | Variable | Effect |
 |---|---|
-| `MACOS_SIGNING_IDENTITY` | Signs with this Developer ID identity, with the hardened runtime. Without it the app is signed ad hoc and runs on the Mac that built it only. |
+| `MACOS_SIGNING_IDENTITY` | Signs with this Developer ID identity, with the hardened runtime and the entitlement in `entitlements.plist`, which PDFium's WebAssembly needs under it. Without it the app is signed ad hoc and runs on the Mac that built it only. |
 | `NOTARY_PROFILE` | Notarizes the disk image with this keychain profile, made by `xcrun notarytool store-credentials`, and staples the ticket to it and to the app. |
 | `MYGO_UPDATER_PRIVATE_KEY` | Signs the update that installed apps download, with this key of `go tool mygo keygen`: the app archived (`unscan-<version>-darwin-arm64.tar.gz`), deltas from the last three versions published, and `update-darwin-arm64.json`, which lists them. |
 | `SKIP_TESTS=1` | Builds without running the tests first. |
@@ -278,7 +337,7 @@ core and are kept busy. PDFium reads the scan from its file as it needs
 it, the PDFs made are written to files as they go, and the document is
 opened anew every 32 pages to let go of the scans PDFium keeps. So while
 pages are read, memory does not grow with the document: it stays at
-about 3 GB, mostly the models. A page of dense text takes about 2 seconds on an M1 Pro.
+about 3 GB, mostly the models.
 
 To retype a page, Unscan maps the paper's color to white, measures each
 line's ink to a fraction of a pixel, judges its face from its strokes
@@ -313,7 +372,7 @@ internal/ocr/            PP-OCRv6: detection, cropping, recognition, reading ord
 internal/pdfocr/         rendering, the text layer, grafting it onto the PDF, the retyped PDF, and previews
 internal/ttf/            TrueType parsing (fonts and collections) and subsetting, for the retyped PDF
 internal/testscan/       synthetic scans and scanned PDFs for tests
-docs/                    how it works, in depth, and the app icon's source (icon.svg)
+docs/                    how it works, in depth, the app icon's source (icon.svg), and the screenshots
 ```
 
 ## Known limitations and roadmap
@@ -334,8 +393,10 @@ docs/                    how it works, in depth, and the app icon's source (icon
 - **Characters outside the BMP** (such as emoji) are written as two UTF-16
   code units, which some viewers extract as two characters.
 - **Retyped PDF:**
-  - A line is set in one face, so a bold phrase within a regular line
-    comes out as its line is, and italics come out upright.
+  - Bold and italic are judged word by word only in words of Latin
+    letters or digits, so a bold Chinese phrase within a regular line
+    comes out as its line is. Italics are the upright face slanted, as
+    the fonts have no italic.
   - Medium weights come out bold, and display faces, such as a title's
     condensed one, are squeezed into the nearest of the five. FangSong
     comes out Kai, and bold Kai, which LXGW WenKai has no face for,
