@@ -584,15 +584,19 @@ func loadEngine() (*pdfocr.Converter, error) {
 	if err := paths.Check(); err != nil {
 		return nil, fmt.Errorf("%w. Run `go run ./cmd/fetchdeps` in the project first.", err)
 	}
-	engine, err := ocr.New(paths, ocr.Options{})
+	// Compiled code is kept for later runs: the models' for Core ML, and
+	// PDFium's.
+	var opts ocr.Options
+	wazero := ""
+	if dir, err := mygo.App.Path(mygo.PathCache); err == nil {
+		opts.CacheDir = filepath.Join(dir, "coreml")
+		wazero = filepath.Join(dir, "wazero")
+	}
+	engine, err := ocr.New(paths, opts)
 	if err != nil {
 		return nil, err
 	}
-	cache := ""
-	if dir, err := mygo.App.Path(mygo.PathCache); err == nil {
-		cache = filepath.Join(dir, "wazero")
-	}
-	conv, err := pdfocr.New(engine, cache)
+	conv, err := pdfocr.New(engine, wazero)
 	if err != nil {
 		engine.Close()
 		return nil, err

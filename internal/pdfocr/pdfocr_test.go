@@ -54,7 +54,9 @@ func newTestConverter(t *testing.T) *Converter {
 	if err := p.Check(); err != nil {
 		t.Skipf("%v: run go run ./cmd/fetchdeps first", err)
 	}
-	e, err := ocr.New(p, ocr.Options{})
+	// On the CPU, which reads as Core ML does but for a character now and
+	// then (see ocr's TestCoreML).
+	e, err := ocr.New(p, ocr.Options{CPUOnly: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -212,6 +214,114 @@ func TestConvert(t *testing.T) {
 			t.Errorf("page %d was read again", p.Index+1)
 		}
 	}
+}
+
+// TestTurnedScan reads pages fed into the scanner sideways or upside
+// down, one also turned by its /Rotate as scanners turn landscape pages:
+// it reads them upright, the searchable PDF shows them upright, the scans
+// as they were, and the text PDF has them redrawn upright.
+func TestTurnedScan(t *testing.T) {
+	c := newTestConverter(t)
+	_, fonts := testTextDoc(t)
+	if err := c.SetTextFonts(fonts); err != nil {
+		t.Fatal(err)
+	}
+	title := "Pages Fed in Turned"
+	left := []string{"The scanner took this page", "in sideways or upside down,", "as pages often go in."}
+	right := []string{"It is read upright all", "the same, and shown so", "in the searchable PDF."}
+	want := append(append([]string{title}, left...), right...)
+	img, err := testscan.Columns(title, left, right, testscan.LatinFont)
+	if err != nil {
+		t.Skip(err)
+	}
+	pages := []struct{ turns, rotate int }{{1, 0}, {2, 0}, {3, 0}, {2, 90}}
+	var scans []testscan.ScanPage
+	for _, p := range pages {
+		scans = append(scans, testscan.ScanPage{Image: testscan.Turn(img, p.turns), DPI: 300, Rotate: p.rotate})
+	}
+	input, err := testscan.PDF(scans)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	res := convert(t, c, input, true, nil)
+	t.Logf("%d pages in %v", len(res.Pages), time.Since(start))
+	if grew := len(res.PDF) - len(input); grew > 64<<10 {
+		t.Errorf("the output grew by %d bytes: were the scans written again?", grew)
+	}
+
+	inst, err := c.pool.GetInstance(time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer inst.Close()
+	in, out, text := openDoc(t, inst, input), openDoc(t, inst, res.PDF), openDoc(t, inst, res.TextPDF)
+	size := func(doc references.FPDF_DOCUMENT, i int) (float64, float64) {
+		s, err := inst.FPDF_GetPageSizeByIndexF(&requests.FPDF_GetPageSizeByIndexF{Document: doc, Index: i})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return float64(s.Size.Width), float64(s.Size.Height)
+	}
+	for i, p := range pages {
+		got := res.Pages[i]
+		if got.Turns != p.turns {
+			t.Errorf("page %d: found turned %d, want %d", i+1, got.Turns, p.turns)
+		}
+		if !inOrder(got.Text, want) {
+			t.Errorf("page %d: OCR text %q, want %q", i+1, got.Text, want)
+		}
+		// Upright, 2550×3300 pixels at 300 DPI, as it shows in both PDFs.
+		for _, doc := range []references.FPDF_DOCUMENT{out, text} {
+			if w, h := size(doc, i); abs(w-612) > 1 || abs(h-792) > 1 {
+				t.Errorf("page %d shows %g×%g points, want 612×792 upright", i+1, w, h)
+			}
+		}
+		if w, h := size(in, i); p.turns%2 == 1 && (abs(w-792) > 1 || abs(h-612) > 1) {
+			t.Errorf("page %d of the input shows %g×%g points, want 792×612", i+1, w, h)
+		}
+		for _, doc := range []references.FPDF_DOCUMENT{out, text} {
+			pg := requests.Page{ByIndex: &requests.PageByIndex{Document: doc, Index: i}}
+			extracted, err := inst.GetPageText(&requests.GetPageText{Page: pg})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !containsAll(extracted.Text, want) {
+				t.Errorf("page %d: extracted text %q, want %q", i+1, extracted.Text, want)
+			}
+		}
+		// The searchable page, rendered, reads upright.
+		pg := requests.Page{ByIndex: &requests.PageByIndex{Document: out, Index: i}}
+		lines, err := c.ocr.Recognize(t.Context(), renderRGBA(t, inst, pg, 150))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if shown := ocr.Text(lines); !inOrder(shown, want) {
+			t.Errorf("page %d shows %q, want %q", i+1, shown, want)
+		}
+	}
+}
+
+// inOrder reports whether text has the lines, in order, but for spaces
+// and the stops the recognizer may miss at the ends of lines.
+func inOrder(text string, lines []string) bool {
+	squash := func(s string) string {
+		return strings.Map(func(r rune) rune {
+			if r == ' ' || r == '.' || r == ',' || r == '\n' {
+				return -1
+			}
+			return r
+		}, s)
+	}
+	text = squash(text)
+	for _, l := range lines {
+		i := strings.Index(text, squash(l))
+		if i < 0 {
+			return false
+		}
+		text = text[i+len(squash(l)):]
+	}
+	return true
 }
 
 // TestConvertText makes a text PDF of scanned pages, turned and offset as

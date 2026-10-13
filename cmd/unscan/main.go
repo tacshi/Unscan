@@ -30,6 +30,7 @@ func main() {
 	resources := flag.String("resources", "resources", "the directory of the models and ONNX Runtime")
 	dpi := flag.Int("dpi", 300, "the resolution pages are read at")
 	force := flag.Bool("force", false, "read pages that already have text too")
+	cpu := flag.Bool("cpu", false, "run every model on the CPU, not the text models on the GPU through Core ML")
 	var fontFiles [len(userFonts)]string
 	for i, f := range userFonts {
 		flag.StringVar(&fontFiles[i], f.flag, "", fmt.Sprintf("a font file to set the text PDF's %s lines in, "+
@@ -53,7 +54,7 @@ func main() {
 	if err := paths.Check(); err != nil {
 		log.Fatalf("%v\nrun go run ./cmd/fetchdeps first, or point -resources at the files", err)
 	}
-	engine, err := ocr.New(paths, ocr.Options{})
+	engine, err := ocr.New(paths, ocr.Options{CPUOnly: *cpu, CacheDir: ocr.DefaultCacheDir()})
 	if err != nil {
 		log.Fatal(err)
 	}

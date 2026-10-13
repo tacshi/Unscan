@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/klippa-app/go-pdfium"
+	"github.com/klippa-app/go-pdfium/enums"
 	"github.com/klippa-app/go-pdfium/references"
 	"github.com/klippa-app/go-pdfium/requests"
 	"github.com/klippa-app/go-pdfium/structs"
@@ -69,6 +70,10 @@ type Page struct {
 	Text    string
 	Lines   int  // lines OCR found
 	Skipped bool // the page had text of its own, which Text is
+	// Turns is how far the scan was found turned clockwise from upright,
+	// in quarter turns, 0 to 3: it was read upright, the searchable PDF
+	// shows it upright, and the text PDF has it redrawn upright.
+	Turns int
 }
 
 // Text joins the pages' text with form feeds between pages, as pdftotext
@@ -229,6 +234,7 @@ func (c *Converter) Convert(ctx context.Context, input io.ReadSeeker, out Output
 	redrawn := make([]bool, len(read))
 	for i, r := range read {
 		pages[i], layer[i], origins[i] = r.page, r.layer, r.origin
+		layer[i].turns = r.page.Turns
 		if r.text != nil {
 			text.pages = append(text.pages, r.text)
 			redrawn[i] = true
@@ -411,13 +417,15 @@ func (c *Converter) readPages(ctx context.Context, inst pdfium.Pdfium, input io.
 	wg.Go(func() {
 		defer close(redraws)
 		for r := range renders {
-			lines, err := c.ocr.Recognize(ctx, r.img)
+			page, err := c.ocr.Read(ctx, r.img)
 			if err != nil {
 				fail(r.index, err)
 				return
 			}
-			lines = traditionalForms(lines)
+			r = r.upright(page.Turns)
+			lines := traditionalForms(page.Lines)
 			read := r.layout(lines)
+			read.page.Turns = page.Turns
 			if text == nil {
 				if !send(reads, read) {
 					return
@@ -499,6 +507,54 @@ func renderPage(inst pdfium.Pdfium, page requests.Page, opts Options) (rendered,
 		return rendered{}, err
 	}
 	return rendered{img: img, toPage: toPage}, nil
+}
+
+// upright turns the rendering upright, as the page was found turned
+// clockwise by quarter turns, keeping where its pixels lie on the page.
+func (r rendered) upright(quarters int) rendered {
+	if quarters%4 == 0 {
+		return r
+	}
+	w, h := float64(r.img.Rect.Dx()), float64(r.img.Rect.Dy())
+	img := turnRGBA(r.img, quarters)
+	uw, uh := float64(img.Rect.Dx()), float64(img.Rect.Dy())
+	at := func(x, y float64) (float64, float64) {
+		p := ocr.Unturn(ocr.Point{X: x, Y: y}, quarters, w, h)
+		return r.toPage.apply(p.X, p.Y)
+	}
+	ox, oy := at(0, 0)
+	xx, xy := at(uw, 0)
+	yx, yy := at(0, uh)
+	return rendered{index: r.index, img: img, toPage: affine{
+		a: (xx - ox) / uw, b: (xy - oy) / uw,
+		c: (yx - ox) / uh, d: (yy - oy) / uh,
+		e: ox, f: oy,
+	}}
+}
+
+// turnRGBA returns img turned counterclockwise by quarter turns.
+func turnRGBA(img *image.RGBA, quarters int) *image.RGBA {
+	w, h := img.Rect.Dx(), img.Rect.Dy()
+	out := image.NewRGBA(image.Rect(0, 0, w, h))
+	if quarters%2 == 1 {
+		out = image.NewRGBA(image.Rect(0, 0, h, w))
+	}
+	for y := range h {
+		row := img.Pix[y*img.Stride:]
+		for x := range w {
+			var nx, ny int
+			switch quarters % 4 {
+			case 1:
+				nx, ny = y, w-1-x
+			case 2:
+				nx, ny = w-1-x, h-1-y
+			case 3:
+				nx, ny = h-1-y, x
+			}
+			copy(out.Pix[ny*out.Stride+4*nx:][:4], row[4*x:][:4])
+		}
+	}
+	return out
 }
 
 // size is the page as it shows, upright: the rendering's edges in points.
@@ -639,7 +695,7 @@ func overlay(inst pdfium.Pdfium, input io.ReadSeeker, size int64, layer []layerP
 		}
 		for src := start; src < end; src++ {
 			dst := index[src]
-			if err := overlayPage(inst, layerDoc, src, doc, dst, origins[dst]); err != nil {
+			if err := overlayPage(inst, layerDoc, src, doc, dst, origins[dst], pages[src].turns); err != nil {
 				return fmt.Errorf("page %d: %w", dst+1, err)
 			}
 		}
@@ -675,7 +731,9 @@ func overlay(inst pdfium.Pdfium, input io.ReadSeeker, size int64, layer []layerP
 	}
 }
 
-func overlayPage(inst pdfium.Pdfium, src references.FPDF_DOCUMENT, srcIndex int, dst references.FPDF_DOCUMENT, dstIndex int, origin [2]float64) error {
+// overlayPage draws page srcIndex of src over page dstIndex of dst, and
+// turns the page back by quarter turns, as it was found turned clockwise.
+func overlayPage(inst pdfium.Pdfium, src references.FPDF_DOCUMENT, srcIndex int, dst references.FPDF_DOCUMENT, dstIndex int, origin [2]float64, quarters int) error {
 	// go-pdfium (v1.21.3) passes Source and Destination to PDFium in the
 	// wrong order: PDFium takes the destination first. Swapped here so
 	// that PDFium copies src's page into dst.
@@ -703,6 +761,18 @@ func overlayPage(inst pdfium.Pdfium, src references.FPDF_DOCUMENT, srcIndex int,
 	page := requests.Page{ByReference: &loaded.Page}
 	if _, err := inst.FPDFPage_InsertObject(&requests.FPDFPage_InsertObject{Page: page, PageObject: form.PageObject}); err != nil {
 		return err
+	}
+	if quarters%4 != 0 {
+		// The page's /Rotate, which turns it clockwise as it shows, scan
+		// and layer alike; the scan stays as it is.
+		rot, err := inst.FPDFPage_GetRotation(&requests.FPDFPage_GetRotation{Page: page})
+		if err != nil {
+			return err
+		}
+		turned := enums.FPDF_PAGE_ROTATION((int(rot.PageRotation) + 4 - quarters%4) % 4)
+		if _, err := inst.FPDFPage_SetRotation(&requests.FPDFPage_SetRotation{Page: page, Rotate: turned}); err != nil {
+			return err
+		}
 	}
 	if _, err := inst.FPDFPage_GenerateContent(&requests.FPDFPage_GenerateContent{Page: page}); err != nil {
 		return errors.Join(errors.New("generate content"), err)

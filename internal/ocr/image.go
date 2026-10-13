@@ -67,29 +67,61 @@ func (img *rgbImage) sample(x, y float64) (r, g, b float32) {
 	return lerp(0), lerp(1), lerp(2)
 }
 
-// resizeInto resizes the image bilinearly to outW×outH, as cv2.resize
-// does, into dst as planes of blue, green and red (when bgr) normalized as
-// (v/255 - mean) / std.
-func (img *rgbImage) resizeInto(dst []float32, outW, outH int, bgr bool, mean, std [3]float32) {
-	sx, sy := float64(img.w)/float64(outW), float64(img.h)/float64(outH)
-	plane := outW * outH
+// resizeInto resizes the image bilinearly to w×h, as cv2.resize does,
+// and writes the dstW×dstH of it from (x0, y0) into dst as planes of blue,
+// green and red (when bgr) normalized as (v/255 - mean) / std: a crop of
+// it, or all of it in the top-left corner, padded with white.
+func (img *rgbImage) resizeInto(dst []float32, w, h, x0, y0, dstW, dstH int, bgr bool, mean, std [3]float32) {
+	sx, sy := float64(img.w)/float64(w), float64(img.h)/float64(h)
+	plane := dstW * dstH
 	order := [3]int{0, 1, 2}
 	if bgr {
 		order = [3]int{2, 1, 0}
 	}
-	parallel(outH, func(y int) {
-		fy := (float64(y)+0.5)*sy - 0.5
-		for x := range outW {
-			fx := (float64(x)+0.5)*sx - 0.5
-			r, g, b := img.sample(fx, fy)
-			i := y*outW + x
-			c := [3]float32{r, g, b}
+	parallel(dstH, func(y int) {
+		fy := (float64(y0+y)+0.5)*sy - 0.5
+		for x := range dstW {
+			c := [3]float32{255, 255, 255}
+			if x0+x < w && y0+y < h {
+				fx := (float64(x0+x)+0.5)*sx - 0.5
+				c[0], c[1], c[2] = img.sample(fx, fy)
+			}
+			i := y*dstW + x
 			for p := range 3 {
 				ch := order[p]
 				dst[p*plane+i] = (c[ch]/255 - mean[ch]) / std[ch]
 			}
 		}
 	})
+}
+
+// shrinkFor returns the image shrunk by averaging blocks of pixels, as
+// cv2.INTER_AREA does, to within twice the size of w×h, where resizing it
+// bilinearly would skip whole strokes of text.
+func (img *rgbImage) shrinkFor(w, h int) *rgbImage {
+	k := min(img.w/w, img.h/h)
+	if k < 2 {
+		return img
+	}
+	out := &rgbImage{w: img.w / k, h: img.h / k}
+	out.pix = make([]uint8, 3*out.w*out.h)
+	n := uint32(k * k)
+	parallel(out.h, func(y int) {
+		var sum []uint32
+		for x := range out.w {
+			sum = append(sum[:0], 0, 0, 0)
+			for dy := range k {
+				row := img.pix[3*((y*k+dy)*img.w+x*k):][:3*k]
+				for i, v := range row {
+					sum[i%3] += uint32(v)
+				}
+			}
+			for c := range 3 {
+				out.pix[3*(y*out.w+x)+c] = uint8((sum[c] + n/2) / n)
+			}
+		}
+	})
+	return out
 }
 
 // crop cuts the quad out of the image as an upright rectangle, as
@@ -108,19 +140,52 @@ func (img *rgbImage) crop(q Quad) *rgbImage {
 			out.pix[i], out.pix[i+1], out.pix[i+2] = uint8(r+0.5), uint8(g+0.5), uint8(b+0.5)
 		}
 	}
-	if float64(h)/float64(w) >= 1.5 {
-		out = out.rotateCCW()
+	if vertical(w, h) {
+		out = out.turn(1)
 	}
 	return out
 }
 
-func (img *rgbImage) rotateCCW() *rgbImage {
-	out := &rgbImage{pix: make([]uint8, len(img.pix)), w: img.h, h: img.w}
-	for y := range img.h {
-		for x := range img.w {
-			// (x, y) goes to (y, w-1-x).
-			copy(out.pix[3*((img.w-1-x)*out.w+y):][:3], img.pix[3*(y*img.w+x):][:3])
-		}
+// vertical reports whether a line's crop, w×h, is tall enough to be
+// vertical text, which crop turns to read.
+func vertical[T int | float64](w, h T) bool { return float64(h)/float64(w) >= 1.5 }
+
+// turn returns the image turned counterclockwise by quarter turns, 0 to 3.
+func (img *rgbImage) turn(quarters int) *rgbImage {
+	if quarters%4 == 0 {
+		return img
 	}
+	out := &rgbImage{pix: make([]uint8, len(img.pix)), w: img.w, h: img.h}
+	if quarters%2 == 1 {
+		out.w, out.h = img.h, img.w
+	}
+	parallel(img.h, func(y int) {
+		for x := range img.w {
+			var nx, ny int
+			switch quarters % 4 {
+			case 1:
+				nx, ny = y, img.w-1-x
+			case 2:
+				nx, ny = img.w-1-x, img.h-1-y
+			case 3:
+				nx, ny = img.h-1-y, x
+			}
+			copy(out.pix[3*(ny*out.w+nx):][:3], img.pix[3*(y*img.w+x):][:3])
+		}
+	})
 	return out
+}
+
+// Unturn maps a point of an image turned upright, turned counterclockwise
+// by quarter turns, back to the image it was turned from, w×h pixels.
+func Unturn(p Point, quarters int, w, h float64) Point {
+	switch quarters % 4 {
+	case 1:
+		return Point{w - p.Y, p.X}
+	case 2:
+		return Point{w - p.X, h - p.Y}
+	case 3:
+		return Point{p.Y, h - p.X}
+	}
+	return p
 }

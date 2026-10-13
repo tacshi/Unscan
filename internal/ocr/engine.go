@@ -1,7 +1,9 @@
-// Package ocr reads text lines from images with PaddleOCR's PP-OCRv6
-// models: a detector that finds the lines and a recognizer that reads
-// them. It runs them with ONNX Runtime through purego, so it needs no cgo,
-// and ports PaddleOCR's pre- and post-processing to Go.
+// Package ocr reads text lines from images with PaddleOCR's models:
+// PP-OCRv6's detector, which finds the lines, and its recognizer, which
+// reads them; a classifier that tells how a page is turned; and a layout
+// model that finds its blocks and the order they read in. It runs them
+// with ONNX Runtime through purego, so it needs no cgo, on macOS through
+// Core ML too, and ports PaddleOCR's pre- and post-processing to Go.
 package ocr
 
 import (
@@ -25,14 +27,17 @@ type Line struct {
 	Box   Quad // in the image's pixels
 	Text  string
 	Score float32 // the recognizer's mean confidence, 0 to 1
+	Block int     // the block of the page it is in, numbered in reading order
 }
 
 // Paths locates the engine's files.
 type Paths struct {
-	Runtime  string // the ONNX Runtime shared library
-	DetModel string // PP-OCRv6 detection model (ONNX)
-	RecModel string // PP-OCRv6 recognition model (ONNX)
-	Dict     string // the recognizer's characters, one per line
+	Runtime     string // the ONNX Runtime shared library
+	DetModel    string // PP-OCRv6 detection model (ONNX)
+	RecModel    string // PP-OCRv6 recognition model (ONNX)
+	Dict        string // the recognizer's characters, one per line
+	OriModel    string // PP-LCNet_x1_0_doc_ori, a page's orientation (ONNX)
+	LayoutModel string // PP-DocLayoutV3, a page's blocks and reading order (ONNX)
 }
 
 // Options tune the engine. The zero value is PaddleOCR's defaults, with
@@ -44,19 +49,42 @@ type Options struct {
 	DetMaxSide int
 	// MinScore drops lines read with less confidence; 0 means 0.5.
 	MinScore float32
-	// Threads is how many threads each model uses; 0 means one per CPU,
-	// or per performance core on Apple silicon.
+	// Threads is how many threads each model uses on the CPU; 0 means one
+	// per CPU, or per performance core on Apple silicon.
 	Threads int
+	// CPUOnly runs every model on the CPU. Otherwise, on a Mac of 16 GB
+	// or more, the detector and the recognizer run on the GPU and the
+	// Neural Engine through Core ML, three to four times as fast, at the
+	// sizes compiled for them, which takes seconds each, in the
+	// background, while they run on the CPU; they take about 3 GB more.
+	CPUOnly bool
+	// CacheDir, if not "", keeps the models compiled for Core ML for later
+	// runs: a directory of their own, as what else is in it is removed.
+	CacheDir string
 }
 
 // Engine reads text from images. Its methods are safe to call from
 // several goroutines.
 type Engine struct {
-	runtime  *ort.Engine
-	det, rec *ort.Session
-	chars    []string // the recognizer's classes: blank, the dictionary, space
-	opts     Options
+	runtime     *ort.Engine
+	det, rec    *ort.Session // on the CPU, for inputs of any size
+	ori, layout *ort.Session
+	coreml      *coreML  // nil where the models run on the CPU only
+	chars       []string // the recognizer's classes: blank, the dictionary, space
+	opts        Options
 }
+
+// modelShape is a model, detModel or recModel, and the size of its input,
+// which Core ML compiles each model for (see coreML).
+type modelShape struct {
+	model int
+	w, h  int
+}
+
+const (
+	detModel = iota
+	recModel
+)
 
 // The ONNX Runtime library can be loaded only once per process.
 var runtimeOnce struct {
@@ -93,14 +121,34 @@ func New(p Paths, opts Options) (*Engine, error) {
 		return nil, err
 	}
 	e := &Engine{runtime: rt, chars: chars, opts: opts}
-	if e.det, err = e.session(p.DetModel); err != nil {
-		return nil, err
+	for _, m := range []struct {
+		s      **ort.Session
+		file   string
+		inputs int
+	}{{&e.det, p.DetModel, 1}, {&e.rec, p.RecModel, 1}, {&e.ori, p.OriModel, 1}, {&e.layout, p.LayoutModel, 3}} {
+		if *m.s, err = e.session(m.file, m.inputs); err != nil {
+			e.Close()
+			return nil, err
+		}
 	}
-	if e.rec, err = e.session(p.RecModel); err != nil {
-		e.det.Destroy()
-		return nil, err
+	if !opts.CPUOnly {
+		// Where there is no Core ML, as off macOS or on a Mac of too little
+		// memory, the models run on the CPU.
+		if e.coreml, _ = newCoreML(rt, p, opts.Threads, opts.CacheDir); e.coreml != nil {
+			e.coreml.warmUp()
+		}
 	}
 	return e, nil
+}
+
+// DefaultCacheDir is where the models compiled for Core ML are kept by
+// default.
+func DefaultCacheDir() string {
+	dir, err := os.UserCacheDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(dir, "unscan", "coreml")
 }
 
 // PathsIn locates the engine's files in an app's resources directory as
@@ -119,16 +167,18 @@ func PathsIn(resources string) Paths {
 		rt = filepath.Join(resources, RuntimeName())
 	}
 	return Paths{
-		Runtime:  rt,
-		DetModel: filepath.Join(models, "det.onnx"),
-		RecModel: filepath.Join(models, "rec.onnx"),
-		Dict:     filepath.Join(models, "rec_dict.txt"),
+		Runtime:     rt,
+		DetModel:    filepath.Join(models, "det.onnx"),
+		RecModel:    filepath.Join(models, "rec.onnx"),
+		Dict:        filepath.Join(models, "rec_dict.txt"),
+		OriModel:    filepath.Join(models, "ori.onnx"),
+		LayoutModel: filepath.Join(models, "layout.onnx"),
 	}
 }
 
 // Check reports the first file that is missing.
 func (p Paths) Check() error {
-	for _, f := range []string{p.Runtime, p.DetModel, p.RecModel, p.Dict} {
+	for _, f := range []string{p.Runtime, p.DetModel, p.RecModel, p.Dict, p.OriModel, p.LayoutModel} {
 		if _, err := os.Stat(f); err != nil {
 			return err
 		}
@@ -167,7 +217,7 @@ func loadRuntime(path string) (*ort.Engine, error) {
 	return rt, nil
 }
 
-func (e *Engine) session(model string) (*ort.Session, error) {
+func (e *Engine) session(model string, inputs int) (*ort.Session, error) {
 	o, err := e.runtime.NewSessionOptions()
 	if err != nil {
 		return nil, err
@@ -180,28 +230,67 @@ func (e *Engine) session(model string) (*ort.Session, error) {
 	if err != nil {
 		return nil, fmt.Errorf("ocr: %s: %w", model, err)
 	}
-	if len(s.Inputs) != 1 || len(s.Outputs) < 1 {
+	if len(s.Inputs) != inputs || len(s.Outputs) < 1 {
 		s.Destroy()
 		return nil, fmt.Errorf("ocr: %s: unexpected inputs %v and outputs %v", model, s.Inputs, s.Outputs)
 	}
 	return s, nil
 }
 
-// Close releases the models. The ONNX Runtime library stays loaded.
+// Close releases the models, once those being compiled are. The ONNX
+// Runtime library stays loaded.
 func (e *Engine) Close() {
-	e.det.Destroy()
-	e.rec.Destroy()
+	if e.coreml != nil {
+		e.coreml.close()
+	}
+	for _, s := range []*ort.Session{e.det, e.rec, e.ori, e.layout} {
+		if s != nil {
+			s.Destroy()
+		}
+	}
 }
 
 // recBatch is how many lines the recognizer reads at once.
 const recBatch = 8
 
-// Recognize finds and reads the lines of text in img, in reading order.
+// Recognize finds and reads the lines of text in img, in reading order,
+// as it is: Read turns a page upright first.
 func (e *Engine) Recognize(ctx context.Context, img image.Image) ([]Line, error) {
 	src := toRGB(img)
 	if src.w == 0 || src.h == 0 {
 		return nil, nil
 	}
+	return e.recognizeRGB(ctx, src)
+}
+
+// recognizeRGB reads the lines of text in img, in reading order: it finds
+// the blocks of the page on the CPU, where the detector and the
+// recognizer run on the GPU, meanwhile.
+func (e *Engine) recognizeRGB(ctx context.Context, img *rgbImage) ([]Line, error) {
+	var blocks []block
+	var blocksErr error
+	var wg sync.WaitGroup
+	find := func() { blocks, blocksErr = e.blocks(img) }
+	if e.coreml != nil {
+		wg.Go(find)
+	}
+	lines, err := e.readLines(ctx, img)
+	wg.Wait()
+	if err != nil {
+		return nil, err
+	}
+	if e.coreml == nil {
+		find()
+	}
+	if blocksErr != nil {
+		return nil, blocksErr
+	}
+	return order(lines, blocks), nil
+}
+
+// readLines finds and reads the lines of text in src, in the order
+// SortLines puts them in.
+func (e *Engine) readLines(ctx context.Context, src *rgbImage) ([]Line, error) {
 	quads, err := e.detect(src)
 	if err != nil {
 		return nil, err
@@ -270,14 +359,14 @@ func SortLines(lines []Line) {
 	}
 }
 
-// Text joins lines into plain text: lines in one row with spaces, rows
-// with newlines.
+// Text joins lines into plain text: lines in one row of a block with
+// spaces, rows and blocks with newlines.
 func Text(lines []Line) string {
 	var b strings.Builder
 	for i, l := range lines {
 		if i > 0 {
 			prev := lines[i-1]
-			if sameRow(prev.Box, l.Box) {
+			if prev.Block == l.Block && sameRow(prev.Box, l.Box) {
 				b.WriteString("  ")
 			} else {
 				b.WriteByte('\n')

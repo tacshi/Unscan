@@ -14,6 +14,7 @@ import (
 type layerPage struct {
 	width, height float64
 	lines         []layerLine
+	turns         int // how far the page it goes on was found turned clockwise, in quarter turns
 }
 
 // layerLine is a line of invisible text on its baseline.
