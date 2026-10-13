@@ -384,8 +384,10 @@ CGO_ENABLED=0 go test ./...
   one turned by its `/Rotate` too, are found turned, read upright, shown
   upright in the searchable PDF, which reads upright again, and redrawn
   upright in the text PDF, and the scans are not written again.
-- `main_test.go`: the window's flow, run headless with `ui.NewTester`,
-  and the Settings dialog's: a collection's font chosen, then another of
+- `main_test.go`: the window's flow, run headless with `ui.NewTester`:
+  among it, the arrows turn the page after the line between the pages
+  compared is dragged, and move the line once Tab reaches it; and the
+  Settings dialog's: a collection's font chosen, then another of
   it, a file that cannot be used, the built-in font again, fonts chosen
   before the models load or while others are read, and the choice saved;
   updates checked for and installed without asking, the latter only with

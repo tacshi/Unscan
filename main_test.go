@@ -536,6 +536,29 @@ func TestCompare(t *testing.T) {
 	if f.split <= 0.5 || f.split >= 0.75 {
 		t.Errorf("split %v after a drag to the right", f.split)
 	}
+	// The arrows go on turning the page, as the drag leaves the keyboard
+	// focus where it was; from Tab, they move the divider.
+	dragged := f.split
+	tt.Key(0, ui.KeyLeft)
+	tt.Frame()
+	if f.at != 0 || f.split != dragged {
+		t.Errorf("after a drag, Left shows page %d, split %v", f.at+1, f.split)
+	}
+	moved := false
+	for range 20 {
+		tt.Key(0, ui.KeyTab)
+		tt.Frame()
+		tt.Key(0, ui.KeyRight)
+		tt.Frame()
+		if moved = f.split > dragged; moved {
+			break
+		}
+	}
+	if !moved {
+		t.Errorf("Tab and Right never moved the divider: split %v", f.split)
+	}
+	f.turn(1)
+	tt.Frame()
 
 	click(t, tt, "Text")
 	wantCaptions(t, tt, "Original", "Text")

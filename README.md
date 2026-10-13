@@ -139,7 +139,8 @@ on to the next, and **Cancel All** stops them all.
 
 **Viewing and saving.** When it is done, browse the document a page at a
 time, as the **Searchable PDF**, the **Retyped PDF** or the **Text**; the
-arrow keys turn the pages. **Save…** (⌘S) saves the one shown.
+buttons at either side of the page, or the arrow keys, turn the pages.
+**Save…** (⌘S) saves the one shown.
 
 **Comparing.** The button beside **Save…**, or **View › Compare with
 Original**, shows the scanned page beside the retyped page or its text,
