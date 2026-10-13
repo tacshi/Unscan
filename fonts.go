@@ -160,7 +160,7 @@ func fontError(err error) string {
 // or damaged chooses none.
 func loadFonts(path string) fontChoices {
 	var fonts fontChoices
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) // #nosec G304 -- the app's own settings
 	if err != nil {
 		return fonts
 	}
@@ -188,7 +188,7 @@ func saveFonts(path string, fonts fontChoices) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, append(data, '\n'), 0o644)
+	return os.WriteFile(path, append(data, '\n'), 0o600)
 }
 
 // fontField shows the font face i is set in: its built-in one, the font

@@ -141,18 +141,28 @@ func (w *pdfWriter) object(id int, body string) {
 	fmt.Fprintf(&w.buf, "%d 0 obj\n%s\nendobj\n", id, body)
 }
 
+// deflate compresses data with zlib at level, in memory, where writing
+// cannot fail.
+func deflate(data []byte, level int) []byte {
+	var buf bytes.Buffer
+	zw, err := zlib.NewWriterLevel(&buf, level)
+	if err != nil {
+		panic(err) // a level of zlib's
+	}
+	_, _ = zw.Write(data)
+	_ = zw.Close()
+	return buf.Bytes()
+}
+
 // stream writes a Flate-compressed stream with extra dictionary entries.
 func (w *pdfWriter) stream(id int, dict string, data []byte) {
-	var z bytes.Buffer
-	zw, _ := zlib.NewWriterLevel(&z, zlib.BestCompression)
-	zw.Write(data)
-	zw.Close()
+	z := deflate(data, zlib.BestCompression)
 	if w.offsets == nil {
 		w.offsets = map[int]int{}
 	}
 	w.offsets[id] = w.buf.Len()
-	fmt.Fprintf(&w.buf, "%d 0 obj\n<< /Length %d /Filter /FlateDecode %s >>\nstream\n", id, z.Len(), dict)
-	w.buf.Write(z.Bytes())
+	fmt.Fprintf(&w.buf, "%d 0 obj\n<< /Length %d /Filter /FlateDecode %s >>\nstream\n", id, len(z), dict)
+	w.buf.Write(z)
 	w.buf.WriteString("\nendstream\nendobj\n")
 }
 

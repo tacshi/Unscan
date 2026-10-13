@@ -44,7 +44,8 @@ func (m *mappedMemory) Reallocate(size uint64) []byte {
 	return m.buf[:size:size]
 }
 
-func (m *mappedMemory) Free() { unix.Munmap(m.buf) }
+// Free unmaps the memory, which fails only for memory not mapped.
+func (m *mappedMemory) Free() { _ = unix.Munmap(m.buf) }
 
 // sliceMemory grows as wazero grows memory itself, where the address
 // space cannot be reserved.

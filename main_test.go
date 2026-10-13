@@ -32,7 +32,7 @@ type fixture struct {
 func newFixture(t *testing.T, convert func(ctx context.Context, path string, p pdfocr.Progress) (*result, error)) *fixture {
 	dir := t.TempDir()
 	f := &fixture{app: &app{sidebar: true}, dir: dir, scan: filepath.Join(dir, "scan.pdf")}
-	if err := os.WriteFile(f.scan, []byte("%PDF-1.4"), 0o644); err != nil {
+	if err := os.WriteFile(f.scan, []byte("%PDF-1.4"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	var suggested []string
@@ -72,7 +72,7 @@ func newFixture(t *testing.T, convert func(ctx context.Context, path string, p p
 // tempFile writes data to a file of its own, as a conversion does.
 func tempFile(t *testing.T, data string) string {
 	path := filepath.Join(t.TempDir(), "out.pdf")
-	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return path
@@ -163,7 +163,7 @@ func TestConvertFlow(t *testing.T) {
 		click(t, tt, s.form)
 		click(t, tt, "Save…")
 		path := filepath.Join(f.dir, s.file)
-		if got, _ := os.ReadFile(path); string(got) != s.want {
+		if got, _ := os.ReadFile(path); string(got) != s.want { // #nosec G304 -- in the test's directory
 			t.Errorf("saved %q in %s", got, s.file)
 		}
 		wantTexts(t, tt, "Saved “"+s.file+"”")
@@ -419,11 +419,11 @@ func TestHistoryOnDisk(t *testing.T) {
 			dir:   filepath.Join(dir, fmt.Sprintf("read-%d", i)),
 		}
 		r.pdf, r.textPDF = filepath.Join(r.dir, "searchable.pdf"), filepath.Join(r.dir, "text.pdf")
-		if err := os.Mkdir(r.dir, 0o755); err != nil {
+		if err := os.Mkdir(r.dir, 0o700); err != nil {
 			t.Fatal(err)
 		}
 		for _, path := range []string{r.pdf, r.textPDF} {
-			if err := os.WriteFile(path, []byte("%PDF "+file), 0o644); err != nil {
+			if err := os.WriteFile(path, []byte("%PDF "+file), 0o600); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -435,10 +435,10 @@ func TestHistoryOnDisk(t *testing.T) {
 	}
 	unfinished := func(name, file string, age time.Duration) string {
 		path := filepath.Join(dir, name)
-		if err := os.Mkdir(path, 0o755); err != nil {
+		if err := os.Mkdir(path, 0o700); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(path, file), []byte("{"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(path, file), []byte("{"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		if err := os.Chtimes(path, now.Add(-age), now.Add(-age)); err != nil {
@@ -814,7 +814,7 @@ func TestSavedFonts(t *testing.T) {
 	if !reflect.DeepEqual(got, fonts) {
 		t.Errorf("read %+v, want %+v", got, fonts)
 	}
-	if err := os.WriteFile(path, []byte("{"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte("{"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if got := loadFonts(path); !reflect.DeepEqual(got, fontChoices{}) {

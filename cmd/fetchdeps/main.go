@@ -147,7 +147,9 @@ func main() {
 	flag.Parse()
 
 	models := filepath.Join(*dir, "models")
-	if err := os.MkdirAll(models, 0o755); err != nil {
+	// Readable by all, as the app carries these: from /Applications,
+	// every account of a Mac reads them.
+	if err := os.MkdirAll(models, 0o755); err != nil { // #nosec G301 -- readable by all
 		log.Fatal(err)
 	}
 	for _, f := range []struct {
@@ -299,7 +301,7 @@ func fromZip(data []byte, member string) ([]byte, error) {
 			if err != nil {
 				return nil, err
 			}
-			defer rc.Close()
+			defer func() { _ = rc.Close() }() // read only
 			return io.ReadAll(rc)
 		}
 	}
@@ -312,7 +314,7 @@ func download(r remote) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }() // read whole, or failed
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("%s: %s", r.url, resp.Status)
 	}
@@ -328,11 +330,11 @@ func download(r remote) ([]byte, error) {
 }
 
 func fileSHA256(name string) (string, error) {
-	f, err := os.Open(name)
+	f, err := os.Open(name) // #nosec G304 -- a file fetchdeps fetched
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }() // read only
 	h := sha256.New()
 	if _, err := io.Copy(h, f); err != nil {
 		return "", err
@@ -341,11 +343,12 @@ func fileSHA256(name string) (string, error) {
 }
 
 func writeFile(name string, data []byte) error {
-	if err := os.MkdirAll(filepath.Dir(name), 0o755); err != nil {
+	// Readable by all, as the models' directory is.
+	if err := os.MkdirAll(filepath.Dir(name), 0o755); err != nil { // #nosec G301 -- readable by all
 		return err
 	}
 	tmp := name + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	if err := os.WriteFile(tmp, data, 0o644); err != nil { // #nosec G306 -- readable by all
 		return err
 	}
 	return os.Rename(tmp, name)

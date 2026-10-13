@@ -82,12 +82,12 @@ func newCoreML(rt *ort.Engine, p Paths, threads int, cache string) (*coreML, err
 func modelCache(cache string, models []string, version string) (string, error) {
 	h := sha256.New()
 	for _, m := range models {
-		f, err := os.Open(m)
+		f, err := os.Open(m) // #nosec G304 -- a model in the app's resources
 		if err != nil {
 			return "", err
 		}
 		_, err = io.Copy(h, f)
-		f.Close()
+		_ = f.Close() // read only
 		if err != nil {
 			return "", err
 		}
@@ -96,7 +96,7 @@ func modelCache(cache string, models []string, version string) (string, error) {
 	entries, _ := os.ReadDir(cache)
 	for _, e := range entries {
 		if e.Name() != name {
-			os.RemoveAll(filepath.Join(cache, e.Name()))
+			_ = os.RemoveAll(filepath.Join(cache, e.Name())) // tried again next time
 		}
 	}
 	return filepath.Join(cache, name), nil
@@ -191,7 +191,7 @@ func (c *coreML) compile(sh modelShape) (*ort.Session, error) {
 		// A directory of each size's own, as ONNX Runtime would take a
 		// model compiled for another size for it.
 		dir := filepath.Join(c.cache, fmt.Sprintf("%s-%dx%d", [...]string{"det", "rec"}[sh.model], sh.w, sh.h))
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return nil, err
 		}
 		options["ModelCacheDirectory"] = dir
@@ -280,7 +280,10 @@ func loadProviderAPI(lib string) (*providerAPI, error) {
 	if err != nil {
 		return nil, err
 	}
-	type apiBase struct{ getAPI, getVersionString uintptr }
+	type apiBase struct {
+		getAPI uintptr
+		_      uintptr // GetVersionString
+	}
 	var getBase func() *apiBase
 	purego.RegisterFunc(&getBase, sym)
 	var getAPI func(version uint32) *[ortAppendProvider + 1]uintptr
@@ -308,7 +311,7 @@ func (a *providerAPI) appendProvider(o *ort.SessionOptions, name string, options
 	if len(keys) > 0 {
 		kp, vp = &keys[0], &values[0]
 	}
-	handle := *(*uintptr)(unsafe.Pointer(o))
+	handle := *(*uintptr)(unsafe.Pointer(o)) // #nosec G103 -- its first field, checked in loadProviderAPI
 	status := a.appendEP(handle, cstr(name), kp, vp, uintptr(len(keys)))
 	runtime.KeepAlive(keys)
 	runtime.KeepAlive(values)
@@ -316,9 +319,5 @@ func (a *providerAPI) appendProvider(o *ort.SessionOptions, name string, options
 		return nil
 	}
 	defer a.releaseStatus(status)
-	var msg []byte
-	for p := a.errorMessage(status); *p != 0; p = (*byte)(unsafe.Add(unsafe.Pointer(p), 1)) {
-		msg = append(msg, *p)
-	}
-	return fmt.Errorf("ocr: %s: %s", name, msg)
+	return fmt.Errorf("ocr: %s: %s", name, unix.BytePtrToString(a.errorMessage(status)))
 }

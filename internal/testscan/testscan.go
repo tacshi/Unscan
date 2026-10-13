@@ -26,7 +26,7 @@ const (
 // Page draws lines of text at 300 DPI in 12-point type on a page 1700
 // pixels wide, turned by angle degrees.
 func Page(lines []string, fontPath string, angle float64) (*image.Gray, error) {
-	data, err := os.ReadFile(fontPath)
+	data, err := os.ReadFile(fontPath) // #nosec G304 -- a font of macOS's
 	if err != nil {
 		return nil, err
 	}
@@ -42,7 +42,7 @@ func Page(lines []string, fontPath string, angle float64) (*image.Gray, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer face.Close()
+	defer func() { _ = face.Close() }()
 
 	const w, margin = 1700, 150
 	lineHeight := 75
@@ -64,7 +64,7 @@ func Page(lines []string, fontPath string, angle float64) (*image.Gray, error) {
 // in 20-point type across the top, and two columns of lines in 12-point
 // type under it, row by row level with each other, as a book sets them.
 func Columns(title string, left, right []string, fontPath string) (*image.Gray, error) {
-	data, err := os.ReadFile(fontPath)
+	data, err := os.ReadFile(fontPath) // #nosec G304 -- a font of macOS's
 	if err != nil {
 		return nil, err
 	}
@@ -84,7 +84,7 @@ func Columns(title string, left, right []string, fontPath string) (*image.Gray, 
 		if err != nil {
 			return err
 		}
-		defer face.Close()
+		defer func() { _ = face.Close() }()
 		d := font.Drawer{Dst: page, Src: image.Black, Face: face, Dot: fixed.P(x, y)}
 		if adv := d.MeasureString(line).Ceil(); adv > width {
 			return fmt.Errorf("line %q is too long for its column", line)
@@ -143,7 +143,7 @@ func scan(src *image.Gray, angle float64) *image.Gray {
 	dst := image.NewGray(b)
 	sin, cos := math.Sincos(angle * math.Pi / 180)
 	cx, cy := float64(b.Dx())/2, float64(b.Dy())/2
-	rng := rand.New(rand.NewPCG(1, 2))
+	rng := rand.New(rand.NewPCG(1, 2)) // #nosec G404 -- a scan's noise, the same each run
 	for y := range b.Dy() {
 		for x := range b.Dx() {
 			// Sample the source where this pixel came from.

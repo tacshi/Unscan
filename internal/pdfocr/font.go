@@ -27,7 +27,9 @@ func glyphlessFont() []byte {
 	be := func(vs ...any) []byte {
 		var b bytes.Buffer
 		for _, v := range vs {
-			binary.Write(&b, binary.BigEndian, v)
+			if err := binary.Write(&b, binary.BigEndian, v); err != nil {
+				panic(err) // a value of no fixed size
+			}
 		}
 		return b.Bytes()
 	}

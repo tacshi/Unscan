@@ -210,14 +210,14 @@ func (c *Converter) Convert(ctx context.Context, input io.ReadSeeker, out Output
 	if err != nil {
 		return nil, err
 	}
-	defer inst.Close()
+	defer func() { _ = inst.Close() }() // back to the pool
 
 	doc, err := open(inst, input, size)
 	if err != nil {
 		return nil, fmt.Errorf("open PDF: %w", err)
 	}
 	count, err := inst.FPDF_GetPageCount(&requests.FPDF_GetPageCount{Document: doc})
-	inst.FPDF_CloseDocument(&requests.FPDF_CloseDocument{Document: doc})
+	closeDoc(inst, doc)
 	if err != nil {
 		return nil, err
 	}
@@ -264,6 +264,11 @@ func open(inst pdfium.Pdfium, r io.ReadSeeker, size int64) (references.FPDF_DOCU
 	return opened.Document, nil
 }
 
+// closeDoc closes doc, which fails only for a document closed already.
+func closeDoc(inst pdfium.Pdfium, doc references.FPDF_DOCUMENT) {
+	_, _ = inst.FPDF_CloseDocument(&requests.FPDF_CloseDocument{Document: doc})
+}
+
 // save writes doc to w whole: PDFium's incremental save appends every
 // object it has loaded, scans included, doubling the file. Streams are
 // copied as they are, so the scans are not encoded again.
@@ -284,19 +289,19 @@ func assembleText(inst pdfium.Pdfium, input io.ReadSeeker, size int64, text *tex
 	if err != nil {
 		return err
 	}
-	defer inst.FPDF_CloseDocument(&requests.FPDF_CloseDocument{Document: doc})
+	defer closeDoc(inst, doc)
 	data := text.build()
 	redrawnDoc, err := open(inst, bytes.NewReader(data), int64(len(data)))
 	if err != nil {
 		return err
 	}
-	defer inst.FPDF_CloseDocument(&requests.FPDF_CloseDocument{Document: redrawnDoc})
+	defer closeDoc(inst, redrawnDoc)
 	created, err := inst.FPDF_CreateNewDocument(&requests.FPDF_CreateNewDocument{})
 	if err != nil {
 		return err
 	}
 	out := created.Document
-	defer inst.FPDF_CloseDocument(&requests.FPDF_CloseDocument{Document: out})
+	defer closeDoc(inst, out)
 
 	// Pages are imported in runs from one document or the other, so that
 	// what pages of a run share, such as fonts, is copied once.
@@ -373,7 +378,7 @@ func (c *Converter) readPages(ctx context.Context, inst pdfium.Pdfium, input io.
 		var doc references.FPDF_DOCUMENT
 		defer func() {
 			if doc != "" {
-				inst.FPDF_CloseDocument(&requests.FPDF_CloseDocument{Document: doc})
+				closeDoc(inst, doc)
 			}
 		}()
 		for i := range n {
@@ -382,7 +387,7 @@ func (c *Converter) readPages(ctx context.Context, inst pdfium.Pdfium, input io.
 			}
 			if i%reopenPages == 0 {
 				if doc != "" {
-					inst.FPDF_CloseDocument(&requests.FPDF_CloseDocument{Document: doc})
+					closeDoc(inst, doc)
 				}
 				var err error
 				if doc, err = open(inst, input, size); err != nil {
@@ -499,9 +504,10 @@ func renderPage(inst pdfium.Pdfium, page requests.Page, opts Options) (rendered,
 		return rendered{}, err
 	}
 	defer res.CleanupFunc()
-	src := res.Result.Image
-	img := image.NewRGBA(image.Rect(0, 0, src.Rect.Dx(), src.Rect.Dy()))
-	draw.Draw(img, img.Rect, src, src.Rect.Min, draw.Src)
+	src := res.Result.RenderedImage
+	b := src.Bounds()
+	img := image.NewRGBA(image.Rect(0, 0, b.Dx(), b.Dy()))
+	draw.Draw(img, img.Rect, src, b.Min, draw.Src)
 	toPage, err := deviceToPage(inst, page, img.Rect.Dx(), img.Rect.Dy())
 	if err != nil {
 		return rendered{}, err
@@ -669,11 +675,11 @@ func overlay(inst pdfium.Pdfium, input io.ReadSeeker, size int64, layer []layerP
 	var tmp *os.File // the document batches after the first are done on
 	defer func() {
 		if doc != "" {
-			inst.FPDF_CloseDocument(&requests.FPDF_CloseDocument{Document: doc})
+			closeDoc(inst, doc)
 		}
 		if tmp != nil {
-			tmp.Close()
-			os.Remove(tmp.Name())
+			_ = tmp.Close()
+			_ = os.Remove(tmp.Name())
 		}
 	}()
 	var layerDoc references.FPDF_DOCUMENT
@@ -684,7 +690,7 @@ func overlay(inst pdfium.Pdfium, input io.ReadSeeker, size int64, layer []layerP
 			return fmt.Errorf("text layer: %w", err)
 		}
 		layerDoc = opened.Document
-		defer inst.FPDF_CloseDocument(&requests.FPDF_CloseDocument{Document: layerDoc})
+		defer closeDoc(inst, layerDoc)
 	}
 
 	per := max(1, int(batchBytes*int64(len(layer))/max(size, 1))) // pages a batch spans
@@ -710,11 +716,11 @@ func overlay(inst pdfium.Pdfium, input io.ReadSeeker, size int64, layer []layerP
 			return err
 		}
 		err = save(inst, doc, next)
-		inst.FPDF_CloseDocument(&requests.FPDF_CloseDocument{Document: doc})
+		closeDoc(inst, doc)
 		doc = ""
 		if tmp != nil {
-			tmp.Close()
-			os.Remove(tmp.Name())
+			_ = tmp.Close()
+			_ = os.Remove(tmp.Name())
 		}
 		tmp = next
 		if err != nil {
@@ -742,7 +748,7 @@ func overlayPage(inst pdfium.Pdfium, src references.FPDF_DOCUMENT, srcIndex int,
 	if err != nil {
 		return err
 	}
-	defer inst.FPDF_CloseXObject(&requests.FPDF_CloseXObject{XObject: x.XObject})
+	defer func() { _, _ = inst.FPDF_CloseXObject(&requests.FPDF_CloseXObject{XObject: x.XObject}) }()
 	form, err := inst.FPDF_NewFormObjectFromXObject(&requests.FPDF_NewFormObjectFromXObject{XObject: x.XObject})
 	if err != nil {
 		return err
@@ -757,7 +763,7 @@ func overlayPage(inst pdfium.Pdfium, src references.FPDF_DOCUMENT, srcIndex int,
 	if err != nil {
 		return err
 	}
-	defer inst.FPDF_ClosePage(&requests.FPDF_ClosePage{Page: loaded.Page})
+	defer func() { _, _ = inst.FPDF_ClosePage(&requests.FPDF_ClosePage{Page: loaded.Page}) }()
 	page := requests.Page{ByReference: &loaded.Page}
 	if _, err := inst.FPDFPage_InsertObject(&requests.FPDFPage_InsertObject{Page: page, PageObject: form.PageObject}); err != nil {
 		return err

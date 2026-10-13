@@ -151,7 +151,7 @@ type result struct {
 // remove removes the result's files.
 func (r *result) remove() {
 	if r != nil && r.dir != "" {
-		os.RemoveAll(r.dir)
+		_ = os.RemoveAll(r.dir) // what is left goes with the history's next cleanup
 	}
 }
 
@@ -471,7 +471,7 @@ func (a *app) save() {
 		a.saveFile(base+" (retyped).pdf", func(path string) error { return copyFile(path, r.textPDF) })
 	default:
 		a.saveFile(base+".txt", func(path string) error {
-			return os.WriteFile(path, []byte(pdfocr.Text(r.pages)), 0o644)
+			return os.WriteFile(path, []byte(pdfocr.Text(r.pages)), 0o644) // #nosec G306 -- the user's document
 		})
 	}
 }
@@ -510,18 +510,17 @@ func (a *app) syncMenu() {
 
 // copyFile copies the file at src to dst.
 func copyFile(dst, src string) error {
-	in, err := os.Open(src)
+	in, err := os.Open(src) // #nosec G304 -- a PDF in the history
 	if err != nil {
 		return err
 	}
-	defer in.Close()
-	out, err := os.Create(dst)
+	defer func() { _ = in.Close() }() // read only
+	out, err := os.Create(dst)        // #nosec G304 -- where the user saves it
 	if err != nil {
 		return err
 	}
 	if _, err := io.Copy(out, in); err != nil {
-		out.Close()
-		return err
+		return errors.Join(err, out.Close())
 	}
 	return out.Close()
 }
@@ -531,11 +530,11 @@ func copyFile(dst, src string) error {
 // ""), with what makes it part of the history last. The directory is
 // removed if it fails.
 func convertFile(ctx context.Context, conv *pdfocr.Converter, history, path string, progress pdfocr.Progress) (_ *result, err error) {
-	in, err := os.Open(path)
+	in, err := os.Open(path) // #nosec G304 -- the PDF the user opened
 	if err != nil {
 		return nil, err
 	}
-	defer in.Close()
+	defer func() { _ = in.Close() }() // read only
 	dir, err := os.MkdirTemp(history, "read-")
 	if err != nil {
 		return nil, err
@@ -550,12 +549,13 @@ func convertFile(ctx context.Context, conv *pdfocr.Converter, history, path stri
 	if err != nil {
 		return nil, err
 	}
-	defer pdf.Close()
+	// Closed below, and here too if it fails before, when the files go.
+	defer func() { _ = pdf.Close() }()
 	textPDF, err := os.Create(r.textPDF)
 	if err != nil {
 		return nil, err
 	}
-	defer textPDF.Close()
+	defer func() { _ = textPDF.Close() }()
 	if r.pages, err = conv.Convert(ctx, in, pdfocr.Output{PDF: pdf, TextPDF: textPDF}, pdfocr.Options{}, progress); err != nil {
 		return nil, err
 	}
@@ -582,7 +582,7 @@ func loadEngine() (*pdfocr.Converter, error) {
 	}
 	paths := ocr.PathsIn(res)
 	if err := paths.Check(); err != nil {
-		return nil, fmt.Errorf("%w. Run `go run ./cmd/fetchdeps` in the project first.", err)
+		return nil, fmt.Errorf("%w. Run `go run ./cmd/fetchdeps` in the project first", err)
 	}
 	// Compiled code is kept for later runs: the models' for Core ML, and
 	// PDFium's.
@@ -606,9 +606,9 @@ func loadEngine() (*pdfocr.Converter, error) {
 		err = conv.SetTextFonts(fonts)
 	}
 	if err != nil {
-		conv.Close()
+		_ = conv.Close()
 		engine.Close()
-		return nil, fmt.Errorf("%w. Run `go run ./cmd/fetchdeps` in the project first.", err)
+		return nil, fmt.Errorf("%w. Run `go run ./cmd/fetchdeps` in the project first", err)
 	}
 	return conv, nil
 }
@@ -677,7 +677,7 @@ func main() {
 		if dir, err := mygo.App.Path(mygo.PathUserData); err == nil {
 			fontsPath = filepath.Join(dir, "fonts.json")
 			a.fonts = loadFonts(fontsPath)
-			if history := filepath.Join(dir, "history"); os.MkdirAll(history, 0o755) == nil {
+			if history := filepath.Join(dir, "history"); os.MkdirAll(history, 0o700) == nil {
 				historyDir = history
 			}
 		}

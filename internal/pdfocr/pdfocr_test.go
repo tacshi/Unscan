@@ -47,6 +47,14 @@ func TestGlyphlessFont(t *testing.T) {
 	}
 }
 
+// closeOrFail closes what a test opened, failing it if that fails.
+func closeOrFail(t testing.TB, c interface{ Close() error }) {
+	t.Helper()
+	if err := c.Close(); err != nil {
+		t.Error(err)
+	}
+}
+
 func newTestConverter(t *testing.T) *Converter {
 	t.Helper()
 	res, _ := filepath.Abs("../../resources")
@@ -67,7 +75,7 @@ func newTestConverter(t *testing.T) *Converter {
 		t.Fatal(err)
 	}
 	t.Logf("PDFium started in %v", time.Since(start))
-	t.Cleanup(func() { c.Close() })
+	t.Cleanup(func() { closeOrFail(t, c) })
 	return c
 }
 
@@ -145,8 +153,11 @@ func TestConvert(t *testing.T) {
 		t.Errorf("the output grew by %d bytes: were the scans written again?", grew)
 	}
 	if dir := os.Getenv("UNSCAN_TEST_OUT"); dir != "" {
-		os.WriteFile(filepath.Join(dir, "input.pdf"), input, 0o644)
-		os.WriteFile(filepath.Join(dir, "output.pdf"), res.PDF, 0o644)
+		for name, data := range map[string][]byte{"input.pdf": input, "output.pdf": res.PDF} {
+			if err := os.WriteFile(filepath.Join(dir, name), data, 0o600); err != nil {
+				t.Error(err)
+			}
+		}
 	}
 
 	inst, err := c.pool.GetInstance(time.Minute)
@@ -205,7 +216,7 @@ func TestConvert(t *testing.T) {
 		}
 	}
 
-	inst.Close()
+	closeOrFail(t, inst)
 
 	// Pages that have text are left alone.
 	again := convert(t, c, res.PDF, false, nil)
@@ -254,7 +265,7 @@ func TestTurnedScan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer inst.Close()
+	defer closeOrFail(t, inst)
 	in, out, text := openDoc(t, inst, input), openDoc(t, inst, res.PDF), openDoc(t, inst, res.TextPDF)
 	size := func(doc references.FPDF_DOCUMENT, i int) (float64, float64) {
 		s, err := inst.FPDF_GetPageSizeByIndexF(&requests.FPDF_GetPageSizeByIndexF{Document: doc, Index: i})
@@ -373,14 +384,16 @@ func TestConvertText(t *testing.T) {
 		t.Errorf("the text PDF is %d bytes", len(res.TextPDF))
 	}
 	if dir := os.Getenv("UNSCAN_TEST_OUT"); dir != "" {
-		os.WriteFile(filepath.Join(dir, "text.pdf"), res.TextPDF, 0o644)
+		if err := os.WriteFile(filepath.Join(dir, "text.pdf"), res.TextPDF, 0o600); err != nil {
+			t.Error(err)
+		}
 	}
 
 	inst, err := c.pool.GetInstance(time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { inst.Close() }()
+	defer func() { closeOrFail(t, inst) }()
 	in, out := openDoc(t, inst, input), openDoc(t, inst, res.TextPDF)
 	if n, err := inst.FPDF_GetPageCount(&requests.FPDF_GetPageCount{Document: out}); err != nil || n.PageCount != len(pages) {
 		t.Fatalf("%v pages, %v", n, err)
@@ -443,7 +456,7 @@ func TestConvertText(t *testing.T) {
 	}
 
 	// Pages with text are kept as they are.
-	inst.Close()
+	closeOrFail(t, inst)
 	again := convert(t, c, res.PDF, true, nil)
 	if inst, err = c.pool.GetInstance(time.Minute); err != nil {
 		t.Fatal(err)
@@ -472,7 +485,7 @@ func TestTrackedText(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer face.Close()
+	defer closeOrFail(t, face)
 	const w, h, x0, base = 1400, 200, 60, 120
 	text := "当着手翻译第三版时，接触Linux的日子。"
 	img := image.NewRGBA(image.Rect(0, 0, w, h))
@@ -510,7 +523,7 @@ func TestTrackedText(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer inst.Close()
+	defer closeOrFail(t, inst)
 	pg := requests.Page{ByIndex: &requests.PageByIndex{Document: openDoc(t, inst, d.build()), Index: 0}}
 	got, err := inst.GetPageText(&requests.GetPageText{Page: pg})
 	if err != nil || strings.TrimSpace(got.Text) != text {
@@ -551,7 +564,7 @@ func TestCIDSets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer face.Close()
+	defer closeOrFail(t, face)
 	const w, h, x0 = 800, 260, 60
 	texts := [][]string{
 		{"当着手翻译第三版时，", "我不由得回想起开始。"},
@@ -599,7 +612,7 @@ func TestCIDSets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer inst.Close()
+	defer closeOrFail(t, inst)
 	oneDoc, manyDoc := openDoc(t, inst, oneData), openDoc(t, inst, manyData)
 	for i, lines := range texts {
 		want := requests.Page{ByIndex: &requests.PageByIndex{Document: oneDoc, Index: i}}
@@ -636,7 +649,7 @@ func TestAlignedLabel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer face.Close()
+	defer closeOrFail(t, face)
 	const w, h, x0, base = 1200, 200, 120, 120
 	img := image.NewRGBA(image.Rect(0, 0, w, h))
 	draw.Draw(img, img.Rect, image.White, image.Point{}, draw.Src)
@@ -665,7 +678,7 @@ func TestAlignedLabel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer inst.Close()
+	defer closeOrFail(t, inst)
 	pg := requests.Page{ByIndex: &requests.PageByIndex{Document: openDoc(t, inst, d.build()), Index: 0}}
 	got, err := inst.GetPageText(&requests.GetPageText{Page: pg})
 	if err != nil || strings.TrimSpace(got.Text) != text {
@@ -706,7 +719,7 @@ func TestPreview(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := filepath.Join(t.TempDir(), "scan.pdf")
-	if err := os.WriteFile(path, input, 0o644); err != nil {
+	if err := os.WriteFile(path, input, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	// The scan is wider than it is high. The second page's is drawn turned
@@ -743,7 +756,7 @@ func TestPreviewWhileConverting(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := filepath.Join(t.TempDir(), "scan.pdf")
-	if err := os.WriteFile(path, input, 0o644); err != nil {
+	if err := os.WriteFile(path, input, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	started := make(chan struct{})
@@ -880,7 +893,7 @@ func contains(q ocr.Quad, p ocr.Point) bool {
 		pos = pos || c > 0
 		neg = neg || c < 0
 	}
-	return !(pos && neg)
+	return !pos || !neg
 }
 
 func abs(v float64) float64 { return max(v, -v) }
@@ -909,7 +922,7 @@ func TestUserFonts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer face.Close()
+	defer closeOrFail(t, face)
 	const w, h, x0, base = 900, 200, 60, 120
 	img := image.NewRGBA(image.Rect(0, 0, w, h))
 	draw.Draw(img, img.Rect, image.White, image.Point{}, draw.Src)
@@ -941,7 +954,7 @@ func TestUserFonts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer inst.Close()
+	defer closeOrFail(t, inst)
 	pg := requests.Page{ByIndex: &requests.PageByIndex{Document: openDoc(t, inst, data), Index: 0}}
 	got, err := inst.GetPageText(&requests.GetPageText{Page: pg})
 	if err != nil || strings.Join(strings.Fields(got.Text), "") != strings.Join(strings.Fields(text), "") {
