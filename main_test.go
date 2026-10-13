@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -24,13 +25,13 @@ type fixture struct {
 	dir, scan string
 	rendered  []string // the previews rendered, as "path#page"
 	revealed  []string
-	menus     [][2]bool
+	menus     []menuState
 	dock      []float64
 }
 
 func newFixture(t *testing.T, convert func(ctx context.Context, path string, p pdfocr.Progress) (*result, error)) *fixture {
 	dir := t.TempDir()
-	f := &fixture{app: &app{}, dir: dir, scan: filepath.Join(dir, "scan.pdf")}
+	f := &fixture{app: &app{sidebar: true}, dir: dir, scan: filepath.Join(dir, "scan.pdf")}
 	if err := os.WriteFile(f.scan, []byte("%PDF-1.4"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -51,13 +52,13 @@ func newFixture(t *testing.T, convert func(ctx context.Context, path string, p p
 			f.rendered = append(f.rendered, fmt.Sprintf("%s#%d", path, page))
 			return image.NewRGBA(image.Rect(0, 0, 85, 110)), nil
 		},
-		open: func() (string, error) { return f.scan, nil },
+		open: func() ([]string, error) { return []string{f.scan}, nil },
 		saveAs: func(name string) (string, error) {
 			suggested = append(suggested, name)
 			return name, nil
 		},
 		reveal:     func(path string) { f.revealed = append(f.revealed, path) },
-		menu:       func(open, save bool) { f.menus = append(f.menus, [2]bool{open, save}) },
+		menu:       func(m menuState) { f.menus = append(f.menus, m) },
 		dock:       func(p float64) { f.dock = append(f.dock, p) },
 		attend:     func() {},
 		chooseFont: func() (string, error) { return "", nil },
@@ -199,8 +200,8 @@ func TestModelsFail(t *testing.T) {
 	if f.phase != idle || tt.HasText("Choose PDF…") {
 		t.Errorf("phase %v, texts %q", f.phase, tt.Texts())
 	}
-	if last := f.menus[len(f.menus)-1]; last != [2]bool{false, false} {
-		t.Errorf("menu items enabled: %v", last)
+	if last := f.menus[len(f.menus)-1]; last.open || last.save {
+		t.Errorf("menu items enabled: %+v", last)
 	}
 }
 
@@ -286,9 +287,9 @@ func TestCancel(t *testing.T) {
 	}
 }
 
-// TestResultRemoved reads a PDF twice: the first result's files are
-// removed when the second replaces it, and the second's as on quitting.
-func TestResultRemoved(t *testing.T) {
+// TestResultKept reads a PDF twice: both results stay in the history,
+// newest first, with their files.
+func TestResultKept(t *testing.T) {
 	var dirs []string
 	f := newFixture(t, func(ctx context.Context, path string, p pdfocr.Progress) (*result, error) {
 		dir := t.TempDir()
@@ -300,20 +301,308 @@ func TestResultRemoved(t *testing.T) {
 	tt.Frame()
 	f.choose()
 	tt.Frame()
-	if _, err := os.Stat(dirs[0]); !os.IsNotExist(err) {
-		t.Errorf("the first result's files are kept: %v", err)
+	for i, dir := range dirs {
+		if _, err := os.Stat(dir); err != nil {
+			t.Errorf("result %d's files are gone: %v", i+1, err)
+		}
 	}
-	if _, err := os.Stat(dirs[1]); err != nil {
-		t.Errorf("the second result's files are gone: %v", err)
-	}
-	f.result.remove()
-	if _, err := os.Stat(dirs[1]); !os.IsNotExist(err) {
-		t.Errorf("the second result's files are kept: %v", err)
+	if len(f.history) != 2 || f.history[0].dir != dirs[1] || f.history[1].dir != dirs[0] || f.result != f.history[0] {
+		t.Errorf("history %+v, showing %+v", f.history, f.result)
 	}
 }
 
-// TestDrop reads the first PDF of the files dropped, and says so when none
-// is one.
+// TestHistory reads PDFs, which the sidebar lists, newest first: one
+// chosen there shows in the form shown, from its first page. Those removed, from their rows' menus or with
+// Delete, go with their files, and one shown gives its place to the next;
+// clearing the history removes the rest.
+func TestHistory(t *testing.T) {
+	dirs := map[string]string{}
+	f := newFixture(t, func(ctx context.Context, path string, p pdfocr.Progress) (*result, error) {
+		dir := t.TempDir()
+		dirs[filepath.Base(path)] = dir
+		pages := []pdfocr.Page{{Text: "One", Lines: 1}, {Text: "Two", Lines: 1}}
+		return &result{pages: pages, pdf: tempFile(t, "%PDF"), textPDF: tempFile(t, "%PDF text"), dir: dir, size: 2_500_000}, nil
+	})
+	opened := []string{f.scan, filepath.Join(f.dir, "report.pdf"), filepath.Join(f.dir, "notes.pdf"), filepath.Join(f.dir, "memo.pdf")}
+	f.fx.open = func() ([]string, error) {
+		path := opened[0]
+		opened = opened[1:]
+		return []string{path}, nil
+	}
+	gone := func(name string) bool {
+		_, err := os.Stat(dirs[name])
+		return os.IsNotExist(err)
+	}
+	tt := ui.NewTester(f.view, 960, 720)
+	click(t, tt, "Choose PDF…")
+	click(t, tt, "Retyped PDF")
+	click(t, tt, "Next Page")
+	for range 2 {
+		f.choose()
+		tt.Frame()
+	}
+	wantTexts(t, tt, "scan.pdf", "report.pdf", "notes.pdf", "3 documents · 7.5 MB")
+	if !slices.ContainsFunc(tt.Texts(), func(s string) bool { return strings.HasPrefix(s, "2 pages · Today, ") }) {
+		t.Errorf("no row says when its PDF was read in %q", tt.Texts())
+	}
+	if f.result.file != filepath.Join(f.dir, "notes.pdf") || f.form != retyped || f.at != 0 {
+		t.Errorf("showing %s in form %d at page %d", f.result.file, f.form, f.at+1)
+	}
+
+	// The oldest, chosen in the sidebar.
+	click(t, tt, "scan.pdf")
+	if f.result != f.history[2] || f.form != retyped || f.at != 0 {
+		t.Errorf("showing %s in form %d at page %d", f.result.file, f.form, f.at+1)
+	}
+
+	// Delete asks to remove the one chosen, which Cancel keeps.
+	tt.Key(0, ui.KeyBackspace)
+	tt.Frame()
+	wantTexts(t, tt, "Remove “scan.pdf” from history?")
+	click(t, tt, "Cancel")
+	if len(f.history) != 3 || gone("scan.pdf") {
+		t.Fatalf("canceling removed %+v", f.history)
+	}
+
+	// One not shown, removed from its row's menu.
+	if err := tt.RightClick("report.pdf"); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{revealScanLabel(), "-", "Remove from History…"}; !slices.Equal(tt.Menu(), want) {
+		t.Errorf("menu %q, not %q", tt.Menu(), want)
+	}
+	if err := tt.ChooseMenuItem("Remove from History…"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	wantTexts(t, tt, "Remove “report.pdf” from history?")
+	click(t, tt, "Remove")
+	if len(f.history) != 2 || !gone("report.pdf") || gone("scan.pdf") || f.result != f.history[1] {
+		t.Errorf("history %d long, showing %+v", len(f.history), f.result)
+	}
+
+	// The one shown, removed, gives its place to the one below it.
+	click(t, tt, "notes.pdf")
+	tt.Key(0, ui.KeyBackspace)
+	tt.Frame()
+	click(t, tt, "Remove")
+	if len(f.history) != 1 || !gone("notes.pdf") || f.result != f.history[0] || f.phase != done {
+		t.Errorf("history %d long, showing %+v", len(f.history), f.result)
+	}
+
+	f.choose()
+	tt.Frame()
+	click(t, tt, "Clear…")
+	wantTexts(t, tt, "Clear history?", "The searchable and retyped PDFs of 2 documents (5.0 MB) will be deleted. The scans themselves aren’t touched.")
+	click(t, tt, "Clear History")
+	if len(f.history) != 0 || !gone("scan.pdf") || !gone("memo.pdf") || f.result != nil || f.phase != idle {
+		t.Errorf("history %+v, phase %v after clearing", f.history, f.phase)
+	}
+	if tt.HasText("Clear…") || !tt.HasText("Drop a scanned PDF here") {
+		t.Errorf("texts %q after clearing", tt.Texts())
+	}
+}
+
+// TestHistoryOnDisk reads the history from folders, as convertFile writes
+// them: those of readings that did not end are left out, and removed once
+// they are a day old.
+func TestHistoryOnDisk(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Now()
+	var saved []*result
+	for i, file := range []string{"/scans/a.pdf", "/scans/b.pdf"} {
+		r := &result{
+			file: file, read: now.Add(time.Duration(i-1) * time.Hour),
+			pages: []pdfocr.Page{{Index: 0, Text: "Hello", Lines: 1}, {Index: 1, Text: "Born digital", Skipped: true}},
+			dir:   filepath.Join(dir, fmt.Sprintf("read-%d", i)),
+		}
+		r.pdf, r.textPDF = filepath.Join(r.dir, "searchable.pdf"), filepath.Join(r.dir, "text.pdf")
+		if err := os.Mkdir(r.dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		for _, path := range []string{r.pdf, r.textPDF} {
+			if err := os.WriteFile(path, []byte("%PDF "+file), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := r.save(); err != nil {
+			t.Fatal(err)
+		}
+		r.size = 2*int64(len("%PDF "+file)) + fileSize(t, filepath.Join(r.dir, resultFile))
+		saved = append(saved, r)
+	}
+	unfinished := func(name, file string, age time.Duration) string {
+		path := filepath.Join(dir, name)
+		if err := os.Mkdir(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(path, file), []byte("{"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(path, now.Add(-age), now.Add(-age)); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	reading := unfinished("read-reading", "searchable.pdf", time.Minute)
+	crashed := unfinished("read-crashed", "searchable.pdf", 48*time.Hour)
+	damaged := unfinished("read-damaged", resultFile, time.Minute)
+
+	got := loadHistory(dir, now)
+	want := []*result{saved[1], saved[0]}
+	if len(got) != len(want) {
+		t.Fatalf("read %d results, want %d", len(got), len(want))
+	}
+	for i, r := range got {
+		if !r.read.Equal(want[i].read) {
+			t.Errorf("result %d read at %v, want %v", i, r.read, want[i].read)
+		}
+		r.read = want[i].read
+		if !reflect.DeepEqual(r, want[i]) {
+			t.Errorf("result %d is %+v, want %+v", i, r, want[i])
+		}
+	}
+	for _, path := range []string{reading, damaged} {
+		if _, err := os.Stat(path); err != nil {
+			t.Errorf("removed %s, which is new: %v", filepath.Base(path), err)
+		}
+	}
+	if _, err := os.Stat(crashed); !os.IsNotExist(err) {
+		t.Errorf("kept %s, which is old: %v", filepath.Base(crashed), err)
+	}
+	if got := loadHistory(filepath.Join(dir, "missing"), now); got != nil {
+		t.Errorf("read %+v from no folder", got)
+	}
+}
+
+func fileSize(t *testing.T, path string) int64 {
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return info.Size()
+}
+
+// TestCompare shows the original beside the retyped PDF and the text, and
+// the searchable PDF, which looks just like it, alone. Both turn together,
+// and the split stays where it is dragged.
+func TestCompare(t *testing.T) {
+	pages := []pdfocr.Page{{Text: "第一页", Lines: 1}, {Text: "Second page", Lines: 1}}
+	res := &result{pdf: tempFile(t, "%PDF searchable"), textPDF: tempFile(t, "%PDF text")}
+	f := newFixture(t, func(ctx context.Context, path string, p pdfocr.Progress) (*result, error) {
+		res.pages = pages
+		return res, nil
+	})
+	tt := ui.NewTester(f.view, 1200, 800)
+	click(t, tt, "Choose PDF…")
+	f.toggleCompare()
+	tt.Frame()
+	if slices.Contains(tt.Texts(), "Original") {
+		t.Errorf("the searchable PDF shows beside the original: %q", tt.Texts())
+	}
+	if m := f.menus[len(f.menus)-1]; !m.compare || m.canCompare {
+		t.Errorf("menu %+v on the searchable PDF", m)
+	}
+
+	click(t, tt, "Retyped PDF")
+	wantCaptions(t, tt, "Original", "Retyped PDF")
+	for _, want := range []string{res.textPDF + "#0", res.textPDF + "#1"} {
+		if !slices.Contains(f.rendered, want) {
+			t.Errorf("rendered %q, not %s", f.rendered, want)
+		}
+	}
+	if m := f.menus[len(f.menus)-1]; !m.compare || !m.canCompare {
+		t.Errorf("menu %+v comparing the retyped PDF", m)
+	}
+	click(t, tt, "Next Page")
+	wantCaptions(t, tt, "Original", "Retyped PDF")
+	wantTexts(t, tt, "2 of 2")
+	if f.at != 1 {
+		t.Errorf("at page %d", f.at+1)
+	}
+
+	// Dragged, the split stays where it was left.
+	div, ok := tt.Find("Divider")
+	if !ok {
+		t.Fatalf("no divider in %q", tt.Texts())
+	}
+	x, y := div.X+div.W/2, div.Y+div.H/2
+	tt.Press(x, y)
+	tt.Move(x+120, y)
+	tt.Release(x+120, y)
+	tt.Frame()
+	if f.split <= 0.5 || f.split >= 0.75 {
+		t.Errorf("split %v after a drag to the right", f.split)
+	}
+
+	click(t, tt, "Text")
+	wantCaptions(t, tt, "Original", "Text")
+	wantTexts(t, tt, "Second page")
+	if !slices.Contains(f.rendered, res.pdf+"#1") {
+		t.Errorf("rendered %q, not the original", f.rendered)
+	}
+
+	click(t, tt, "Compare with Original")
+	if f.comparing || slices.Contains(tt.Texts(), "Original") {
+		t.Errorf("comparing %v, texts %q", f.comparing, tt.Texts())
+	}
+}
+
+// wantCaptions checks that the panes compared show under their names: the
+// form's shows in its picker too.
+func wantCaptions(t *testing.T, tt *ui.Tester, left, right string) {
+	t.Helper()
+	texts := tt.Texts()
+	n := 0
+	for _, s := range texts {
+		if s == right {
+			n++
+		}
+	}
+	if !slices.Contains(texts, left) || n < 2 {
+		t.Errorf("no panes %q and %q in %q", left, right, texts)
+	}
+}
+
+func TestWhen(t *testing.T) {
+	now := time.Date(2026, 10, 13, 14, 5, 0, 0, time.Local)
+	for _, c := range []struct {
+		t    time.Time
+		want string
+	}{
+		{now.Add(-time.Hour), "Today, 13:05"},
+		{time.Date(2026, 10, 12, 9, 12, 0, 0, time.Local), "Yesterday, 09:12"},
+		{time.Date(2026, 10, 2, 23, 0, 0, 0, time.Local), "Oct 2"},
+		{time.Date(2025, 12, 31, 8, 0, 0, 0, time.Local), "Dec 31, 2025"},
+	} {
+		if got := when(c.t, now); got != c.want {
+			t.Errorf("when(%v) = %q, not %q", c.t, got, c.want)
+		}
+	}
+}
+
+func TestByteSize(t *testing.T) {
+	for _, c := range []struct {
+		n    int64
+		want string
+	}{
+		{0, "0 bytes"},
+		{1, "1 byte"},
+		{999, "999 bytes"},
+		{1000, "1.0 KB"},
+		{48_200, "48 KB"},
+		{999_600, "1.0 MB"},
+		{412_000_000, "412 MB"},
+		{1_234_567_890, "1.2 GB"},
+	} {
+		if got := byteSize(c.n); got != c.want {
+			t.Errorf("byteSize(%d) = %q, not %q", c.n, got, c.want)
+		}
+	}
+}
+
+// TestDrop reads the PDFs of the files dropped, and says which files are
+// not PDFs.
 func TestDrop(t *testing.T) {
 	f := newFixture(t, func(ctx context.Context, path string, p pdfocr.Progress) (*result, error) {
 		return &result{pages: []pdfocr.Page{{Text: "Hello"}}, pdf: tempFile(t, "%PDF")}, nil
@@ -322,29 +611,38 @@ func TestDrop(t *testing.T) {
 	f.drop([]string{filepath.Join(f.dir, "photo.jpg")})
 	tt.Frame()
 	wantTexts(t, tt, "“photo.jpg” isn’t a PDF")
-	f.drop([]string{filepath.Join(f.dir, "photo.jpg"), f.scan})
+	report := filepath.Join(f.dir, "report.PDF")
+	f.drop([]string{filepath.Join(f.dir, "photo.jpg"), f.scan, report})
 	tt.Frame()
-	if f.phase != done || f.result.file != f.scan {
-		t.Errorf("phase %v, error %q", f.phase, f.err)
+	wantTexts(t, tt, "“photo.jpg” isn’t a PDF")
+	if f.phase != done || len(f.history) != 2 || f.history[0].file != report || f.history[1].file != f.scan {
+		t.Errorf("phase %v, error %q, history %+v", f.phase, f.err, f.history)
 	}
+	f.drop([]string{filepath.Join(f.dir, "a.txt"), filepath.Join(f.dir, "b.png")})
+	tt.Frame()
+	wantTexts(t, tt, "2 files aren’t PDFs")
 }
 
-// TestMenu enables Open while a PDF can be opened, and Save while one is
-// shown.
+// TestMenu enables Open while PDFs can be opened, as they can while one
+// is read, and Save while one is shown.
 func TestMenu(t *testing.T) {
 	f := newFixture(t, nil)
 	tt := ui.NewTester(f.view, 960, 720)
 	f.fx.spawn = func(func()) {} // reading never ends
 	f.fx.convert = func(ctx context.Context, path string, p pdfocr.Progress) (*result, error) { return nil, nil }
-	f.start(f.scan)
+	f.add(f.scan)
 	tt.Frame()
 	f.stop()
 	f.result = &result{file: f.scan, pages: []pdfocr.Page{{Text: "Hello"}}}
 	f.phase = done
 	tt.Frame()
-	want := [][2]bool{{true, false}, {false, false}, {true, true}}
-	if !slices.Equal(f.menus, want) {
-		t.Errorf("menu items enabled %v, not %v", f.menus, want)
+	var got [][2]bool
+	for _, m := range f.menus {
+		got = append(got, [2]bool{m.open, m.save})
+	}
+	want := [][2]bool{{true, false}, {true, true}}
+	if !slices.Equal(got, want) {
+		t.Errorf("menu items enabled %v, not %v", got, want)
 	}
 }
 
@@ -534,5 +832,164 @@ func TestFontError(t *testing.T) {
 		if got := fontError(c.err); got != c.want {
 			t.Errorf("fontError(%v) = %q, want %q", c.err, got, c.want)
 		}
+	}
+}
+
+// spawnLater keeps what is sent to the background until the test runs it.
+type spawnLater struct{ fns []func() }
+
+func (s *spawnLater) spawn(fn func()) { s.fns = append(s.fns, fn) }
+
+// step runs what was sent first, and reports whether there was any.
+func (s *spawnLater) step() bool {
+	if len(s.fns) == 0 {
+		return false
+	}
+	fn := s.fns[0]
+	s.fns = s.fns[1:]
+	fn()
+	return true
+}
+
+// readFake reads any PDF as a page of its name, in a file of its own.
+func readFake(t *testing.T) func(ctx context.Context, path string, p pdfocr.Progress) (*result, error) {
+	return func(ctx context.Context, path string, p pdfocr.Progress) (*result, error) {
+		p(0, 1)
+		p(1, 1)
+		dir := t.TempDir()
+		return &result{pages: []pdfocr.Page{{Text: filepath.Base(path), Lines: 1}}, pdf: tempFile(t, "%PDF"), dir: dir}, nil
+	}
+}
+
+// TestQueue reads the PDFs dropped in turn. The first shows its progress
+// and, once read, itself, while the next is read; the others wait in the
+// sidebar, where one is taken out. One waiting already is not added again,
+// and the window draws the user back once, as the last is read.
+func TestQueue(t *testing.T) {
+	f := newFixture(t, readFake(t))
+	later := &spawnLater{}
+	f.fx.spawn = later.spawn
+	attended := 0
+	f.fx.attend = func() { attended++ }
+	a, b, c := filepath.Join(f.dir, "a.pdf"), filepath.Join(f.dir, "b.pdf"), filepath.Join(f.dir, "c.pdf")
+	tt := ui.NewTester(f.view, 960, 720)
+	f.drop([]string{a, b, c})
+	f.add(b)
+	tt.Frame()
+	if f.phase != working || f.file != a || !slices.Equal(f.queue, []string{b, c}) {
+		t.Fatalf("phase %v, reading %q, queue %q", f.phase, f.file, f.queue)
+	}
+	wantTexts(t, tt, "1 of 3 PDFs", "Cancel All", "b.pdf", "c.pdf", "Waiting")
+
+	later.step() // a is read
+	tt.Frame()
+	if f.phase != done || f.result.file != a || f.file != b || len(f.history) != 1 {
+		t.Fatalf("phase %v, showing %+v, reading %q", f.phase, f.result, f.file)
+	}
+	if got := f.dock[len(f.dock)-1]; got < 0.3 || got > 0.4 {
+		t.Errorf("the Dock shows %v once a is read, not 1/3", got)
+	}
+	click(t, tt, "Remove from Queue")
+	if len(f.queue) != 0 || tt.HasText("Waiting") {
+		t.Errorf("queue %q, texts %q", f.queue, tt.Texts())
+	}
+
+	for later.step() { // b is read, and a's preview rendered
+	}
+	tt.Frame()
+	if f.file != "" || f.result.file != a || len(f.history) != 2 || f.history[0].file != b || f.phase != done {
+		t.Errorf("reading %q, showing %+v, history %d long", f.file, f.result, len(f.history))
+	}
+	if attended != 1 || f.dock[len(f.dock)-1] != -1 {
+		t.Errorf("attended %d times, Dock %v", attended, f.dock)
+	}
+}
+
+// TestQueueFailure goes on with the queue past a PDF that cannot be read,
+// saying so in a toast.
+func TestQueueFailure(t *testing.T) {
+	read := readFake(t)
+	f := newFixture(t, func(ctx context.Context, path string, p pdfocr.Progress) (*result, error) {
+		if filepath.Base(path) == "b.pdf" {
+			return nil, errors.New("damaged")
+		}
+		return read(ctx, path, p)
+	})
+	later := &spawnLater{}
+	f.fx.spawn = later.spawn
+	tt := ui.NewTester(f.view, 960, 720)
+	f.drop([]string{filepath.Join(f.dir, "a.pdf"), filepath.Join(f.dir, "b.pdf"), filepath.Join(f.dir, "c.pdf")})
+	later.step() // a
+	later.step() // b fails
+	tt.Frame()
+	wantTexts(t, tt, "Couldn’t read “b.pdf”")
+	for later.step() {
+	}
+	tt.Frame()
+	if len(f.history) != 2 || f.history[0].file != filepath.Join(f.dir, "c.pdf") || f.err != "" || f.file != "" {
+		t.Errorf("history %+v, error %q, reading %q", f.history, f.err, f.file)
+	}
+}
+
+// TestCancelAll cancels the PDF being read, and the next one's progress
+// shows; Cancel All cancels it and those waiting.
+func TestCancelAll(t *testing.T) {
+	f := newFixture(t, readFake(t))
+	later := &spawnLater{}
+	f.fx.spawn = later.spawn
+	tt := ui.NewTester(f.view, 960, 720)
+	f.drop([]string{filepath.Join(f.dir, "a.pdf"), filepath.Join(f.dir, "b.pdf"), filepath.Join(f.dir, "c.pdf")})
+	tt.Frame()
+	click(t, tt, "Cancel")
+	if f.phase != working || f.file != filepath.Join(f.dir, "b.pdf") || len(f.queue) != 1 {
+		t.Fatalf("phase %v, reading %q, queue %q", f.phase, f.file, f.queue)
+	}
+	wantTexts(t, tt, "2 of 3 PDFs")
+	click(t, tt, "Cancel All")
+	if f.phase != idle || f.file != "" || len(f.queue) != 0 {
+		t.Errorf("phase %v, reading %q, queue %q", f.phase, f.file, f.queue)
+	}
+	for later.step() { // the readings canceled end
+	}
+	tt.Frame()
+	if len(f.history) != 0 || f.phase != idle || f.dock[len(f.dock)-1] != -1 {
+		t.Errorf("history %+v, phase %v, Dock %v", f.history, f.phase, f.dock)
+	}
+}
+
+// TestBrowseWhileReading shows a document chosen in the history while a
+// PDF is read, its previews rendered meanwhile; the row of the PDF being
+// read shows its progress again.
+func TestBrowseWhileReading(t *testing.T) {
+	f := newFixture(t, readFake(t))
+	old := &result{file: filepath.Join(f.dir, "old.pdf"), read: time.Now(), pages: []pdfocr.Page{{Text: "Old", Lines: 1}}, pdf: tempFile(t, "%PDF old")}
+	f.history = []*result{old}
+	later := &spawnLater{}
+	f.fx.spawn = later.spawn
+	tt := ui.NewTester(f.view, 960, 720)
+	f.add(f.scan)
+	tt.Frame()
+	wantTexts(t, tt, "Cancel", "old.pdf")
+
+	click(t, tt, "old.pdf")
+	if f.phase != done || f.result != old || f.file != f.scan {
+		t.Fatalf("phase %v, showing %+v, reading %q", f.phase, f.result, f.file)
+	}
+	reading := later.fns[0]
+	later.fns = later.fns[1:]
+	for later.step() { // old's preview, while scan.pdf is read
+	}
+	if !slices.Contains(f.rendered, old.pdf+"#0") {
+		t.Errorf("rendered %q while reading", f.rendered)
+	}
+
+	click(t, tt, "Reading scan.pdf")
+	if f.phase != working {
+		t.Errorf("phase %v after choosing the PDF being read", f.phase)
+	}
+	reading()
+	tt.Frame()
+	if f.phase != done || f.result.file != f.scan || len(f.history) != 2 {
+		t.Errorf("phase %v, showing %+v", f.phase, f.result)
 	}
 }

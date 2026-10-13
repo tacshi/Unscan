@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"fmt"
 	"math"
 	"path/filepath"
@@ -14,9 +15,10 @@ import (
 )
 
 const (
-	barHeight    = 52 // the title bar the view draws, under the window controls
-	footerHeight = 40
-	pageMargin   = 24 // around a page's preview
+	barHeight     = 52 // the title bar the view draws, under the window controls
+	footerHeight  = 40
+	pageMargin    = 24 // around a page's preview
+	captionHeight = 28 // of the name over each page compared
 )
 
 // Icons, drawn in strokes of the text's color.
@@ -24,6 +26,9 @@ var (
 	documentIcon = icon(`<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M9 13h6M9 17h4"/>`)
 	previousIcon = icon(`<path d="m15 18-6-6 6-6"/>`)
 	nextIcon     = icon(`<path d="m9 18 6-6-6-6"/>`)
+	removeIcon   = icon(`<path d="M18 6 6 18M6 6l12 12"/>`)
+	sidebarIcon  = icon(`<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/>`)
+	compareIcon  = icon(`<path d="M8 19H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h3"/><path d="M16 5h3a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-3"/><path d="M12 4v16"/>`)
 )
 
 func icon(paths string) *ui.SVG {
@@ -45,40 +50,61 @@ func (a *app) view(c *ui.Context) {
 	}
 	root.Children(func() {
 		a.titleBar(c)
-		switch a.phase {
-		case idle:
-			a.welcome(c, dragging)
-		case working:
-			a.progress(c)
-		case done:
-			a.document(c, dragging)
-		}
+		ui.Row(c).Grow(1).MinHeight(0).AlignItems(ui.Stretch).Children(func() {
+			if a.showsSidebar() {
+				a.historySidebar(c)
+			}
+			ui.Column(c).Grow(1).MinWidth(0).Children(func() {
+				switch a.phase {
+				case idle:
+					a.welcome(c, dragging)
+				case working:
+					a.progress(c)
+				case done:
+					a.document(c, dragging)
+				}
+			})
+		})
 		a.fontsDialog(c)
+		a.historyAlert(c)
 	})
 }
 
-// titleBar is the bar under the window controls: the name of the PDF and,
-// once it is read, the form it shows in and what to do with it.
+// titleBar is the bar under the window controls: a button showing the
+// history, the name of the PDF and, once it is read, the form it shows in
+// and what to do with it.
 func (a *app) titleBar(c *ui.Context) {
 	t := c.Theme()
 	bar := c.TitleBar()
 	row := ui.Row(c).Height(barHeight).Shrink(0).Padding(0, bar.Right+12, 0, bar.Left+16).Gap(12).DragWindow()
-	if a.phase == idle {
+	if a.phase == idle && !a.showsSidebar() {
+		if a.listed() {
+			row.Children(func() { a.sidebarButton(c) })
+		}
 		return
 	}
 	row.BorderWidth(0, 0, 1, 0).BorderColor(t.Border)
 	row.Children(func() {
-		name := a.file
-		if a.phase == done {
-			name = a.result.file
-		}
-		title := ui.Row(c).Grow(1).Basis(0).MinWidth(0)
-		title.Children(func() { ui.Text(c, filepath.Base(name)).Bold().SingleLine() })
+		title := ui.Row(c).Grow(1).Basis(0).MinWidth(0).Gap(8)
+		title.Children(func() {
+			if a.listed() {
+				a.sidebarButton(c)
+			}
+			switch a.phase {
+			case working:
+				ui.Text(c, filepath.Base(a.file)).Bold().SingleLine()
+			case done:
+				ui.Text(c, filepath.Base(a.result.file)).Bold().SingleLine()
+			}
+		})
 		if a.phase != done {
 			return
 		}
 		a.formPicker(c)
 		ui.Row(c).Grow(1).Basis(0).Justify(ui.End).Gap(8).Children(func() {
+			const compare = "Compare with Original"
+			ui.Toggle(c, &a.comparing, "").Label(compare).Tooltip(compare).Disabled(a.form == searchable).
+				Children(func() { ui.Icon(c, compareIcon) })
 			if a.form == plainText && ui.Button(c, "Copy All").Clicked() {
 				c.WriteClipboard(pdfocr.Text(a.result.pages))
 				c.Toast("Copied the text of every page")
@@ -86,6 +112,23 @@ func (a *app) titleBar(c *ui.Context) {
 			ui.PrimaryButton(c, "Save…").OnClick(a.save)
 		})
 	})
+}
+
+// sidebarButton shows the sidebar listing the history, or hides it.
+func (a *app) sidebarButton(c *ui.Context) {
+	key := "⌥⌘S"
+	if runtime.GOOS != "darwin" {
+		key = "Ctrl+Alt+S"
+	}
+	iconButton(c, sidebarIcon, sidebarLabel(a.sidebar), key, false).OnClick(a.toggleSidebar)
+}
+
+// sidebarLabel names showing the sidebar, or hiding it while it shows.
+func sidebarLabel(shown bool) string {
+	if shown {
+		return "Hide Sidebar"
+	}
+	return "Show Sidebar"
 }
 
 // forms names the forms a document shows in.
@@ -150,7 +193,31 @@ func (a *app) welcome(c *ui.Context, dragging bool) {
 // progress shows how far reading has come.
 func (a *app) progress(c *ui.Context) {
 	t := c.Theme()
-	value, status, left := -1.0, "Opening…", ""
+	value, status, left := a.status()
+	ui.Column(c).Grow(1).Center().Padding(24).Children(func() {
+		ui.Column(c).Width(360).MaxWidthPercent(100).Gap(8).Children(func() {
+			ui.Progress(c, value).Label("Reading " + filepath.Base(a.file))
+			ui.Row(c).Gap(12).FontFeatures("tnum").Children(func() {
+				ui.Text(c, status).Grow(1)
+				ui.Text(c, left).TextColor(t.TextMuted)
+			})
+			if at, of := a.batch(); of > 1 {
+				ui.Textf(c, "%d of %d PDFs", at, of).TextColor(t.TextMuted).FontFeatures("tnum")
+			}
+			ui.Row(c).AlignSelf(ui.Center).Gap(8).Margin(16, 0, 0, 0).Children(func() {
+				ui.Button(c, "Cancel").OnClick(a.stop)
+				if len(a.queue) > 0 {
+					ui.Button(c, "Cancel All").OnClick(a.stopAll)
+				}
+			})
+		})
+	})
+}
+
+// status says how far reading the PDF has come: the share of its pages
+// read, -1 until they are counted, in words, and how long the rest take.
+func (a *app) status() (value float64, status, left string) {
+	value, status = -1, "Opening…"
 	switch {
 	case a.waiting:
 		status = "Getting ready…"
@@ -161,16 +228,7 @@ func (a *app) progress(c *ui.Context) {
 		status = fmt.Sprintf("%d of %s", a.page, plural(a.pages, "page"))
 		left = timeLeft(time.Since(a.counted), a.page, a.pages)
 	}
-	ui.Column(c).Grow(1).Center().Padding(24).Children(func() {
-		ui.Column(c).Width(360).MaxWidthPercent(100).Gap(8).Children(func() {
-			ui.Progress(c, value).Label("Reading " + filepath.Base(a.file))
-			ui.Row(c).Gap(12).FontFeatures("tnum").Children(func() {
-				ui.Text(c, status).Grow(1)
-				ui.Text(c, left).TextColor(t.TextMuted)
-			})
-			ui.Button(c, "Cancel").AlignSelf(ui.Center).Margin(16, 0, 0, 0).OnClick(a.stop)
-		})
-	})
+	return value, status, left
 }
 
 // timeLeft guesses how long the rest of the pages take, from how long done
@@ -202,17 +260,23 @@ func (a *app) document(c *ui.Context, dragging bool) {
 		a.turn(a.at + 1)
 	}
 	page := r.pages[a.at]
+	// The room the page shows in.
+	w, h := c.Size()
+	if a.showsSidebar() {
+		w -= sidebarWidth
+	}
+	h -= barHeight + footerHeight
 	body := ui.Box(c).Grow(1).MinHeight(0).Background(t.Surface).Focusable().FocusRing(false).Bind(&a.pageArea)
 	body.Children(func() {
-		if a.form == plainText {
-			a.pageText(c, page)
+		if a.compares() {
+			a.compare(c, page, w, h)
 		} else {
-			a.pageImage(c)
+			a.pane(c, a.form, "", page, w, h)
 		}
 		if dragging {
 			ui.Column(c).Absolute().Top(8).Right(8).Bottom(8).Left(8).Center().Radius(12).
 				Border(2, t.Accent).BorderStyle(ui.BorderDashed).Background(t.Background.Alpha(0.9)).
-				Children(func() { ui.Text(c, "Drop to read this PDF instead").FontSize(17).Bold() })
+				Children(func() { ui.Text(c, "Drop PDFs to read them").FontSize(17).Bold() })
 		}
 	})
 
@@ -242,7 +306,11 @@ func (a *app) document(c *ui.Context, dragging bool) {
 // the page.
 func iconButton(c *ui.Context, icon *ui.SVG, label, key string, disabled bool) ui.Element {
 	t := c.Theme()
-	b := ui.ButtonBase(c).Label(label).Tooltip(label + " (" + key + ")").Disabled(disabled).
+	tip := label
+	if key != "" {
+		tip += " (" + key + ")"
+	}
+	b := ui.ButtonBase(c).Label(label).Tooltip(tip).Disabled(disabled).
 		Padding(t.Space(1.5)).Radius(t.Radius)
 	switch {
 	case disabled:
@@ -255,21 +323,48 @@ func iconButton(c *ui.Context, icon *ui.SVG, label, key string, disabled bool) u
 	return b.Children(func() { ui.Icon(c, icon) })
 }
 
-// pageImage shows the page as large as fits, as on paper.
-func (a *app) pageImage(c *ui.Context) {
+// compare shows the original page beside the page in the form shown, in w
+// by h, split where the user left it.
+func (a *app) compare(c *ui.Context, page pdfocr.Page, w, h float32) {
+	least := c.Theme().Space(10) // as narrow as the split lets a side be
+	left := min(max(w*cmp.Or(a.split, 0.5), least), w-1-least)
+	ui.Split(c, &left, func() {
+		a.pane(c, searchable, "Original", page, left, h)
+	}, func() {
+		a.pane(c, a.form, forms[a.form], page, w-1-left, h)
+	}).Grow(1).MinHeight(0).OnChange(func() { a.split = left / w })
+}
+
+// pane shows the page in form, in w by h, under name when it is not "".
+func (a *app) pane(c *ui.Context, form int, name string, page pdfocr.Page, w, h float32) {
+	if name != "" {
+		ui.Row(c).Height(captionHeight).Shrink(0).Justify(ui.Center).Children(func() {
+			ui.Text(c, name).FontSize(12).TextColor(c.Theme().TextMuted).SingleLine()
+		})
+		h -= captionHeight
+	}
+	if form == plainText {
+		a.pageText(c, page)
+	} else {
+		a.pageImage(c, form, w, h)
+	}
+}
+
+// pageImage shows the page in form as large as fits in w by h, as on
+// paper.
+func (a *app) pageImage(c *ui.Context, form int, w, h float32) {
 	t := c.Theme()
-	p, ok := a.previews[preview{a.form, a.at}]
-	ui.Column(c).Fill().Center().Padding(pageMargin).Children(func() {
+	p, ok := a.previews[preview{form, a.at}]
+	ui.Column(c).Grow(1).MinHeight(0).Center().Padding(pageMargin).Children(func() {
 		switch {
 		case !ok:
 			ui.Spinner(c)
 		case p.err != nil:
 			ui.Text(c, "This page can’t be shown: "+p.err.Error()).TextColor(t.TextMuted).MaxWidth(440).TextAlign(ui.Center)
 		default:
-			w, h := c.Size()
-			w, h = w-2*pageMargin, h-barHeight-footerHeight-2*pageMargin
+			w, h := w-2*pageMargin, h-2*pageMargin
 			bw, bh := p.bitmap.Size()
-			scale := min(w/float32(bw), h/float32(bh))
+			scale := max(min(w/float32(bw), h/float32(bh)), 0)
 			ui.Image(c, p.bitmap).Size(float32(bw)*scale, float32(bh)*scale).Label(fmt.Sprintf("Page %d", a.at+1)).
 				Shadow(0, 1, 3, 0, ui.RGBA(0, 0, 0, 0.12)).Shadow(0, 6, 20, 0, ui.RGBA(0, 0, 0, 0.08))
 		}
@@ -281,7 +376,7 @@ func (a *app) pageText(c *ui.Context, page pdfocr.Page) {
 	t := c.Theme()
 	text := strings.TrimSpace(page.Text)
 	// Keyed by page, so that each opens at its top.
-	ui.Scroll(c.Key(a.at)).Fill().Background(t.Background).Children(func() {
+	ui.Scroll(c.Key(a.at)).Grow(1).MinHeight(0).Background(t.Background).Children(func() {
 		col := ui.Column(c).MaxWidth(680).Margin(0, ui.Auto).Padding(32, 36).Selectable()
 		col.Children(func() {
 			if text == "" {
@@ -314,6 +409,14 @@ func revealLabel() string {
 		return "Show in Finder"
 	}
 	return "Show in Folder"
+}
+
+// revealScanLabel names showing the PDF read in the file manager.
+func revealScanLabel() string {
+	if runtime.GOOS == "darwin" {
+		return "Show Scan in Finder"
+	}
+	return "Show Scan in Folder"
 }
 
 func plural(n int, noun string) string {

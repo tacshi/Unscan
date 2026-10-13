@@ -21,10 +21,6 @@ run locally through ONNX Runtime, so documents never leave the computer.
 It is built for Chinese and English documents, and written in Go without
 cgo.
 
-> **Status:** early prototype (v0.1.0), built with
-> [MyGo](https://github.com/egoist/mygo). macOS on Apple silicon is the
-> primary platform.
-
 ## What it makes
 
 | Output | What you get |
@@ -110,9 +106,28 @@ dropping it anywhere on the window, or with `open -a Unscan scan.pdf`,
 even while the models are still loading. The window and the Dock icon
 show how many pages have been read and about how long the rest will take.
 
+Open or drop several PDFs, or more while one is read, and they are read
+in turn: the sidebar shows the one being read and those waiting, which
+✕ takes out of the queue. You can browse the PDFs read meanwhile; each
+joins them as it is done. **Cancel** stops the PDF being read and goes
+on to the next, and **Cancel All** stops them all.
+
 When it is done, browse the document a page at a time, as the
 **Searchable PDF**, the **Retyped PDF** or the **Text**; the arrow keys
 turn the pages. **Save…** (⌘S) saves the one shown.
+
+**Compare with Original** (the button beside **Save…**, or **View ›
+Compare with Original**) shows the scanned page beside the retyped page
+or its text, to check what was read; drag the line between them to
+resize them. The searchable PDF looks just like the scan, so it shows
+alone.
+
+Every PDF read stays in the sidebar (**View › Hide Sidebar**, ⌥⌘S),
+newest first, to open again without reading it again. Its searchable and
+retyped PDFs are kept in `history/` in the app's user data folder
+(`~/Library/Application Support/Unscan` on macOS) until you remove them:
+**Remove from History…** in a row's context menu, or Delete, removes one,
+and **Clear…** removes them all. The scans themselves are never touched.
 
 ### Command line
 
@@ -193,6 +208,24 @@ these environment variables:
 | `NOTARY_PROFILE` | Notarizes the disk image with this keychain profile, made by `xcrun notarytool store-credentials`, and staples the ticket. |
 | `SKIP_TESTS=1` | Builds without running the tests first. |
 
+### Publishing
+
+```sh
+scripts/publish.sh 2026.10.0               # build, sign, notarize, review the notes, publish
+scripts/publish.sh 2026.10.0 --no-upload   # the signed, notarized disk image in build/publish only
+```
+
+`publish.sh` releases from a clean, pushed `main` (`--allow-branch` for
+another branch). It builds with the release script, signed with the
+keychain's Developer ID and notarized with the `Unscan` keychain profile
+(`MACOS_SIGNING_IDENTITY` and `NOTARY_PROFILE` choose others). It then
+tags the commit `v2026.10.0` and publishes a GitHub release with the disk
+image, as `Unscan-2026.10.0-arm64.dmg`. Its notes come from
+`release-notes/Unscan-2026.10.0.md` when that exists. Otherwise they are
+drafted from the commits since the last release, for you to review or
+edit first. The version is given to the build for the run only, so
+`mygo.json` needs no commit for a release.
+
 ## How it works
 
 Everything builds with `CGO_ENABLED=0`, as MyGo requires:
@@ -237,7 +270,8 @@ what each package's tests check.
 
 ```
 main.go                  the app: state, actions, effects (dialogs, the menu bar, the Dock)
-view.go                  the window: the PDF asked for, the progress, the pages in each form
+view.go                  the window: the PDF asked for, the progress, the pages in each form, compared
+history.go               the PDFs read before: kept on disk, listed in the sidebar, removed
 fonts.go                 the user's fonts for retyped PDFs: the Fonts dialog, and the choice saved
 cmd/unscan/              the command line version
 cmd/fetchdeps/           downloads and checks the models and runtimes

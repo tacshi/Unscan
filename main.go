@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 
@@ -49,10 +50,10 @@ type effects struct {
 	spawn   func(func()) // run in the background
 	convert func(ctx context.Context, path string, progress pdfocr.Progress) (*result, error)
 	render  func(path string, page int) (image.Image, error) // a page's preview
-	open    func() (string, error)                           // ask for a PDF; "" when canceled
+	open    func() ([]string, error)                         // ask for PDFs; none when canceled
 	saveAs  func(name string) (string, error)
 	reveal  func(path string)      // show a file in the file manager
-	menu    func(open, save bool)  // enable the menu bar's Open and Save
+	menu    func(menuState)        // set the menu bar's items
 	dock    func(progress float64) // the Dock's progress bar; negative removes it
 	attend  func()                 // draw the user back to the window
 
@@ -73,21 +74,33 @@ type app struct {
 	err    string // why the last PDF could not be read
 	toast  *toast // to show in the next build
 
-	file        string    // the PDF being read
+	file        string    // the PDF being read, or ""
+	queue       []string  // the PDFs to read after it, in turn
+	batchDone   int       // PDFs read, or not, since the queue was last empty
 	waiting     bool      // file waits for the models to load
 	page, pages int       // pages read so far, of pages
 	counted     time.Time // when the pages were counted
 	cancel      context.CancelFunc
 	run         int // counts runs, so that a canceled one's result is dropped
 
-	result    *result   // the document shown
+	result    *result   // the document shown, of the history, or shown last while phase is working
 	form      int       // searchable, retyped or plainText
 	at        int       // the page shown
 	pageArea  ui.Handle // where the page shows, whose arrows turn it
 	previews  map[preview]rendered
 	rendering bool // a preview is being rendered
 
-	menuOpen, menuSave bool // what the menu bar was last told
+	comparing bool    // the original shows beside the form shown, where they differ
+	split     float32 // the share of the page area the original takes; 0 for half
+
+	history     []*result // the documents read, newest first
+	sidebar     bool      // the sidebar listing them shows, when there are any
+	historyList ui.ListState
+	chosen      int       // the row of the sidebar chosen
+	removing    []*result // to remove from the history, once the user agrees
+	asking      bool      // whether to remove them
+
+	menu menuState // what the menu bar was last told
 
 	fonts                  fontChoices // for retyped PDFs, the user's
 	fontsOpen              bool        // the Fonts dialog shows
@@ -108,15 +121,25 @@ type rendered struct {
 	err    error
 }
 
+// menuState is what the menu bar shows: the items that can be chosen now,
+// and the state of those that show one.
+type menuState struct {
+	open, save           bool
+	sidebar, haveHistory bool // the sidebar is to show; there is history to show in it
+	compare, canCompare  bool
+}
+
 // result is what reading a PDF made: its pages' text, and the PDFs, which
-// stay in temporary files until the user saves them, as a long document's
-// would fill memory.
+// stay in files in the history until the user removes them, as a long
+// document's would fill memory.
 type result struct {
-	file    string // the PDF read
+	file    string    // the PDF read
+	read    time.Time // when
 	pages   []pdfocr.Page
 	pdf     string // the searchable PDF
 	textPDF string // the text PDF
 	dir     string // the directory they are in, removed with them, or ""
+	size    int64  // of the files in dir, in bytes
 }
 
 // remove removes the result's files.
@@ -126,50 +149,116 @@ func (r *result) remove() {
 	}
 }
 
-// canOpen reports whether a PDF can be opened now.
-func (a *app) canOpen() bool { return a.phase != working && a.broken == "" }
+// path is the file of the PDF in form, searchable or retyped.
+func (r *result) path(form int) string {
+	if form == retyped {
+		return r.textPDF
+	}
+	return r.pdf
+}
 
-// choose asks for a PDF and reads it.
+// canOpen reports whether PDFs can be opened: those opened while one is
+// read wait their turn.
+func (a *app) canOpen() bool { return a.broken == "" }
+
+// choose asks for PDFs and reads them.
 func (a *app) choose() {
 	if !a.canOpen() {
 		return
 	}
 	a.fx.spawn(func() {
-		path, err := a.fx.open()
+		paths, err := a.fx.open()
 		a.fx.update(func() {
-			switch {
-			case err != nil:
+			if err != nil {
 				a.toast = &toast{title: "Couldn’t open the PDF", detail: err.Error()}
-			case path != "":
-				a.start(path)
+				return
 			}
+			a.add(paths...)
 		})
 	})
 }
 
-// drop reads the first PDF of files dropped on the window.
+// drop reads the PDFs among files dropped on the window, and says which
+// files are not PDFs.
 func (a *app) drop(files []string) {
+	var pdfs, others []string
 	for _, f := range files {
 		if strings.EqualFold(filepath.Ext(f), ".pdf") {
-			a.start(f)
-			return
+			pdfs = append(pdfs, f)
+		} else {
+			others = append(others, f)
 		}
 	}
-	a.toast = &toast{title: fmt.Sprintf("“%s” isn’t a PDF", filepath.Base(files[0]))}
+	a.add(pdfs...)
+	switch len(others) {
+	case 0:
+	case 1:
+		a.toast = &toast{title: fmt.Sprintf("“%s” isn’t a PDF", filepath.Base(others[0]))}
+	default:
+		a.toast = &toast{title: fmt.Sprintf("%d files aren’t PDFs", len(others))}
+	}
 }
 
-// start reads the PDF at path, once the models have loaded. The document
-// shown stays until it is read.
-func (a *app) start(path string) {
+// add reads the PDFs at paths in turn, after the one being read and those
+// waiting, leaving out those among them. With none being read, the first
+// is read at once, and its progress shows.
+func (a *app) add(paths ...string) {
 	if !a.canOpen() {
 		return
 	}
+	for _, path := range paths {
+		switch {
+		case path == a.file || slices.Contains(a.queue, path):
+		case a.file == "":
+			a.phase = working
+			a.begin(path)
+		default:
+			a.queue = append(a.queue, path)
+		}
+	}
+}
+
+// begin reads the PDF at path, once the models have loaded.
+func (a *app) begin(path string) {
 	a.run++
-	a.phase, a.err, a.file = working, "", path
+	a.err, a.file = "", path
 	a.page, a.pages, a.counted = 0, 0, time.Time{}
 	a.waiting = a.fx.convert == nil
 	if !a.waiting {
 		a.read()
+	}
+}
+
+// next reads the next PDF waiting. With none, the batch ends, and the
+// progress, if it shows, gives way to the document shown before.
+func (a *app) next() {
+	a.batchDone++
+	if len(a.queue) > 0 {
+		path := a.queue[0]
+		a.queue = a.queue[1:]
+		a.begin(path)
+		return
+	}
+	a.file, a.batchDone = "", 0
+	a.fx.dock(-1)
+	if a.phase == working {
+		a.back()
+	}
+}
+
+// unqueue takes the PDF at path out of those waiting.
+func (a *app) unqueue(path string) {
+	a.queue = slices.DeleteFunc(a.queue, func(p string) bool { return p == path })
+}
+
+// batch returns which of the PDFs of the batch is being read, and how
+// many it has.
+func (a *app) batch() (at, of int) { return a.batchDone + 1, a.batchDone + 1 + len(a.queue) }
+
+// watch shows the progress of the PDF being read.
+func (a *app) watch() {
+	if a.file != "" {
+		a.phase = working
 	}
 }
 
@@ -185,6 +274,7 @@ func (a *app) loaded(err error) {
 	case err != nil:
 		a.broken = err.Error()
 		if waiting {
+			a.file, a.queue, a.batchDone = "", nil, 0
 			a.back()
 		}
 	case waiting:
@@ -209,7 +299,8 @@ func (a *app) read() {
 					a.counted = time.Now()
 				}
 				a.page, a.pages = page, pages
-				a.fx.dock(float64(page) / float64(max(pages, 1)))
+				at, of := a.batch()
+				a.fx.dock((float64(at-1) + float64(page)/float64(max(pages, 1))) / float64(of))
 			})
 		})
 		a.fx.update(func() {
@@ -218,28 +309,48 @@ func (a *app) read() {
 				return
 			}
 			a.cancel = nil
-			a.fx.dock(-1)
-			a.fx.attend()
 			if err != nil {
-				a.back()
+				// With nothing else to show, the welcome says why.
 				msg := fmt.Sprintf("Couldn’t read “%s”", filepath.Base(path))
-				if a.phase == done {
-					a.toast = &toast{title: msg, detail: err.Error()}
-				} else {
+				if len(a.queue) == 0 && a.result == nil {
 					a.err = msg + ": " + err.Error()
+				} else {
+					a.toast = &toast{title: msg, detail: err.Error()}
 				}
-				return
+			} else {
+				res.file = path
+				if res.read.IsZero() {
+					res.read = time.Now()
+				}
+				a.history = slices.Insert(a.history, 0, res)
+				// Shown if its progress was, as the next PDF is read.
+				if a.phase == working {
+					a.show(res)
+				}
 			}
-			res.file = path
-			a.result.remove()
-			a.phase, a.result = done, res
-			a.form, a.at = searchable, 0
-			a.previews, a.rendering = map[preview]rendered{}, false
+			a.next()
+			if a.file == "" {
+				a.fx.attend()
+			}
 		})
 	})
 }
 
-// stop stops reading, and goes back to the document shown before, if any.
+// show shows r, from its first page, in the form shown; nil shows the
+// progress of the PDF being read, or asks for one.
+func (a *app) show(r *result) {
+	a.setResult(r)
+	a.back()
+}
+
+// setResult makes r the document shown, from its first page, in the form
+// shown, once the document is.
+func (a *app) setResult(r *result) {
+	a.result, a.at = r, 0
+	a.previews, a.rendering = map[preview]rendered{}, false
+}
+
+// stop stops reading the PDF being read, and reads the next one waiting.
 func (a *app) stop() {
 	if a.cancel != nil {
 		a.cancel()
@@ -247,15 +358,25 @@ func (a *app) stop() {
 	}
 	a.run++
 	a.waiting = false
-	a.fx.dock(-1)
-	a.back()
+	a.next()
 }
 
-// back shows the document read last, or asks for one.
+// stopAll stops reading, and forgets the PDFs waiting.
+func (a *app) stopAll() {
+	a.queue = nil
+	a.stop()
+}
+
+// back shows the document shown last, else the progress of the PDF being
+// read, else asks for one.
 func (a *app) back() {
-	a.phase = idle
-	if a.result != nil {
+	switch {
+	case a.result != nil:
 		a.phase = done
+	case a.file != "":
+		a.phase = working
+	default:
+		a.phase = idle
 	}
 }
 
@@ -264,46 +385,66 @@ func (a *app) turn(i int) {
 	a.at = min(max(i, 0), len(a.result.pages)-1)
 }
 
+// compares reports whether the original shows beside the form shown: the
+// searchable PDF, which looks just like it, shows alone.
+func (a *app) compares() bool { return a.comparing && a.phase == done && a.form != searchable }
+
+// toggleCompare shows the original beside the form shown, or stops.
+func (a *app) toggleCompare() { a.comparing = !a.comparing }
+
 // renderPreviews renders the preview the document view needs next, one at
-// a time: the page shown, then those beside it, so that turning to them
-// shows them at once. It forgets those further away.
+// a time: the page shown, in the forms shown, then those beside it, so
+// that turning to them shows them at once. It forgets those further away.
+// The original's preview is the searchable PDF's, whose text is invisible.
 func (a *app) renderPreviews() {
-	if a.phase != done || a.form == plainText || a.rendering {
+	if a.phase != done || a.rendering {
 		return
+	}
+	var shown []int
+	if a.compares() {
+		shown = append(shown, searchable)
+	}
+	if a.form != plainText {
+		shown = append(shown, a.form)
 	}
 	r := a.result
-	path := r.pdf
-	if a.form == retyped {
-		path = r.textPDF
-	}
 	for _, page := range []int{a.at, a.at + 1, a.at - 1} {
-		key := preview{a.form, page}
-		if _, ok := a.previews[key]; ok || page < 0 || page >= len(r.pages) {
-			continue
+		for _, form := range shown {
+			key := preview{form, page}
+			if _, ok := a.previews[key]; ok || page < 0 || page >= len(r.pages) {
+				continue
+			}
+			a.render(key)
+			return
 		}
-		a.rendering = true
-		render := a.fx.render
-		a.fx.spawn(func() {
-			img, err := render(path, page)
-			a.fx.update(func() {
-				if a.result != r {
-					return
-				}
-				a.rendering = false
-				p := rendered{err: err}
-				if err == nil {
-					p.bitmap = ui.NewBitmap(img)
-				}
-				a.previews[key] = p
-				for k := range a.previews {
-					if k.page < a.at-1 || k.page > a.at+1 {
-						delete(a.previews, k)
-					}
-				}
-			})
-		})
-		return
 	}
+}
+
+// render renders a preview of the document shown in the background.
+func (a *app) render(key preview) {
+	r := a.result
+	path, page := r.path(key.form), key.page
+	a.rendering = true
+	render := a.fx.render
+	a.fx.spawn(func() {
+		img, err := render(path, page)
+		a.fx.update(func() {
+			if a.result != r {
+				return
+			}
+			a.rendering = false
+			p := rendered{err: err}
+			if err == nil {
+				p.bitmap = ui.NewBitmap(img)
+			}
+			a.previews[key] = p
+			for k := range a.previews {
+				if k.page < a.at-1 || k.page > a.at+1 {
+					delete(a.previews, k)
+				}
+			}
+		})
+	})
 }
 
 // save asks where to save the document in the form shown, and saves it
@@ -347,12 +488,17 @@ func (a *app) saveFile(name string, write func(path string) error) {
 	})
 }
 
-// syncMenu enables the menu bar's items that can be used now.
+// syncMenu enables the menu bar's items that can be used now, and shows
+// what the window shows.
 func (a *app) syncMenu() {
-	open, save := a.canOpen(), a.phase == done
-	if open != a.menuOpen || save != a.menuSave {
-		a.menuOpen, a.menuSave = open, save
-		a.fx.menu(open, save)
+	m := menuState{
+		open: a.canOpen(), save: a.phase == done,
+		sidebar: a.sidebar, haveHistory: a.listed(),
+		compare: a.comparing, canCompare: a.phase == done && a.form != searchable,
+	}
+	if m != a.menu {
+		a.menu = m
+		a.fx.menu(m)
 	}
 }
 
@@ -375,18 +521,20 @@ func copyFile(dst, src string) error {
 }
 
 // convertFile reads the PDF at path, and writes the PDFs it makes of it to
-// a temporary directory, which is removed if it fails.
-func convertFile(ctx context.Context, conv *pdfocr.Converter, path string, progress pdfocr.Progress) (_ *result, err error) {
+// a directory of its own in the history directory (the temporary one when
+// ""), with what makes it part of the history last. The directory is
+// removed if it fails.
+func convertFile(ctx context.Context, conv *pdfocr.Converter, history, path string, progress pdfocr.Progress) (_ *result, err error) {
 	in, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
 	defer in.Close()
-	dir, err := os.MkdirTemp("", "unscan-")
+	dir, err := os.MkdirTemp(history, "read-")
 	if err != nil {
 		return nil, err
 	}
-	r := &result{dir: dir, pdf: filepath.Join(dir, "searchable.pdf"), textPDF: filepath.Join(dir, "text.pdf")}
+	r := &result{file: path, dir: dir, pdf: filepath.Join(dir, "searchable.pdf"), textPDF: filepath.Join(dir, "text.pdf")}
 	defer func() {
 		if err != nil {
 			r.remove()
@@ -411,6 +559,11 @@ func convertFile(ctx context.Context, conv *pdfocr.Converter, path string, progr
 	if err := textPDF.Close(); err != nil {
 		return nil, err
 	}
+	r.read = time.Now()
+	if err := r.save(); err != nil {
+		return nil, err
+	}
+	r.size = dirSize(dir)
 	return r, nil
 }
 
@@ -451,7 +604,7 @@ func loadEngine() (*pdfocr.Converter, error) {
 }
 
 func main() {
-	a := &app{}
+	a := &app{sidebar: true}
 	var win *mygo.Window
 	var launched []string // files the app was opened with before its window
 	// Files opened with the app, as by `open -a Unscan scan.pdf`.
@@ -492,34 +645,44 @@ func main() {
 				{Role: mygo.RoleClose},
 			}},
 			{Role: mygo.RoleEditMenu},
-			{Label: "View", Submenu: []*mygo.MenuItem{{Role: mygo.RoleToggleFullScreen}}},
+			{Label: "View", Submenu: []*mygo.MenuItem{
+				{ID: "sidebar", Label: "Hide Sidebar", Accelerator: "CmdOrCtrl+Alt+S", Disabled: true, Click: do(a.toggleSidebar)},
+				{ID: "compare", Label: "Compare with Original", Type: mygo.MenuItemCheckbox, Disabled: true, Click: do(a.toggleCompare)},
+				mygo.Separator(),
+				{Role: mygo.RoleToggleFullScreen},
+			}},
 			{Role: mygo.RoleWindowMenu},
 		})
 		mygo.App.SetMenu(menu)
 		pdfFilter := []mygo.FileFilter{{Name: "PDF", Extensions: []string{"pdf"}}}
 		fontFilter := []mygo.FileFilter{{Name: "TrueType Font", Extensions: []string{"ttf", "ttc"}}}
-		fontsPath := ""
+		fontsPath, historyDir := "", ""
 		if dir, err := mygo.App.Path(mygo.PathUserData); err == nil {
 			fontsPath = filepath.Join(dir, "fonts.json")
 			a.fonts = loadFonts(fontsPath)
+			if history := filepath.Join(dir, "history"); os.MkdirAll(history, 0o755) == nil {
+				historyDir = history
+			}
 		}
 		a.fx = effects{
 			update: func(fn func()) { win.Update(fn) },
 			spawn:  func(fn func()) { go fn() },
-			open: func() (string, error) {
-				paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{Parent: win, Title: "Open a Scanned PDF", Filters: pdfFilter})
-				if err != nil || len(paths) == 0 {
-					return "", err
-				}
-				return paths[0], nil
+			open: func() ([]string, error) {
+				return mygo.Dialog.Open(mygo.OpenDialogOptions{Parent: win, Title: "Open Scanned PDFs", Filters: pdfFilter, Multiple: true})
 			},
 			saveAs: func(name string) (string, error) {
 				return mygo.Dialog.Save(mygo.SaveDialogOptions{Parent: win, DefaultPath: name, CreateDirectories: true})
 			},
 			reveal: mygo.Shell.ShowItemInFolder,
-			menu: func(open, save bool) {
-				menu.ItemByID("open").SetEnabled(open)
-				menu.ItemByID("save").SetEnabled(save)
+			menu: func(m menuState) {
+				menu.ItemByID("open").SetEnabled(m.open)
+				menu.ItemByID("save").SetEnabled(m.save)
+				sidebar := menu.ItemByID("sidebar")
+				sidebar.SetEnabled(m.haveHistory)
+				sidebar.SetLabel(sidebarLabel(m.sidebar))
+				compare := menu.ItemByID("compare")
+				compare.SetEnabled(m.canCompare)
+				compare.SetChecked(m.compare)
 			},
 			dock: func(progress float64) { win.SetProgressBar(mygo.ProgressBar{Value: max(progress, 0)}) },
 			attend: func() {
@@ -559,11 +722,15 @@ func main() {
 			win.Update(func() { a.drop(launched) })
 		}
 		go func() {
+			// Before the models load, so that no PDF is read before the
+			// history is.
+			history := loadHistory(historyDir, time.Now())
+			win.Update(func() { a.history = append(a.history, history...) })
 			conv, err := loadEngine()
 			win.Update(func() {
 				if err == nil {
 					a.fx.convert = func(ctx context.Context, path string, p pdfocr.Progress) (*result, error) {
-						return convertFile(ctx, conv, path, p)
+						return convertFile(ctx, conv, historyDir, path, p)
 					}
 					a.fx.render = func(path string, page int) (image.Image, error) {
 						return conv.Preview(path, page, previewSize)
@@ -574,7 +741,6 @@ func main() {
 			})
 		}()
 	})
-	mygo.App.OnQuit(func() { a.result.remove() })
 	if err := mygo.App.Run(); err != nil {
 		log.Fatal(err)
 	}

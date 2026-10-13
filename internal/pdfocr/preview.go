@@ -10,8 +10,8 @@ import (
 )
 
 // Preview renders page index of the PDF at path to be shown, as large as
-// fits in size by size pixels. It waits for a conversion running to end,
-// as they share PDFium.
+// fits in size by size pixels, with PDFium's second instance while a
+// conversion runs.
 func (c *Converter) Preview(path string, index, size int) (*image.RGBA, error) {
 	f, err := os.Open(path)
 	if err != nil {
