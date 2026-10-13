@@ -103,8 +103,12 @@ func dirSize(dir string) int64 {
 	return size
 }
 
-// showsSidebar reports whether the sidebar listing the history shows.
-func (a *app) showsSidebar() bool { return a.sidebar && len(a.history) > 0 }
+// listed reports whether the sidebar has PDFs to list: those read, and
+// those waiting to be.
+func (a *app) listed() bool { return len(a.history) > 0 || len(a.queue) > 0 }
+
+// showsSidebar reports whether the sidebar listing the PDFs shows.
+func (a *app) showsSidebar() bool { return a.sidebar && a.listed() }
 
 // toggleSidebar shows the sidebar, or hides it.
 func (a *app) toggleSidebar() { a.sidebar = !a.sidebar }
@@ -118,7 +122,7 @@ func (a *app) askRemove(rs ...*result) {
 
 // removeFromHistory removes rs from the history, and their files. In
 // place of one shown, the one below it shows, else the one above, else
-// none.
+// none; where the progress shows, it stays.
 func (a *app) removeFromHistory(rs []*result) {
 	gone := func(r *result) bool { return slices.Contains(rs, r) }
 	if a.result != nil && gone(a.result) {
@@ -135,7 +139,11 @@ func (a *app) removeFromHistory(rs []*result) {
 				next = a.history[j]
 			}
 		}
-		a.show(next)
+		if a.phase == working {
+			a.setResult(next)
+		} else {
+			a.show(next)
+		}
 	}
 	a.history = slices.DeleteFunc(a.history, gone)
 	a.fx.spawn(func() {
@@ -153,12 +161,16 @@ func (a *app) removeFromHistory(rs []*result) {
 	})
 }
 
-// historySidebar lists the PDFs read before, newest first, of which the
-// one chosen shows. Its rows' menus remove them, as Delete does.
+// historySidebar lists the PDF being read and those waiting, then those
+// read before, newest first, of which the one chosen shows. Its rows'
+// menus remove them, as Delete does.
 func (a *app) historySidebar(c *ui.Context) {
 	t := c.Theme()
 	now := time.Now()
-	a.chosen = slices.Index(a.history, a.result)
+	a.chosen = -1
+	if a.phase == done {
+		a.chosen = slices.Index(a.history, a.result)
+	}
 	l := &a.historyList
 	l.Key = func(i int) any { return a.history[i] }
 	l.Label = func(i int) string { return filepath.Base(a.history[i].file) }
@@ -172,12 +184,23 @@ func (a *app) historySidebar(c *ui.Context) {
 	l.Handle.OnShortcut(c, 0, ui.KeyDelete, removeChosen)
 	side := ui.Column(c).Width(sidebarWidth).Shrink(0).Background(t.Surface).BorderWidth(0, 1, 0, 0).BorderColor(t.Border)
 	side.Children(func() {
+		if a.file != "" {
+			// At most half the sidebar, scrolling, so that the history shows.
+			ui.Scroll(c.Key("queue")).Shrink(0).MaxHeightPercent(50).BorderWidth(0, 0, 1, 0).BorderColor(t.Border).Children(func() {
+				ui.Column(c).Padding(t.Space(1)).Gap(2).Children(func() {
+					a.readingRow(c)
+					for _, path := range a.queue {
+						a.queuedRow(c.Key(path), path)
+					}
+				})
+			})
+		}
 		list := ui.List(c.Key("history"), l, len(a.history)).Grow(1).MinHeight(0).Padding(t.Space(1)).Label("History").
-			Disabled(a.phase == working).OnChange(func() {
-			if a.chosen >= 0 && a.chosen < len(a.history) {
-				a.show(a.history[a.chosen])
-			}
-		})
+			OnChange(func() {
+				if a.chosen >= 0 && a.chosen < len(a.history) {
+					a.show(a.history[a.chosen])
+				}
+			})
 		list.Rows(func(row ui.ListRow) {
 			c, r := row.Context, a.history[row.Index]
 			muted := t.TextMuted
@@ -204,6 +227,43 @@ func (a *app) historySidebar(c *ui.Context) {
 				ui.Text(c, a.historySize()).FontSize(12).TextColor(t.TextMuted).FontFeatures("tnum").SingleLine().Grow(1).MinWidth(0)
 				ui.Button(c.Key("clear"), "Clear…").Tooltip("Clear History").OnClick(func() { a.askRemove(a.history...) })
 			})
+	})
+}
+
+// readingRow shows the PDF being read and how far it has come: chosen, its
+// progress shows.
+func (a *app) readingRow(c *ui.Context) {
+	t := c.Theme()
+	value, status, _ := a.status()
+	row := ui.ButtonBase(c.Key("reading")).Label("Reading "+filepath.Base(a.file)).
+		Padding(t.Space(1.5), t.Space(2)).Radius(t.Radius).OnClick(a.watch)
+	switch {
+	case a.phase == working:
+		row.Background(t.Accent.Alpha(0.14))
+	case row.Pressed():
+		row.Background(t.SurfacePressed)
+	case row.Hovered():
+		row.Background(t.SurfaceHover)
+	}
+	row.Children(func() {
+		ui.Column(c).Grow(1).MinWidth(0).Gap(4).Children(func() {
+			ui.Text(c, filepath.Base(a.file)).Bold().SingleLine()
+			ui.Progress(c, value)
+			ui.Text(c, status).FontSize(12).TextColor(t.TextMuted).FontFeatures("tnum").SingleLine()
+		})
+	})
+}
+
+// queuedRow shows a PDF waiting to be read, with a button that takes it
+// out of the queue.
+func (a *app) queuedRow(c *ui.Context, path string) {
+	t := c.Theme()
+	ui.Row(c).Padding(t.Space(1), t.Space(1), t.Space(1), t.Space(2)).Gap(4).Children(func() {
+		ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
+			ui.Text(c, filepath.Base(path)).SingleLine()
+			ui.Text(c, "Waiting").FontSize(12).TextColor(t.TextMuted).SingleLine()
+		})
+		iconButton(c, removeIcon, "Remove from Queue", "", false).OnClick(func() { a.unqueue(path) })
 	})
 }
 

@@ -5,6 +5,7 @@ import (
 	"context"
 	"image"
 	"image/draw"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -615,6 +616,48 @@ func TestPreview(t *testing.T) {
 	}
 	if _, err := c.Preview(path, 2, 400); err == nil {
 		t.Error("a page past the end rendered")
+	}
+}
+
+// TestPreviewWhileConverting renders a preview while a conversion holds
+// PDFium, as the app does while it reads a PDF, without waiting for it.
+func TestPreviewWhileConverting(t *testing.T) {
+	c := newTestConverter(t)
+	img, err := testscan.Page(english, testscan.LatinFont, 0)
+	if err != nil {
+		t.Skip(err)
+	}
+	page := testscan.ScanPage{Image: img, DPI: 300}
+	input, err := testscan.PDF([]testscan.ScanPage{page, page, page, page})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "scan.pdf")
+	if err := os.WriteFile(path, input, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{})
+	converted := make(chan error, 1)
+	go func() {
+		_, err := c.Convert(context.Background(), bytes.NewReader(input), Output{PDF: io.Discard}, Options{}, func(done, pages int) {
+			if done == 0 {
+				close(started)
+			}
+		})
+		converted <- err
+	}()
+	<-started
+	if _, err := c.Preview(path, 1, 400); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err = <-converted:
+		t.Error("the preview waited for the conversion to end")
+	default:
+		err = <-converted
+	}
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 

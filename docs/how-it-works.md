@@ -41,6 +41,13 @@ at most. So the pages of an input bigger than 512 MB have their layer
 added in batches, each saved to a temporary file that is opened anew for
 the next, which lets go of the batch's scans; the saves take seconds.
 
+A conversion holds its PDFium instance from start to end, so the pool
+has a second, which renders the app's previews while a PDF is read, as
+the user browses the ones read before. It is made from the module
+compiled for the first, and goes once both are idle, with the memory it
+grew into; rendering previews throughout a conversion added nothing
+measurable to its peak memory.
+
 ## How the text PDF is made
 
 For each scanned page, at the resolution it was read at:

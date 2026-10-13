@@ -110,6 +110,12 @@ dropping it anywhere on the window, or with `open -a Unscan scan.pdf`,
 even while the models are still loading. The window and the Dock icon
 show how many pages have been read and about how long the rest will take.
 
+Open or drop several PDFs, or more while one is read, and they are read
+in turn: the sidebar shows the one being read and those waiting, which
+✕ takes out of the queue. You can browse the PDFs read meanwhile; each
+joins them as it is done. **Cancel** stops the PDF being read and goes
+on to the next, and **Cancel All** stops them all.
+
 When it is done, browse the document a page at a time, as the
 **Searchable PDF**, the **Retyped PDF** or the **Text**; the arrow keys
 turn the pages. **Save…** (⌘S) saves the one shown.

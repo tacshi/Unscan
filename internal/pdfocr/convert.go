@@ -109,7 +109,10 @@ func New(engine *ocr.Engine, cacheDir string) (*Converter, error) {
 	}
 	pool, err := webassembly.Init(webassembly.Config{
 		Context: experimental.WithMemoryAllocator(context.Background(), wasmAllocator()),
-		MinIdle: 1, MaxIdle: 1, MaxTotal: 1,
+		// A conversion holds an instance throughout, so a second lets
+		// previews render meanwhile; it goes once both are idle, with the
+		// memory it grew into.
+		MinIdle: 1, MaxIdle: 1, MaxTotal: 2,
 		// Documents are read through callbacks: PDFium sees no files at all.
 		FSConfig:      wazero.NewFSConfig(),
 		RuntimeConfig: rc,

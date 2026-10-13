@@ -26,6 +26,7 @@ var (
 	documentIcon = icon(`<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M9 13h6M9 17h4"/>`)
 	previousIcon = icon(`<path d="m15 18-6-6 6-6"/>`)
 	nextIcon     = icon(`<path d="m9 18 6-6-6-6"/>`)
+	removeIcon   = icon(`<path d="M18 6 6 18M6 6l12 12"/>`)
 	sidebarIcon  = icon(`<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/>`)
 	compareIcon  = icon(`<path d="M8 19H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h3"/><path d="M16 5h3a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-3"/><path d="M12 4v16"/>`)
 )
@@ -77,7 +78,7 @@ func (a *app) titleBar(c *ui.Context) {
 	bar := c.TitleBar()
 	row := ui.Row(c).Height(barHeight).Shrink(0).Padding(0, bar.Right+12, 0, bar.Left+16).Gap(12).DragWindow()
 	if a.phase == idle && !a.showsSidebar() {
-		if len(a.history) > 0 {
+		if a.listed() {
 			row.Children(func() { a.sidebarButton(c) })
 		}
 		return
@@ -86,7 +87,7 @@ func (a *app) titleBar(c *ui.Context) {
 	row.Children(func() {
 		title := ui.Row(c).Grow(1).Basis(0).MinWidth(0).Gap(8)
 		title.Children(func() {
-			if len(a.history) > 0 {
+			if a.listed() {
 				a.sidebarButton(c)
 			}
 			switch a.phase {
@@ -192,7 +193,31 @@ func (a *app) welcome(c *ui.Context, dragging bool) {
 // progress shows how far reading has come.
 func (a *app) progress(c *ui.Context) {
 	t := c.Theme()
-	value, status, left := -1.0, "Opening…", ""
+	value, status, left := a.status()
+	ui.Column(c).Grow(1).Center().Padding(24).Children(func() {
+		ui.Column(c).Width(360).MaxWidthPercent(100).Gap(8).Children(func() {
+			ui.Progress(c, value).Label("Reading " + filepath.Base(a.file))
+			ui.Row(c).Gap(12).FontFeatures("tnum").Children(func() {
+				ui.Text(c, status).Grow(1)
+				ui.Text(c, left).TextColor(t.TextMuted)
+			})
+			if at, of := a.batch(); of > 1 {
+				ui.Textf(c, "%d of %d PDFs", at, of).TextColor(t.TextMuted).FontFeatures("tnum")
+			}
+			ui.Row(c).AlignSelf(ui.Center).Gap(8).Margin(16, 0, 0, 0).Children(func() {
+				ui.Button(c, "Cancel").OnClick(a.stop)
+				if len(a.queue) > 0 {
+					ui.Button(c, "Cancel All").OnClick(a.stopAll)
+				}
+			})
+		})
+	})
+}
+
+// status says how far reading the PDF has come: the share of its pages
+// read, -1 until they are counted, in words, and how long the rest take.
+func (a *app) status() (value float64, status, left string) {
+	value, status = -1, "Opening…"
 	switch {
 	case a.waiting:
 		status = "Getting ready…"
@@ -203,16 +228,7 @@ func (a *app) progress(c *ui.Context) {
 		status = fmt.Sprintf("%d of %s", a.page, plural(a.pages, "page"))
 		left = timeLeft(time.Since(a.counted), a.page, a.pages)
 	}
-	ui.Column(c).Grow(1).Center().Padding(24).Children(func() {
-		ui.Column(c).Width(360).MaxWidthPercent(100).Gap(8).Children(func() {
-			ui.Progress(c, value).Label("Reading " + filepath.Base(a.file))
-			ui.Row(c).Gap(12).FontFeatures("tnum").Children(func() {
-				ui.Text(c, status).Grow(1)
-				ui.Text(c, left).TextColor(t.TextMuted)
-			})
-			ui.Button(c, "Cancel").AlignSelf(ui.Center).Margin(16, 0, 0, 0).OnClick(a.stop)
-		})
-	})
+	return value, status, left
 }
 
 // timeLeft guesses how long the rest of the pages take, from how long done
@@ -260,7 +276,7 @@ func (a *app) document(c *ui.Context, dragging bool) {
 		if dragging {
 			ui.Column(c).Absolute().Top(8).Right(8).Bottom(8).Left(8).Center().Radius(12).
 				Border(2, t.Accent).BorderStyle(ui.BorderDashed).Background(t.Background.Alpha(0.9)).
-				Children(func() { ui.Text(c, "Drop to read this PDF").FontSize(17).Bold() })
+				Children(func() { ui.Text(c, "Drop PDFs to read them").FontSize(17).Bold() })
 		}
 	})
 
@@ -290,7 +306,11 @@ func (a *app) document(c *ui.Context, dragging bool) {
 // the page.
 func iconButton(c *ui.Context, icon *ui.SVG, label, key string, disabled bool) ui.Element {
 	t := c.Theme()
-	b := ui.ButtonBase(c).Label(label).Tooltip(label + " (" + key + ")").Disabled(disabled).
+	tip := label
+	if key != "" {
+		tip += " (" + key + ")"
+	}
+	b := ui.ButtonBase(c).Label(label).Tooltip(tip).Disabled(disabled).
 		Padding(t.Space(1.5)).Radius(t.Radius)
 	switch {
 	case disabled:

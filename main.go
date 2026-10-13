@@ -50,7 +50,7 @@ type effects struct {
 	spawn   func(func()) // run in the background
 	convert func(ctx context.Context, path string, progress pdfocr.Progress) (*result, error)
 	render  func(path string, page int) (image.Image, error) // a page's preview
-	open    func() (string, error)                           // ask for a PDF; "" when canceled
+	open    func() ([]string, error)                         // ask for PDFs; none when canceled
 	saveAs  func(name string) (string, error)
 	reveal  func(path string)      // show a file in the file manager
 	menu    func(menuState)        // set the menu bar's items
@@ -74,14 +74,16 @@ type app struct {
 	err    string // why the last PDF could not be read
 	toast  *toast // to show in the next build
 
-	file        string    // the PDF being read
+	file        string    // the PDF being read, or ""
+	queue       []string  // the PDFs to read after it, in turn
+	batchDone   int       // PDFs read, or not, since the queue was last empty
 	waiting     bool      // file waits for the models to load
 	page, pages int       // pages read so far, of pages
 	counted     time.Time // when the pages were counted
 	cancel      context.CancelFunc
 	run         int // counts runs, so that a canceled one's result is dropped
 
-	result    *result   // the document shown, of the history
+	result    *result   // the document shown, of the history, or shown last while phase is working
 	form      int       // searchable, retyped or plainText
 	at        int       // the page shown
 	pageArea  ui.Handle // where the page shows, whose arrows turn it
@@ -155,50 +157,108 @@ func (r *result) path(form int) string {
 	return r.pdf
 }
 
-// canOpen reports whether a PDF can be opened now.
-func (a *app) canOpen() bool { return a.phase != working && a.broken == "" }
+// canOpen reports whether PDFs can be opened: those opened while one is
+// read wait their turn.
+func (a *app) canOpen() bool { return a.broken == "" }
 
-// choose asks for a PDF and reads it.
+// choose asks for PDFs and reads them.
 func (a *app) choose() {
 	if !a.canOpen() {
 		return
 	}
 	a.fx.spawn(func() {
-		path, err := a.fx.open()
+		paths, err := a.fx.open()
 		a.fx.update(func() {
-			switch {
-			case err != nil:
+			if err != nil {
 				a.toast = &toast{title: "Couldn’t open the PDF", detail: err.Error()}
-			case path != "":
-				a.start(path)
+				return
 			}
+			a.add(paths...)
 		})
 	})
 }
 
-// drop reads the first PDF of files dropped on the window.
+// drop reads the PDFs among files dropped on the window, and says which
+// files are not PDFs.
 func (a *app) drop(files []string) {
+	var pdfs, others []string
 	for _, f := range files {
 		if strings.EqualFold(filepath.Ext(f), ".pdf") {
-			a.start(f)
-			return
+			pdfs = append(pdfs, f)
+		} else {
+			others = append(others, f)
 		}
 	}
-	a.toast = &toast{title: fmt.Sprintf("“%s” isn’t a PDF", filepath.Base(files[0]))}
+	a.add(pdfs...)
+	switch len(others) {
+	case 0:
+	case 1:
+		a.toast = &toast{title: fmt.Sprintf("“%s” isn’t a PDF", filepath.Base(others[0]))}
+	default:
+		a.toast = &toast{title: fmt.Sprintf("%d files aren’t PDFs", len(others))}
+	}
 }
 
-// start reads the PDF at path, once the models have loaded. The document
-// shown stays until it is read.
-func (a *app) start(path string) {
+// add reads the PDFs at paths in turn, after the one being read and those
+// waiting, leaving out those among them. With none being read, the first
+// is read at once, and its progress shows.
+func (a *app) add(paths ...string) {
 	if !a.canOpen() {
 		return
 	}
+	for _, path := range paths {
+		switch {
+		case path == a.file || slices.Contains(a.queue, path):
+		case a.file == "":
+			a.phase = working
+			a.begin(path)
+		default:
+			a.queue = append(a.queue, path)
+		}
+	}
+}
+
+// begin reads the PDF at path, once the models have loaded.
+func (a *app) begin(path string) {
 	a.run++
-	a.phase, a.err, a.file = working, "", path
+	a.err, a.file = "", path
 	a.page, a.pages, a.counted = 0, 0, time.Time{}
 	a.waiting = a.fx.convert == nil
 	if !a.waiting {
 		a.read()
+	}
+}
+
+// next reads the next PDF waiting. With none, the batch ends, and the
+// progress, if it shows, gives way to the document shown before.
+func (a *app) next() {
+	a.batchDone++
+	if len(a.queue) > 0 {
+		path := a.queue[0]
+		a.queue = a.queue[1:]
+		a.begin(path)
+		return
+	}
+	a.file, a.batchDone = "", 0
+	a.fx.dock(-1)
+	if a.phase == working {
+		a.back()
+	}
+}
+
+// unqueue takes the PDF at path out of those waiting.
+func (a *app) unqueue(path string) {
+	a.queue = slices.DeleteFunc(a.queue, func(p string) bool { return p == path })
+}
+
+// batch returns which of the PDFs of the batch is being read, and how
+// many it has.
+func (a *app) batch() (at, of int) { return a.batchDone + 1, a.batchDone + 1 + len(a.queue) }
+
+// watch shows the progress of the PDF being read.
+func (a *app) watch() {
+	if a.file != "" {
+		a.phase = working
 	}
 }
 
@@ -214,6 +274,7 @@ func (a *app) loaded(err error) {
 	case err != nil:
 		a.broken = err.Error()
 		if waiting {
+			a.file, a.queue, a.batchDone = "", nil, 0
 			a.back()
 		}
 	case waiting:
@@ -238,7 +299,8 @@ func (a *app) read() {
 					a.counted = time.Now()
 				}
 				a.page, a.pages = page, pages
-				a.fx.dock(float64(page) / float64(max(pages, 1)))
+				at, of := a.batch()
+				a.fx.dock((float64(at-1) + float64(page)/float64(max(pages, 1))) / float64(of))
 			})
 		})
 		a.fx.update(func() {
@@ -247,40 +309,48 @@ func (a *app) read() {
 				return
 			}
 			a.cancel = nil
-			a.fx.dock(-1)
-			a.fx.attend()
 			if err != nil {
-				a.back()
+				// With nothing else to show, the welcome says why.
 				msg := fmt.Sprintf("Couldn’t read “%s”", filepath.Base(path))
-				if a.phase == done {
-					a.toast = &toast{title: msg, detail: err.Error()}
-				} else {
+				if len(a.queue) == 0 && a.result == nil {
 					a.err = msg + ": " + err.Error()
+				} else {
+					a.toast = &toast{title: msg, detail: err.Error()}
 				}
-				return
+			} else {
+				res.file = path
+				if res.read.IsZero() {
+					res.read = time.Now()
+				}
+				a.history = slices.Insert(a.history, 0, res)
+				// Shown if its progress was, as the next PDF is read.
+				if a.phase == working {
+					a.show(res)
+				}
 			}
-			res.file = path
-			if res.read.IsZero() {
-				res.read = time.Now()
+			a.next()
+			if a.file == "" {
+				a.fx.attend()
 			}
-			a.history = slices.Insert(a.history, 0, res)
-			a.phase = done
-			a.show(res)
 		})
 	})
 }
 
-// show shows r, from its first page, in the form shown; nil shows none.
-// While a PDF is read, r shows once it is no longer.
+// show shows r, from its first page, in the form shown; nil shows the
+// progress of the PDF being read, or asks for one.
 func (a *app) show(r *result) {
-	a.result, a.at = r, 0
-	a.previews, a.rendering = map[preview]rendered{}, false
-	if a.phase != working {
-		a.back()
-	}
+	a.setResult(r)
+	a.back()
 }
 
-// stop stops reading, and goes back to the document shown before, if any.
+// setResult makes r the document shown, from its first page, in the form
+// shown, once the document is.
+func (a *app) setResult(r *result) {
+	a.result, a.at = r, 0
+	a.previews, a.rendering = map[preview]rendered{}, false
+}
+
+// stop stops reading the PDF being read, and reads the next one waiting.
 func (a *app) stop() {
 	if a.cancel != nil {
 		a.cancel()
@@ -288,15 +358,25 @@ func (a *app) stop() {
 	}
 	a.run++
 	a.waiting = false
-	a.fx.dock(-1)
-	a.back()
+	a.next()
 }
 
-// back shows the document read last, or asks for one.
+// stopAll stops reading, and forgets the PDFs waiting.
+func (a *app) stopAll() {
+	a.queue = nil
+	a.stop()
+}
+
+// back shows the document shown last, else the progress of the PDF being
+// read, else asks for one.
 func (a *app) back() {
-	a.phase = idle
-	if a.result != nil {
+	switch {
+	case a.result != nil:
 		a.phase = done
+	case a.file != "":
+		a.phase = working
+	default:
+		a.phase = idle
 	}
 }
 
@@ -413,7 +493,7 @@ func (a *app) saveFile(name string, write func(path string) error) {
 func (a *app) syncMenu() {
 	m := menuState{
 		open: a.canOpen(), save: a.phase == done,
-		sidebar: a.sidebar, haveHistory: len(a.history) > 0,
+		sidebar: a.sidebar, haveHistory: a.listed(),
 		compare: a.comparing, canCompare: a.phase == done && a.form != searchable,
 	}
 	if m != a.menu {
@@ -587,12 +667,8 @@ func main() {
 		a.fx = effects{
 			update: func(fn func()) { win.Update(fn) },
 			spawn:  func(fn func()) { go fn() },
-			open: func() (string, error) {
-				paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{Parent: win, Title: "Open a Scanned PDF", Filters: pdfFilter})
-				if err != nil || len(paths) == 0 {
-					return "", err
-				}
-				return paths[0], nil
+			open: func() ([]string, error) {
+				return mygo.Dialog.Open(mygo.OpenDialogOptions{Parent: win, Title: "Open Scanned PDFs", Filters: pdfFilter, Multiple: true})
 			},
 			saveAs: func(name string) (string, error) {
 				return mygo.Dialog.Save(mygo.SaveDialogOptions{Parent: win, DefaultPath: name, CreateDirectories: true})
