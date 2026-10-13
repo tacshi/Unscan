@@ -1,0 +1,20 @@
+/build/
+/.mygo/
+mygo_windows_*.syso
+
+# Downloaded by go run ./cmd/fetchdeps
+/resources/models/
+/resources/fonts/
+/resources/darwin-*/
+/resources/linux-*/
+/resources/windows-*/
+
+# go build ., go build ./cmd/... in the project's root
+/unscan
+/fetchdeps
+
+# Test binaries and profiles
+*.test
+*.prof
+
+.DS_Store
