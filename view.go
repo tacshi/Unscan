@@ -65,7 +65,7 @@ func (a *app) view(c *ui.Context) {
 				}
 			})
 		})
-		a.fontsDialog(c)
+		a.settingsDialog(c)
 		a.historyAlert(c)
 	})
 }

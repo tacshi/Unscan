@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Publishes a release of Unscan to GitHub: the disk image that
 # scripts/build-mac-release.sh builds, signed with a Developer ID and
-# notarized, on a release under a new tag, v<version>.
+# notarized, on a release under a new tag, v<version>, with the update that
+# installed apps find there and install: the app archived, deltas from the
+# versions before, and update-darwin-arm64.json, signed with the update key.
 #
 #   scripts/publish.sh 2026.10.0                 # build, review the notes, publish
 #   scripts/publish.sh 2026.10.0 --no-upload     # build into build/publish only
@@ -10,7 +12,8 @@
 # Release notes come from release-notes/Unscan-<version>.md, used verbatim
 # when it exists. Otherwise they are drafted from the commits since the last
 # v* tag and shown for review: [y]es publishes them, [e]dit opens them in
-# $EDITOR and shows them again, anything else stops.
+# $EDITOR and shows them again, anything else stops. The update window of
+# installed apps shows them too.
 #
 # Environment:
 #   MACOS_SIGNING_IDENTITY  the Developer ID to sign with (DEVELOPER_ID_APPLICATION
@@ -18,6 +21,11 @@
 #                           "Developer ID Application" identity
 #   NOTARY_PROFILE          the notarytool keychain profile, "Unscan" by default,
 #                           made once by "xcrun notarytool store-credentials Unscan"
+#   MYGO_UPDATER_PRIVATE_KEY  the key that signs updates; by default the one
+#                           "go tool mygo keygen" wrote, in ~/Library/Application
+#                           Support/mygo/update-keys/mygo-update.key. It must be
+#                           the key of updates.publicKey in mygo.json, the only
+#                           one installed apps accept updates from
 #
 # The committed mygo.json is never edited: the version is the build's for
 # the run only, so a release needs no commit of its own.
@@ -85,6 +93,20 @@ notary=${NOTARY_PROFILE:-Unscan}
 xcrun notarytool history --keychain-profile "$notary" >/dev/null 2>&1 ||
 	die "the notarytool keychain profile \"$notary\" doesn't work; make it with: xcrun notarytool store-credentials $notary"
 echo "    signing as $identity, notarizing with \"$notary\""
+
+echo "==> Checking the update key"
+update_key=${MYGO_UPDATER_PRIVATE_KEY:-}
+key_file="$HOME/Library/Application Support/mygo/update-keys/mygo-update.key"
+if [[ -z "$update_key" ]]; then
+	[[ -f "$key_file" ]] || die "no update key: set MYGO_UPDATER_PRIVATE_KEY, or make one with: go tool mygo keygen"
+	update_key=$(<"$key_file")
+fi
+# An Ed25519 private key ends with its public key: checked now, and not
+# after minutes of notarizing.
+public_key=$(plutil -extract updates.publicKey raw -o - mygo.json 2>/dev/null) ||
+	die "mygo.json has no updates.publicKey"
+[[ "$(printf '%s' "$update_key" | base64 -d 2>/dev/null | tail -c 32 | base64)" == "$public_key" ]] ||
+	die "the update key is not the one of updates.publicKey in mygo.json, so installed apps would refuse its updates"
 
 branch=$(git branch --show-current)
 if [[ "$branch" != main ]] && ! $allow_branch; then
@@ -163,23 +185,53 @@ fi
 # ------------------------------------------------------------------- build
 
 # The build reads its version from mygo.json, which has this one for the
-# run only, and is put back as committed however the script ends.
+# run only, and is put back as committed however the script ends. The
+# update's notes are the release's, as the section of a changelog for the
+# run only: its headings go a level down, as "## " would end the section.
 backup=$(mktemp)
 cp mygo.json "$backup"
 trap 'cp "$backup" mygo.json; rm -f "$backup"' EXIT
 plutil -replace version -string "$version" mygo.json
+if grep -qE '[^[:space:]]' "$notes"; then
+	{
+		printf '## %s\n\n' "$version"
+		sed -E 's/^##? /### /' "$notes"
+	} >"$stage/CHANGELOG.md"
+	plutil -replace updates.changelog -string "$stage/CHANGELOG.md" mygo.json
+fi
 
 echo "==> Building $name $version at $(git rev-parse --short HEAD)"
-MACOS_SIGNING_IDENTITY=$identity NOTARY_PROFILE=$notary scripts/build-mac-release.sh
+MACOS_SIGNING_IDENTITY=$identity NOTARY_PROFILE=$notary MYGO_UPDATER_PRIVATE_KEY=$update_key scripts/build-mac-release.sh
 
 cp "$backup" mygo.json
-dmg="build/release/darwin-arm64/$name $version arm64.dmg"
+built=build/release/darwin-arm64
+dmg="$built/$name $version arm64.dmg"
 [[ -f "$dmg" ]] || die "the build made no $dmg"
 xcrun stapler validate "$dmg" >/dev/null || die "$dmg is not notarized"
 asset="$stage/$name-$version-arm64.dmg"
 cp "$dmg" "$asset"
 echo "==> $asset"
 echo "    sha256 $(shasum -a 256 "$asset" | awk '{print $1}')"
+
+# The update keeps the names it was built with, which its manifest gives in
+# the URLs of the files on the release.
+manifest="$built/update-darwin-arm64.json"
+[[ -f "$manifest" ]] || die "the build made no update ($manifest)"
+[[ "$(plutil -extract version raw -o - "$manifest")" == "$version" ]] || die "$manifest is not of $version"
+archive=$(plutil -extract url raw -o - "$manifest")
+[[ "$archive" == "https://github.com/$(plutil -extract updates.github raw -o - mygo.json)/releases/download/$tag/"* ]] ||
+	die "$manifest has the update at $archive, not on the release $tag"
+update=("$stage/${archive##*/}")
+cp "$built/${archive##*/}" "$stage/" || die "the build made no ${archive##*/}"
+for delta in "$built"/*.delta; do
+	if [[ -f "$delta" ]]; then
+		cp "$delta" "$stage/"
+		update+=("$stage/${delta##*/}")
+	fi
+done
+cp "$manifest" "$stage/"
+update+=("$stage/${manifest##*/}")
+echo "==> The update: ${update[*]##*/}"
 
 if ! $upload; then
 	echo "==> Built into $stage; nothing was published"
@@ -195,9 +247,11 @@ else
 	git tag -a "$tag" -m "$name $version"
 fi
 git push origin "$tag"
-# gh uploads the disk image to a draft, and publishes it once it is there.
-gh release create "$tag" "$asset" --repo "$repo" --verify-tag --latest \
+# gh uploads the files to a draft, and publishes it once they are all
+# there: installed apps, which read the manifest of the latest release, never
+# see it before the files it names.
+gh release create "$tag" "$asset" "${update[@]}" --repo "$repo" --verify-tag --latest \
 	--title "$name $version" --notes-file "$notes" ||
 	die "the tag $tag is pushed, but its release isn't published. Finish it with:
-  gh release create $tag '$asset' --repo $repo --verify-tag --latest --title '$name $version' --notes-file $notes"
+  gh release create $tag '$asset' ${update[*]} --repo $repo --verify-tag --latest --title '$name $version' --notes-file $notes"
 echo "==> Published https://github.com/$repo/releases/tag/$tag"

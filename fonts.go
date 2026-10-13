@@ -45,9 +45,6 @@ type fontChoice struct {
 // sets it in its built-in font.
 type fontChoices [len(fontFaces)]fontChoice
 
-// openFonts shows the fonts retyped PDFs are set in.
-func (a *app) openFonts() { a.fontsOpen = true }
-
 // chooseFont asks for a font file to set face i in.
 func (a *app) chooseFont(i int) {
 	a.fx.spawn(func() {
@@ -192,32 +189,6 @@ func saveFonts(path string, fonts fontChoices) error {
 		return err
 	}
 	return os.WriteFile(path, append(data, '\n'), 0o644)
-}
-
-// fontsDialog shows the fonts retyped PDFs are set in, each face's
-// built-in one or a font file the user chose, which they may change.
-func (a *app) fontsDialog(c *ui.Context) {
-	t := c.Theme()
-	ui.Modal(c, &a.fontsOpen, func() {
-		ui.Column(c).Width(560).MaxWidthPercent(100).Gap(16).Children(func() {
-			ui.Column(c).Gap(4).Children(func() {
-				ui.Text(c, "Fonts").FontSize(17).Bold()
-				ui.Text(c, "Retyped PDFs set each line in a font of the kind and weight it was printed in. "+
-					"Choose TrueType fonts (.ttf or .ttc) to use instead; the built-in fonts set the characters they lack.").
-					TextColor(t.TextMuted)
-			})
-			ui.Form(c, func() {
-				for i := range fontFaces {
-					a.fontField(c, i)
-				}
-			})
-			ui.Row(c).Gap(12).Children(func() {
-				ui.Text(c, "Fonts apply to the PDFs read from now on.").FontSize(12).TextColor(t.TextMuted).
-					Grow(1).MinWidth(0)
-				ui.PrimaryButton(c, "Done").OnClick(func() { a.fontsOpen = false })
-			})
-		})
-	})
 }
 
 // fontField shows the font face i is set in: its built-in one, the font

@@ -39,7 +39,9 @@ that keeps it searchable.
 
 ## Features
 
-- **Local and private.** OCR runs on your CPU. Nothing is uploaded.
+- **Local and private.** OCR runs on your CPU. Nothing is uploaded: the
+  app's only connection is its daily check for updates, which Settings
+  turns off.
 - **Leaves digital pages alone.** Pages that already have text, such as
   born-digital ones, are kept as they are, in both PDFs.
 - **Matches the typeface.** Each line's kind (serif, sans-serif or Kai)
@@ -51,6 +53,8 @@ that keeps it searchable.
   memory does not grow with the document.
 - **No cgo.** Everything builds with `CGO_ENABLED=0`: ONNX Runtime is
   loaded at run time with purego, and PDFium runs as WebAssembly.
+- **Updates itself.** Signed updates from GitHub releases, in a window
+  like Sparkle's, downloading only what changed where it can.
 - **Pinned downloads.** Models, fonts and runtimes are fetched at pinned
   versions and checked against their SHA-256.
 
@@ -129,6 +133,18 @@ retyped PDFs are kept in `history/` in the app's user data folder
 **Remove from History…** in a row's context menu, or Delete, removes one,
 and **Clear…** removes them all. The scans themselves are never touched.
 
+Unscan keeps itself up to date from this repository's GitHub releases.
+It checks once a day, and when a new version is out, a window shows its
+release notes and offers to install it, skip it or remind you later;
+installing downloads only what changed, where it can, and relaunches into
+it. **Unscan › Check for Updates…** checks now (on Linux and Windows,
+**File › Check for Updates…**). In **Settings…**, **Check for updates
+automatically** turns the daily checks off, and **Download and install
+updates automatically** installs what they find without asking, for the
+next launch. Updates are signed, and Unscan installs only those signed
+with its key. It updates itself where it can replace its app, as in
+`/Applications`; development builds never do.
+
 ### Command line
 
 ```sh
@@ -156,7 +172,7 @@ units per em.
 
 - **In the app,** **Unscan › Settings…** (⌘,) chooses a font file for
   each face: serif and sans-serif, regular and bold, and Kai (on Linux and
-  Windows, **File › Fonts…**). For a collection, the font named Regular
+  Windows, **File › Settings…**). For a collection, the font named Regular
   or Bold, to match the face, is picked, and a menu picks another. The
   choice is kept in `fonts.json` in the app's user data folder, and
   applies to the PDFs read from then on.
@@ -205,7 +221,8 @@ these environment variables:
 | Variable | Effect |
 |---|---|
 | `MACOS_SIGNING_IDENTITY` | Signs with this Developer ID identity, with the hardened runtime. Without it the app is signed ad hoc and runs on the Mac that built it only. |
-| `NOTARY_PROFILE` | Notarizes the disk image with this keychain profile, made by `xcrun notarytool store-credentials`, and staples the ticket. |
+| `NOTARY_PROFILE` | Notarizes the disk image with this keychain profile, made by `xcrun notarytool store-credentials`, and staples the ticket to it and to the app. |
+| `MYGO_UPDATER_PRIVATE_KEY` | Signs the update that installed apps download, with this key of `go tool mygo keygen`: the app archived (`unscan-<version>-darwin-arm64.tar.gz`), deltas from the last three versions published, and `update-darwin-arm64.json`, which lists them. |
 | `SKIP_TESTS=1` | Builds without running the tests first. |
 
 ### Publishing
@@ -220,11 +237,20 @@ another branch). It builds with the release script, signed with the
 keychain's Developer ID and notarized with the `Unscan` keychain profile
 (`MACOS_SIGNING_IDENTITY` and `NOTARY_PROFILE` choose others). It then
 tags the commit `v2026.10.0` and publishes a GitHub release with the disk
-image, as `Unscan-2026.10.0-arm64.dmg`. Its notes come from
+image, as `Unscan-2026.10.0-arm64.dmg`, and the update, which installed
+apps find on the latest release. Its notes come from
 `release-notes/Unscan-2026.10.0.md` when that exists. Otherwise they are
 drafted from the commits since the last release, for you to review or
-edit first. The version is given to the build for the run only, so
-`mygo.json` needs no commit for a release.
+edit first. The update window shows them too. The version is given to the
+build for the run only, so `mygo.json` needs no commit for a release.
+
+The update is signed with the key that `go tool mygo keygen` wrote to
+`~/Library/Application Support/mygo/update-keys/mygo-update.key`
+(`MYGO_UPDATER_PRIVATE_KEY` gives another), which must be the key of
+`updates.publicKey` in `mygo.json`: installed apps accept updates signed
+with it only. Keep it out of the repository and backed up, as a lost key
+leaves installed apps unable to update, and anyone holding it can ship
+code to them.
 
 ## How it works
 
@@ -272,7 +298,8 @@ what each package's tests check.
 main.go                  the app: state, actions, effects (dialogs, the menu bar, the Dock)
 view.go                  the window: the PDF asked for, the progress, the pages in each form, compared
 history.go               the PDFs read before: kept on disk, listed in the sidebar, removed
-fonts.go                 the user's fonts for retyped PDFs: the Fonts dialog, and the choice saved
+fonts.go                 the user's fonts for retyped PDFs: their fields in Settings, and the choice saved
+settings.go              the Settings dialog: the fonts, and whether to check for and install updates
 cmd/unscan/              the command line version
 cmd/fetchdeps/           downloads and checks the models and runtimes
 internal/ocr/            PP-OCRv6: detection, cropping, recognition, reading order
