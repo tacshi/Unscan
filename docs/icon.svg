@@ -1,0 +1,102 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- The Unscan app icon: 文 (text) under a scanner beam, set in type
+       above it, on white paper, and still the scan's pixels below it, on
+       yellowed paper. 文 is Noto Serif SC Bold's (OFL-1.1). Render it into
+       the app, which MyGo takes from resources/icon.png, with:
+       rsvg-convert -w 1024 -h 1024 docs/icon.svg -o resources/icon.png -->
+  <defs>
+    <clipPath id="tile"><rect x="100" y="100" width="824" height="824" rx="185"/></clipPath>
+    <clipPath id="above"><rect x="0" y="0" width="1024" height="544.0"/></clipPath>
+    <linearGradient id="paper" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#F2F5FA"/>
+    </linearGradient>
+    <linearGradient id="scan" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#EEE3C8"/>
+      <stop offset="1" stop-color="#E2D3B0"/>
+    </linearGradient>
+    <linearGradient id="glow" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3D8BFF" stop-opacity="0"/>
+      <stop offset="1" stop-color="#3D8BFF" stop-opacity="0.28"/>
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="125%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="14"/>
+      <feOffset dy="10"/>
+      <feComponentTransfer><feFuncA type="linear" slope="0.3"/></feComponentTransfer>
+      <feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="beamglow" x="-5%" y="-200%" width="110%" height="500%">
+      <feGaussianBlur stdDeviation="9"/>
+    </filter>
+  </defs>
+  <g filter="url(#shadow)">
+    <g clip-path="url(#tile)">
+      <rect x="100" y="100" width="824" height="824" fill="url(#paper)"/>
+      <rect x="100" y="544.0" width="824" height="824" fill="url(#scan)"/>
+      <path clip-path="url(#above)" fill="#14171F" d="M438.6 224.0Q485.8 229.4 513.3 243.1Q540.8 256.9 552.7 274.2Q565.3 290.9 565.3 307.1Q565.3 323.2 555.7 334.6Q546.1 345.3 531.2 347.7Q516.3 349.5 498.3 337.6Q494.7 317.8 484.6 298.1Q474.4 277.8 461.3 259.9Q448.1 241.3 434.4 227.6L438.6 224.0M687.2 363.3Q671.6 442.7 638.8 510.3Q605.9 577.8 550.9 631.6Q496.5 684.8 416.4 723.6Q337.0 761.9 227.0 783.4L224.0 776.8Q344.7 735.6 423.0 674.6Q501.9 613.1 544.3 534.8Q587.4 455.9 600.5 363.3L687.2 363.3M704.5 302.3Q704.5 302.3 711.7 308.9Q719.5 314.8 731.4 325.0Q743.4 334.6 755.9 345.9Q769.1 356.7 779.2 366.2Q776.8 375.8 762.5 375.8L234.2 375.8L229.4 359.1L662.1 359.1L704.5 302.3M362.1 363.3Q382.4 442.7 423.0 501.9Q463.7 561.1 519.8 602.9Q576.6 644.1 644.1 671.6Q712.3 698.5 787.6 714.1L785.8 721.2Q758.9 724.8 739.8 741.0Q721.2 757.1 711.1 784.0Q640.6 760.7 582.0 726.6Q524.0 692.0 478.0 643.0Q432.6 593.3 400.9 525.8Q369.2 457.7 353.1 368.0L362.1 363.3Z"/>
+      <g fill="#3A2F22">
+<rect x="418" y="546" width="29" height="29" opacity="0.99"/>
+<rect x="450" y="546" width="29" height="29" opacity="0.94"/>
+<rect x="514" y="546" width="29" height="29" opacity="0.57"/>
+<rect x="546" y="546" width="29" height="29" opacity="0.99"/>
+<rect x="578" y="546" width="29" height="29" opacity="0.98"/>
+<rect x="610" y="546" width="29" height="29" opacity="0.23"/>
+<rect x="418" y="578" width="29" height="29" opacity="0.59"/>
+<rect x="450" y="578" width="29" height="29" opacity="0.95"/>
+<rect x="482" y="578" width="29" height="29" opacity="0.92"/>
+<rect x="514" y="578" width="29" height="29" opacity="0.97"/>
+<rect x="546" y="578" width="29" height="29" opacity="0.96"/>
+<rect x="578" y="578" width="29" height="29" opacity="0.59"/>
+<rect x="450" y="610" width="29" height="29" opacity="0.93"/>
+<rect x="482" y="610" width="29" height="29" opacity="0.99"/>
+<rect x="514" y="610" width="29" height="29" opacity="0.93"/>
+<rect x="546" y="610" width="29" height="29" opacity="0.93"/>
+<rect x="418" y="642" width="29" height="29" opacity="0.28"/>
+<rect x="450" y="642" width="29" height="29" opacity="0.99"/>
+<rect x="482" y="642" width="29" height="29" opacity="0.99"/>
+<rect x="514" y="642" width="29" height="29" opacity="0.93"/>
+<rect x="546" y="642" width="29" height="29" opacity="1.00"/>
+<rect x="578" y="642" width="29" height="29" opacity="0.94"/>
+<rect x="610" y="642" width="29" height="29" opacity="0.63"/>
+<rect x="386" y="674" width="29" height="29" opacity="0.55"/>
+<rect x="418" y="674" width="29" height="29" opacity="0.95"/>
+<rect x="450" y="674" width="29" height="29" opacity="0.98"/>
+<rect x="482" y="674" width="29" height="29" opacity="0.25"/>
+<rect x="514" y="674" width="29" height="29" opacity="0.64"/>
+<rect x="546" y="674" width="29" height="29" opacity="0.97"/>
+<rect x="578" y="674" width="29" height="29" opacity="0.95"/>
+<rect x="610" y="674" width="29" height="29" opacity="1.00"/>
+<rect x="642" y="674" width="29" height="29" opacity="0.95"/>
+<rect x="674" y="674" width="29" height="29" opacity="0.64"/>
+<rect x="706" y="674" width="29" height="29" opacity="0.29"/>
+<rect x="322" y="706" width="29" height="29" opacity="0.29"/>
+<rect x="354" y="706" width="29" height="29" opacity="0.96"/>
+<rect x="386" y="706" width="29" height="29" opacity="0.93"/>
+<rect x="418" y="706" width="29" height="29" opacity="0.64"/>
+<rect x="546" y="706" width="29" height="29" opacity="0.59"/>
+<rect x="578" y="706" width="29" height="29" opacity="0.95"/>
+<rect x="610" y="706" width="29" height="29" opacity="0.98"/>
+<rect x="642" y="706" width="29" height="29" opacity="0.99"/>
+<rect x="674" y="706" width="29" height="29" opacity="0.97"/>
+<rect x="706" y="706" width="29" height="29" opacity="0.98"/>
+<rect x="738" y="706" width="29" height="29" opacity="0.94"/>
+<rect x="770" y="706" width="29" height="29" opacity="0.23"/>
+<rect x="258" y="738" width="29" height="29" opacity="0.58"/>
+<rect x="290" y="738" width="29" height="29" opacity="0.97"/>
+<rect x="322" y="738" width="29" height="29" opacity="1.00"/>
+<rect x="354" y="738" width="29" height="29" opacity="0.57"/>
+<rect x="610" y="738" width="29" height="29" opacity="0.60"/>
+<rect x="642" y="738" width="29" height="29" opacity="0.97"/>
+<rect x="674" y="738" width="29" height="29" opacity="0.94"/>
+<rect x="706" y="738" width="29" height="29" opacity="0.96"/>
+<rect x="226" y="770" width="29" height="29" opacity="0.59"/>
+<rect x="258" y="770" width="29" height="29" opacity="0.29"/>
+<rect x="674" y="770" width="29" height="29" opacity="0.27"/>
+<rect x="706" y="770" width="29" height="29" opacity="0.29"/>
+      </g>
+      <rect x="100" y="394.0" width="824" height="150" fill="url(#glow)"/>
+      <rect x="100" y="535.0" width="824" height="18" fill="#3D8BFF" filter="url(#beamglow)"/>
+      <rect x="100" y="541.5" width="824" height="5" fill="#E8F1FF"/>
+    </g>
+  </g>
+</svg>
