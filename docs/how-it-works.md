@@ -123,22 +123,38 @@ For each scanned page, at the resolution it was read at:
 4. The line is set in its face so that its glyphs' outlines cover its
    ink. Their height gives the font size, which lines within 7% of
    each other on a page share, as a paragraph's do. Glyphs keep their
-   shapes: the line is spaced out to the ink's width as books are set,
+   shapes: the line is spaced out to the ink's width as books are set.
+   Each place its words part at, a space or where CJK characters meet
+   Latin ones, is as wide as its gap in the ink: the ink's widest gaps, as
+   many as there are places, in order along the line. The rest of a line
+   of Latin is taken by a face a tenth wider at most (`Tz`), as the face
+   it was printed in may be wider than the text fonts, and by tracking
+   its letters out by a twentieth of an em at most; what is left goes
    between CJK characters, three times as much where they meet Latin
-   words, and at spaces, but not within words. Where gaps wider than the
+   words, and at spaces, or is tracked out further where there are none.
+   A line tracked out, as a title's letters are, whose gaps between its
+   pieces of ink are a fifth of its height or wider, by their median, is
+   tracked out instead, unstretched; and where its pieces lie a third of
+   its height apart, one for each letter, each letter is set on its own
+   piece, whatever spaces were read, as in a title read "PIC T U R E".
+   Where gaps wider than the
    ink is high, by a quarter, part the ink, as a label from what it
    labels, the characters are matched to each stretch by how far their
    outlines span, parting where the text itself leaves a gap, as after a
    comma, but not within a word where the text has a space close by, and
    set on it, and ink no character is matched to, such as a bullet, is
-   kept as printed. A line that has nowhere to space, or is wider than its
-   ink, is stretched or squeezed (`Tz`) instead; a hyphen read between its
+   kept as printed. A line wider than its ink is squeezed (`Tz`); one
+   that has nowhere to space, as a letter alone, is stretched; a hyphen
+   read between its
    digits, as a page range's, is set as an en dash where that fits the
    ink better. A line whose words lean, by their mean, about half as far
    as italic faces do is set slanted (a shear of its text matrix), as far
    as the document's italic lines lean, by their median, but for its
-   label, as "A:", and a word that leans left; a long word in an upright
-   line that leans that far is set slanted alone. The spacing goes into the
+   label, as "A:", and a word that leans little, as a reply quoted in an
+   instruction; a long word in an upright line that leans that far is set
+   slanted alone. A word's lean is its edges', by their median, less what
+   its letters lean set upright in the text font, as a y's long stroke
+   does, measured between the ink's gaps nearest where the word is set. The spacing goes into the
    characters' advances, with a CID for each character and advance, so
    characters abut and text extraction finds no spaces that were not
    read. A line in Kai takes its Latin letters, digits and narrow
@@ -217,7 +233,13 @@ CGO_ENABLED=0 go test ./...
   line in one color, its thin 。 measured lighter, in it alone. A
   caption whose verb is bold among lines set regular sets the verb bold
   and the rest regular, and an example set italic after a bold label is
-  slanted but for the label. Text sheared as italic is by 0.12 and 0.2
+  slanted but for the label. A title tracked out, read as it is or with
+  spaces where none are, has each letter set over its own, unstretched;
+  a line spaced out where its words part in the ink, a wide gap after a
+  section's number, takes the gap there, not tracking; a line two fifths
+  wider than its glyphs is set a tenth wider at most, and tracked for
+  the rest, or tracked alone where its letters lie apart; and an upright
+  line in Arial full of y's stays upright. Text sheared as italic is by 0.12 and 0.2
   measures within 0.04 of that, and upright text about upright; a line
   whose words lean is italic but for its label and a word leaning left,
   and in an upright line only a long word leaning far is. A word

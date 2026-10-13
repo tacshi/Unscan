@@ -147,12 +147,25 @@ func strokeStats(w, h int, cover func(x, y int) float64, oblique bool) strokes {
 // is, its edges too if oblique. The faces must be the text fonts, whose
 // outlines are parsed.
 func (d *textDoc) strokes(sh shape, size float64, oblique bool) strokes {
+	w, h, cover := d.draw(sh, size)
+	if cover == nil {
+		return strokes{}
+	}
+	return strokeStats(w, h, cover, oblique)
+}
+
+// draw draws a line as sh sets it, each glyph in its face, at size pixels
+// an em, at its own advances, w×h pixels large with two to spare round
+// it, cover giving how much of each pixel the glyphs cover, top first;
+// nil where they draw nothing. The faces must be the text fonts, whose
+// outlines are parsed.
+func (d *textDoc) draw(sh shape, size float64) (w, h int, cover func(x, y int) float64) {
 	k := size / float64(d.fonts[sh.face].ttf.UnitsPerEm)
 	const pad = 2
-	w := int(math.Ceil(float64(sh.right-sh.left)*k)) + 2*pad
-	h := int(math.Ceil(float64(sh.yMax-sh.yMin)*k)) + 2*pad
+	w = int(math.Ceil(float64(sh.right-sh.left)*k)) + 2*pad
+	h = int(math.Ceil(float64(sh.yMax-sh.yMin)*k)) + 2*pad
 	if w <= 2*pad || h <= 2*pad || w*h > 1<<24 {
-		return strokes{}
+		return 0, 0, nil
 	}
 	r := vector.NewRasterizer(w, h)
 	var buf sfnt.Buffer
@@ -194,7 +207,7 @@ func (d *textDoc) strokes(sh shape, size float64, oblique bool) strokes {
 	}
 	mask := image.NewAlpha(image.Rect(0, 0, w, h))
 	r.Draw(mask, mask.Bounds(), image.Opaque, image.Point{})
-	return strokeStats(w, h, func(x, y int) float64 { return float64(mask.Pix[y*mask.Stride+x]) / 255 }, oblique)
+	return w, h, func(x, y int) float64 { return float64(mask.Pix[y*mask.Stride+x]) / 255 }
 }
 
 // lineRefs is a line as each face would print it, for styles to judge the
@@ -214,7 +227,8 @@ type lineRefs struct {
 // or digits. Ink is its ink's strokes, refs its strokes set in the serif
 // and sans-serif regular faces at the size the line's ink gives each, and
 // slant how far its upright strokes lean to the right, the tangent of
-// their angle (see slant). Face is the face styles sets it in.
+// their angle (see slant), beyond how far its letters lean set upright,
+// as a y's long stroke and a W's do. Face is the face styles sets it in.
 type wordInk struct {
 	from, to, letters int
 	ink               strokes
@@ -427,13 +441,15 @@ func (d *textDoc) styles(texts []string, frames []frame, inks []ink, lines []lin
 	// a verb set bold in a caption is, or no more than a tenth heavier in
 	// one set bold. A word of a letter is in the face of the word after it,
 	// or before it, as "a" is in "Take a seat", but for a line's first, as
-	// a label's, which is the line's.
+	// "A", which is the line's, or a label's, as "A:", which is judged as
+	// words are, but surely heavier, by three tenths.
 	for i, l := range lines {
 		kind := out[i] &^ 1
 		for k := range l.words {
 			w := &l.words[k]
 			w.face = out[i]
-			if !l.ok || kind == kai || w.letters < 2 && !(k == 0 && w.letters == 1) || w.refs[kind/2].across == 0 || w.refs[kind/2].down == 0 {
+			label := k == 0 && w.letters == 1 && w.to-w.from > 1 // as "A:", not "A"
+			if !l.ok || kind == kai || w.letters < 2 && !label || w.refs[kind/2].across == 0 || w.refs[kind/2].down == 0 {
 				continue
 			}
 			bold := 1.2

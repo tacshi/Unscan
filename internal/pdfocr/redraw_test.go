@@ -1502,7 +1502,7 @@ func TestSlant(t *testing.T) {
 			draw.Draw(img, img.Rect, image.White, image.Point{}, draw.Src)
 			drawSheared(img, face, text, 20, 70, k)
 			w, h := img.Rect.Dx(), img.Rect.Dy()
-			got := slant(w, h, func(x, y int) float64 { return 1 - float64(img.RGBAAt(x, y).G)/255 })
+			got := slant(w, h, func(x, y int) float64 { return 1 - float64(img.RGBAAt(x, y).G)/255 }, 0, w)
 			if math.Abs(got-k) > 0.04 {
 				t.Errorf("%q sheared by %.2f leans %.3f", text, k, got)
 			}
@@ -1511,9 +1511,10 @@ func TestSlant(t *testing.T) {
 }
 
 // TestItalics sets the words of a line italic as they lean: all of a line
-// whose words lean, but for its label and a word that leans left, and in
-// an upright line a long word that leans far, but no short one, as "you"
-// may by chance, nor a digit, slash or label.
+// whose words lean, but for its label and a word that leans no way, as a
+// reply quoted in an italic line, and in an upright line a long word that
+// leans far, but no short one, as "you" may by chance, nor a digit, slash
+// or label.
 func TestItalics(t *testing.T) {
 	word := func(from, to, letters int, slant float64) wordInk {
 		return wordInk{from: from, to: to, letters: letters, slant: slant}
@@ -1528,6 +1529,8 @@ func TestItalics(t *testing.T) {
 			"   +++++++++++++"},
 		{"an example after a word upright", []wordInk{word(0, 7, 6, -0.03), word(8, 12, 4, 0.19), word(13, 15, 2, 0.21)}, 15,
 			"        +++++++"},
+		{"a reply quoted in an instruction", []wordInk{word(0, 2, 0, 0.02), word(3, 7, 3, 0.24), word(8, 16, 6, 0)}, 16,
+			"   ++++         "},
 		{"an upright line", []wordInk{word(0, 4, 0, 0.2), word(5, 7, 2, 0.02), word(8, 9, 0, 0.35), word(10, 13, 3, 0.18), word(14, 18, 4, -0.01)}, 18,
 			""},
 		{"a title in an upright line", []wordInk{word(0, 3, 3, 0.01), word(4, 9, 5, 0.17), word(10, 13, 3, -0.02), word(14, 18, 4, 0)}, 18,
@@ -1653,5 +1656,138 @@ func TestUnderline(t *testing.T) {
 		}) {
 			t.Errorf("gap %d: the rule is not kept: %d images", gap, len(page.images))
 		}
+	}
+}
+
+// TestTracked redraws titles tracked out, their letters far apart, one
+// read with spaces where none are, as "PIC T U R E": each letter is set
+// on its own ink, unstretched, whatever spaces were read.
+func TestTracked(t *testing.T) {
+	d, fonts := testTextDoc(t)
+	sf, err := opentype.Parse(fonts.Sans.Data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	face, err := opentype.NewFace(sf, &opentype.FaceOptions{Size: 40, DPI: 72, Hinting: font.HintingNone})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer face.Close()
+	for _, c := range []struct{ drawn, read string }{
+		{"DICTIONARY", "DICTIONARY"},
+		{"PICTURE", "PIC T U R E"},
+	} {
+		img := image.NewRGBA(image.Rect(0, 0, 1400, 150))
+		draw.Draw(img, img.Rect, image.White, image.Point{}, draw.Src)
+		dr := font.Drawer{Dst: img, Src: image.Black, Face: face, Dot: fixed.P(60, 100)}
+		var centers []float64
+		for _, r := range c.drawn {
+			b, adv, _ := face.GlyphBounds(r)
+			centers = append(centers, float64(dr.Dot.X+(b.Min.X+b.Max.X)/2)/64)
+			dr.DrawString(string(r))
+			dr.Dot.X += adv/2 + fixed.I(40) // tracked by an em
+		}
+		end := float64(dr.Dot.X.Ceil())
+		box := ocr.Quad{{X: 50, Y: 52}, {X: end, Y: 52}, {X: end, Y: 112}, {X: 50, Y: 112}}
+		page := d.redraw(img, []ocr.Line{{Score: 1, Box: box, Text: c.read}}, 1400, 150)
+		d.setLines()
+		if len(page.lines) != 1 {
+			t.Fatalf("%q: %d lines", c.read, len(page.lines))
+		}
+		l := page.lines[0]
+		if l.scale != 1 {
+			t.Errorf("%q stretched by %.2f", c.read, l.scale)
+		}
+		tf := d.fonts[l.face].ttf
+		em := float64(tf.UnitsPerEm)
+		pos, k := l.x, 0
+		for _, cid := range l.cids {
+			code := d.sets[page.set].codes[cid-1]
+			if code.r != ' ' {
+				b, _ := tf.Bounds(tf.Glyph(code.r))
+				if mid := pos + float64(b[0]+b[2])/2/em*l.size; math.Abs(mid-centers[k]) > 3 {
+					t.Errorf("%q: %q centered at %.1f, drawn at %.1f", c.read, code.r, mid, centers[k])
+				}
+				k++
+			}
+			pos += float64(code.width) / em * l.size * l.scale
+		}
+	}
+}
+
+// TestSpread spaces a line out to its ink where its words part in the
+// ink, a wide gap after a section's number but not before the title's
+// last word, and a face a little wider than the text fonts asks for the
+// little left: tracked out by that, not by what the gap holds.
+func TestSpread(t *testing.T) {
+	d, _ := testTextDoc(t)
+	text := "1.19 Money Matters"
+	sh := d.shape(text, sans)
+	em, size := float64(d.fonts[sans].ttf.UnitsPerEm), 40.0
+	// The gap after 1.19, 60 pixels wide, one of 12 as the fonts set it,
+	// and 8 more pixels for the rest.
+	adds := sh.spread(0, len(sh.glyphs), 68, size, em, [][2]float64{{70, 130}, {300, 312}}, 0.05*size)
+	runes := []rune(text)
+	first := slices.Index(runes, ' ')
+	second := first + 1 + slices.Index(runes[first+1:], ' ')
+	if len(adds) != len(sh.glyphs)-1 || adds[first-1]+adds[first] < 40 || adds[second-1]+adds[second] > 10 {
+		t.Fatalf("adds %v: want the gap's after 1.19, and little before Matters", adds)
+	}
+	for k := first + 1; k < len(adds); k++ {
+		if k != second-1 && k != second && adds[k] > 0.05*size+0.01 {
+			t.Errorf("tracked by %.1f after %q", adds[k], runes[k])
+		}
+	}
+}
+
+// TestPlaceWide sets a line whose ink is two fifths wider than its glyphs:
+// in a face a tenth wider at most, and tracked out a little, where its
+// letters lie close as text set in a wider face does; tracked out alone,
+// unstretched, where they lie apart, as a title's tracked out do.
+func TestPlaceWide(t *testing.T) {
+	d, _ := testTextDoc(t)
+	sh := d.shape("Learning", sans)
+	em, size := float64(d.fonts[sans].ttf.UnitsPerEm), 40.0
+	span := float64(sh.right-sh.left) / em * size
+	for _, tracking := range []float64{0.1, 0.5} {
+		in := ink{found: true, s0: 0, s1: 1.4 * span, t0: 0, t1: 30, segs: [][2]float64{{0, 1.4 * span}}, tracking: tracking}
+		tl, origins, _ := d.place(sh, frame{length: 1.4 * span, height: 40}, in, size)
+		end := tl.x + (origins[len(sh.glyphs)-1]+float64(sh.glyphs[len(sh.glyphs)-1].bounds[2])/em*size)*tl.scale
+		switch {
+		case tracking < 0.2 && (tl.scale <= 1 || tl.scale > 1.1+1e-9):
+			t.Errorf("letters close: set %.2f wide, want a little wider, a tenth at most", tl.scale)
+		case tracking >= 0.2 && tl.scale != 1:
+			t.Errorf("letters apart: set %.2f wide, want tracked out alone", tl.scale)
+		case math.Abs(end-1.4*span) > 1:
+			t.Errorf("tracking %.1f: the line ends at %.1f, its ink at %.1f", tracking, end, 1.4*span)
+		}
+	}
+}
+
+// TestUprightY redraws an upright line, in Arial, full of letters whose
+// strokes lean apart from the rest, as a y's long one does, and keeps it
+// upright: a word's lean is less what its letters lean set upright.
+func TestUprightY(t *testing.T) {
+	d, _ := testTextDoc(t)
+	sf, err := opentype.Parse(systemFont(t, "/System/Library/Fonts/Supplemental/Arial.ttf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	face, err := opentype.NewFace(sf, &opentype.FaceOptions{Size: 40, DPI: 72, Hinting: font.HintingNone})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer face.Close()
+	img := image.NewRGBA(image.Rect(0, 0, 1000, 150))
+	draw.Draw(img, img.Rect, image.White, image.Point{}, draw.Src)
+	const text = "Why you say yes, yay"
+	dr := font.Drawer{Dst: img, Src: image.Black, Face: face, Dot: fixed.P(60, 90)}
+	dr.DrawString(text)
+	end := float64(dr.Dot.X.Ceil() + 10)
+	box := ocr.Quad{{X: 50, Y: 42}, {X: end, Y: 42}, {X: end, Y: 112}, {X: 50, Y: 112}}
+	page := d.redraw(img, []ocr.Line{{Score: 1, Box: box, Text: text}}, 1000, 150)
+	d.setLines()
+	if len(page.lines) != 1 || page.lines[0].slanted != nil {
+		t.Errorf("an upright line set slanted: %+v", page.lines)
 	}
 }
