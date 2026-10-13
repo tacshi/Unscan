@@ -19,6 +19,8 @@ import (
 	"time"
 
 	"github.com/egoist/mygo"
+	"github.com/egoist/mygo/plugins/updater"
+	"github.com/egoist/mygo/plugins/updater/native"
 	"github.com/egoist/mygo/ui"
 
 	"unscan/internal/ocr"
@@ -63,6 +65,9 @@ type effects struct {
 	// the models load.
 	useFonts  func(fontChoices) fontChoices
 	saveFonts func(fontChoices) error // remember the fonts chosen
+
+	setUpdates   func(updatePrefs) // remember whether to check and install updates by themselves
+	checkUpdates func()            // check for updates now, in the update window
 }
 
 // app is the state the window shows.
@@ -102,9 +107,10 @@ type app struct {
 
 	menu menuState // what the menu bar was last told
 
+	settingsOpen           bool        // the Settings dialog shows
 	fonts                  fontChoices // for retyped PDFs, the user's
-	fontsOpen              bool        // the Fonts dialog shows
 	usingFonts, fontsAgain bool        // useFonts runs; the fonts changed meanwhile
+	updates                updatePrefs // whether the app checks for updates and installs them by itself
 }
 
 // toast is a message about what the user just did.
@@ -604,6 +610,9 @@ func loadEngine() (*pdfocr.Converter, error) {
 }
 
 func main() {
+	// Checks for updates once a day, and offers them in a window of native
+	// UI, as Sparkle does.
+	mygo.Use(native.Plugin)
 	a := &app{sidebar: true}
 	var win *mygo.Window
 	var launched []string // files the app was opened with before its window
@@ -619,14 +628,17 @@ func main() {
 		do := func(fn func()) func(*mygo.MenuItem, *mygo.Window) {
 			return func(*mygo.MenuItem, *mygo.Window) { win.Update(fn) }
 		}
-		// The fonts chosen show in Settings, in the app menu, which only
-		// macOS has: elsewhere they show in the File menu.
+		// Settings and Check for Updates are in the app menu, which only
+		// macOS has: elsewhere they are in the File menu.
 		mac := runtime.GOOS == "darwin"
+		checkForUpdates := updater.MenuItem()
+		checkForUpdates.Hidden = mac
 		menu := mygo.NewMenu([]*mygo.MenuItem{
 			{Role: mygo.RoleAppMenu, Submenu: []*mygo.MenuItem{
 				{Role: mygo.RoleAbout},
+				updater.MenuItem(),
 				mygo.Separator(),
-				{Label: "Settings…", Accelerator: "CmdOrCtrl+,", Click: do(a.openFonts)},
+				{Label: "Settings…", Accelerator: "CmdOrCtrl+,", Click: do(a.openSettings)},
 				mygo.Separator(),
 				{Role: mygo.RoleServices},
 				mygo.Separator(),
@@ -640,7 +652,8 @@ func main() {
 				{ID: "open", Label: "Open…", Accelerator: "CmdOrCtrl+O", Click: do(a.choose)},
 				{ID: "save", Label: "Save…", Accelerator: "CmdOrCtrl+S", Disabled: true, Click: do(a.save)},
 				mygo.Separator(),
-				{Label: "Fonts…", Hidden: mac, Click: do(a.openFonts)},
+				{Label: "Settings…", Hidden: mac, Click: do(a.openSettings)},
+				checkForUpdates,
 				{Type: mygo.MenuItemSeparator, Hidden: mac},
 				{Role: mygo.RoleClose},
 			}},
@@ -703,7 +716,20 @@ func main() {
 				}
 				return saveFonts(fontsPath, fonts)
 			},
+			setUpdates: func(u updatePrefs) {
+				updater.SetAutomaticChecks(u.checks)
+				updater.SetAutomaticDownloads(u.downloads)
+			},
+			checkUpdates: updater.CheckForUpdates,
 		}
+		canUpdate := mygo.Updater.Enabled()
+		readUpdates := func() updatePrefs {
+			return updatePrefs{
+				enabled: canUpdate, checks: updater.AutomaticChecks(), downloads: updater.AutomaticDownloads(),
+				lastCheck: updater.LastCheck(),
+			}
+		}
+		a.updates = readUpdates()
 		win = mygo.NewWindow(mygo.WindowOptions{
 			Title:          "Unscan",
 			Width:          960,
@@ -717,6 +743,12 @@ func main() {
 			TrafficLightPosition: &mygo.Point{X: 20, Y: (barHeight - 16) / 2},
 			StateKey:             "main",
 			Content:              ui.View(a.view),
+		})
+		// The update window changes them too: when it checks, and with its
+		// check box.
+		updater.OnChange(func() {
+			u := readUpdates()
+			win.Update(func() { a.updates = u })
 		})
 		if len(launched) > 0 {
 			win.Update(func() { a.drop(launched) })

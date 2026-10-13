@@ -177,9 +177,11 @@ CGO_ENABLED=0 go test ./...
   skips every page. A page turned by its `/Rotate` previews upright, as
   large as asked.
 - `main_test.go`: the window's flow, run headless with `ui.NewTester`,
-  and the Fonts dialog's: a collection's font chosen, then another of it,
-  a file that cannot be used, the built-in font again, fonts chosen before
-  the models load or while others are read, and the choice saved.
+  and the Settings dialog's: a collection's font chosen, then another of
+  it, a file that cannot be used, the built-in font again, fonts chosen
+  before the models load or while others are read, and the choice saved;
+  updates checked for and installed without asking, the latter only with
+  the former, a check now, and a copy that cannot update itself.
 
 The OCR tests use macOS fonts and skip where those are missing. The
 converted PDF was also checked in Apple's PDFKit (Preview's engine): its

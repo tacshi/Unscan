@@ -57,12 +57,14 @@ func newFixture(t *testing.T, convert func(ctx context.Context, path string, p p
 			suggested = append(suggested, name)
 			return name, nil
 		},
-		reveal:     func(path string) { f.revealed = append(f.revealed, path) },
-		menu:       func(m menuState) { f.menus = append(f.menus, m) },
-		dock:       func(p float64) { f.dock = append(f.dock, p) },
-		attend:     func() {},
-		chooseFont: func() (string, error) { return "", nil },
-		saveFonts:  func(fontChoices) error { return nil },
+		reveal:       func(path string) { f.revealed = append(f.revealed, path) },
+		menu:         func(m menuState) { f.menus = append(f.menus, m) },
+		dock:         func(p float64) { f.dock = append(f.dock, p) },
+		attend:       func() {},
+		chooseFont:   func() (string, error) { return "", nil },
+		saveFonts:    func(fontChoices) error { return nil },
+		setUpdates:   func(updatePrefs) {},
+		checkUpdates: func() {},
 	}
 	return f
 }
@@ -701,7 +703,7 @@ func fakeFonts(fonts fontChoices) fontChoices {
 	return fonts
 }
 
-// TestFonts chooses fonts in the Fonts dialog: a collection's regular one,
+// TestFonts chooses fonts in the Settings dialog: a collection's regular one,
 // then another of it from its menu, a font file of one font, one that
 // cannot be used, and the built-in font again, saving each choice. Fonts
 // chosen before the models load are used once they have.
@@ -715,7 +717,7 @@ func TestFonts(t *testing.T) {
 	var chosen string
 	f.fx.chooseFont = func() (string, error) { return chosen, nil }
 	tt := ui.NewTester(f.view, 960, 720)
-	f.openFonts()
+	f.openSettings()
 	tt.Frame()
 	wantTexts(t, tt, "Fonts", "Serif bold", "Noto Serif SC Bold", "LXGW WenKai", "Built in")
 
@@ -764,7 +766,7 @@ func TestFonts(t *testing.T) {
 	}
 	wantTexts(t, tt, "Noto Serif SC")
 	click(t, tt, "Done")
-	if f.fontsOpen || tt.HasText("Serif bold") {
+	if f.settingsOpen || tt.HasText("Serif bold") {
 		t.Error("the dialog stays open")
 	}
 }
@@ -817,6 +819,54 @@ func TestSavedFonts(t *testing.T) {
 	}
 	if got := loadFonts(path); !reflect.DeepEqual(got, fontChoices{}) {
 		t.Errorf("read %+v from a damaged file", got)
+	}
+}
+
+// TestUpdates changes in Settings whether the app checks for updates and
+// installs them by itself, which only checking for them allows, and checks
+// now. A copy that cannot update itself says so, and only checks.
+func TestUpdates(t *testing.T) {
+	f := newFixture(t, nil)
+	var set []updatePrefs
+	f.fx.setUpdates = func(u updatePrefs) { set = append(set, u) }
+	checks := 0
+	f.fx.checkUpdates = func() { checks++ }
+	last := time.Date(2025, 3, 4, 10, 0, 0, 0, time.Local)
+	f.updates = updatePrefs{enabled: true, checks: true, lastCheck: last}
+	tt := ui.NewTester(f.view, 960, 720)
+	f.openSettings()
+	tt.Frame()
+	wantTexts(t, tt, "Settings", "Updates", "Last checked: Mar 4, 2025")
+
+	click(t, tt, "Download and install updates automatically")
+	click(t, tt, "Check for updates automatically")
+	want := []updatePrefs{
+		{enabled: true, checks: true, downloads: true, lastCheck: last},
+		{enabled: true, checks: false, downloads: true, lastCheck: last},
+	}
+	if !slices.Equal(set, want) {
+		t.Fatalf("set %+v, want %+v", set, want)
+	}
+	// Installing without asking needs checking without asking.
+	click(t, tt, "Download and install updates automatically")
+	if len(set) != 2 || !f.updates.downloads {
+		t.Errorf("set %+v with checks off", set)
+	}
+	click(t, tt, "Check Now")
+	if checks != 1 {
+		t.Errorf("checked %d times", checks)
+	}
+
+	f.updates = updatePrefs{checks: true}
+	tt.Frame()
+	wantTexts(t, tt, "This copy of Unscan can’t update itself: it’s a development build, or it’s in a folder it can’t change.")
+	click(t, tt, "Check for updates automatically")
+	click(t, tt, "Check Now")
+	if len(set) != 2 || !f.updates.checks || checks != 2 {
+		t.Errorf("set %+v, checked %d times, where the app can't update itself", set, checks)
+	}
+	if tt.HasText("Not checked yet") {
+		t.Error("says when it checked, where it can't update itself")
 	}
 }
 
