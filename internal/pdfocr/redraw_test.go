@@ -1021,8 +1021,10 @@ func TestStrayDots(t *testing.T) {
 			if s := got.s0 + 50; math.Abs(s-float64(textInk.Min.X)) > 2 || !kept(60) {
 				t.Errorf("%q read %q: set from %.1f, its ink starting at %d; dot kept %v", c.drawn, c.read, s, textInk.Min.X, kept(60))
 			}
-		case got.s0 != in.s0 || got.s1 != in.s1 || keep != nil:
+		case got.s0 != in.s0 || got.s1 != in.s1:
 			t.Errorf("%q read %q: ink cut to %.1f–%.1f from %.1f–%.1f", c.drawn, c.read, got.s0, got.s1, in.s0, in.s1)
+		case c.read == c.want && keep != nil:
+			t.Errorf("%q read %q: keeps %v as printed", c.drawn, c.read, keep)
 		}
 	}
 }
@@ -1189,5 +1191,100 @@ func TestSplitWords(t *testing.T) {
 	segs := [][2]float64{{0, number}, {number + 60, number + 60 + title}}
 	if starts := sh.split(segs, size, em); starts[1] != 4 && starts[1] != 5 {
 		t.Errorf("the title's stretch starts at glyph %d, %q: want the space, 4, or after it", starts[1], sh.glyphs[starts[1]].r)
+	}
+}
+
+// TestLineColors sets a line in the colors its glyphs were printed in: a
+// heading in black with its translation in blue, a word whose first
+// letter's ink was measured off its neighbor's in another color, and a
+// section number in gray before them. A line in one color, the thin 。
+// that ends it measured lighter, is set in it alone.
+func TestLineColors(t *testing.T) {
+	d, _ := testTextDoc(t)
+	gray, blue, black := rgb{126, 134, 129}, rgb{0, 121, 203}, rgb{4, 6, 4}
+	text := "1.10 The Telephone 電話"
+	sh := d.shape(text, sans)
+	var inks, want []rgb
+	for i, r := range []rune(text) {
+		switch {
+		case i < 5:
+			inks, want = append(inks, gray), append(want, gray)
+		case r == 'T' && i == 5:
+			inks, want = append(inks, gray), append(want, rgb{}) // off by a letter
+		case r > 0x2000:
+			inks, want = append(inks, blue), append(want, blue)
+		default:
+			inks, want = append(inks, black), append(want, rgb{})
+		}
+	}
+	if got := lineColors(inks, sh, white, 4); !slices.Equal(got, want) {
+		t.Errorf("%q set in\n%v, want\n%v", text, got, want)
+	}
+	one := d.shape("放下鉛筆。", sans)
+	if got := lineColors([]rgb{blue, blue, blue, blue, {50, 152, 196}}, one, white, 4); got != nil {
+		t.Errorf("a line in blue set in %v", got)
+	}
+}
+
+// TestRedrawColors redraws a heading in black with its translation in
+// blue, and sets each in its color.
+func TestRedrawColors(t *testing.T) {
+	d, fonts := testTextDoc(t)
+	sf, err := opentype.Parse(fonts.Serif.Data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	face, err := opentype.NewFace(sf, &opentype.FaceOptions{Size: 40, DPI: 72, Hinting: font.HintingNone})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer face.Close()
+	img := image.NewRGBA(image.Rect(0, 0, 800, 150))
+	draw.Draw(img, img.Rect, image.White, image.Point{}, draw.Src)
+	blue := image.NewUniform(color.RGBA{0, 121, 203, 255})
+	dr := font.Drawer{Dst: img, Src: image.Black, Face: face, Dot: fixed.P(60, 100)}
+	dr.DrawString("Meeting and Greeting ")
+	dr.Src = blue
+	dr.DrawString("見面與問候")
+	end := float64(dr.Dot.X.Ceil() + 10)
+	box := ocr.Quad{{X: 50, Y: 52}, {X: end, Y: 52}, {X: end, Y: 112}, {X: 50, Y: 112}}
+	page := d.redraw(img, []ocr.Line{{Score: 1, Box: box, Text: "Meeting and Greeting 見面與問候"}}, 800, 150)
+	d.setLines()
+	if len(page.lines) != 1 || len(page.lines[0].colors) != len(page.lines[0].cids) {
+		t.Fatalf("lines %+v: want one, in colors", page.lines)
+	}
+	for k, c := range page.lines[0].colors {
+		r := d.sets[page.set].codes[page.lines[0].cids[k]-1].r
+		if latin := r < 0x2000; latin && c != (rgb{}) || !latin && (diff(c, rgb{0, 121, 203}) > 24) {
+			t.Errorf("%q set in %v", r, c)
+		}
+	}
+	if content := string(page.content(d.sets[page.set])); strings.Count(content, " rg\n") != 2 {
+		t.Errorf("the line's colors set %d times, want twice", strings.Count(content, " rg\n"))
+	}
+}
+
+// TestLeaderDots finds dot leaders on a page at 300 DPI, whose dots lie too
+// far apart to join, as a picture, but not a speck of dust, or three
+// specks in a row.
+func TestLeaderDots(t *testing.T) {
+	img := image.NewRGBA(image.Rect(0, 0, 2400, 600))
+	draw.Draw(img, img.Rect, image.White, image.Point{}, draw.Src)
+	gray := image.NewUniform(color.RGBA{122, 130, 125, 255})
+	dot := func(x, y int) { draw.Draw(img, image.Rect(x, y-5, x+5, y), gray, image.Point{}, draw.Src) }
+	for x := 400; x < 1400; x += 28 {
+		dot(x, 150)
+	}
+	dot(1000, 400) // dust
+	for x := 400; x < 480; x += 28 {
+		dot(x, 500) // three specks
+	}
+	p := newPixels(img)
+	rects := p.pictures(300)
+	if len(rects) != 1 {
+		t.Fatalf("pictures %v: want the leaders' alone", rects)
+	}
+	if r := rects[0]; r.Min.X > 400 || r.Max.X < 1385 || r.Min.Y > 145 || r.Max.Y < 150 || r.Dy() > 30 {
+		t.Errorf("leaders in %v, drawn in (400,145)-(1385,150)", r)
 	}
 }

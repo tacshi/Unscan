@@ -225,42 +225,11 @@ func (p *pixels) measure(f frame, aspect float64) ink {
 	}
 	in.plain = in.bg == white && colored <= border/10
 
-	// The ink's color: the most distinct fifth of what stands out in the box.
-	var dists [256]int
-	strong := 0
-	for j := m; j < m+nh; j++ {
-		for i := m; i < m+nl; i++ {
-			d := diff(samples[j*ns+i], in.bg)
-			dists[d]++
-			if d > 48 {
-				strong++
-			}
-		}
-	}
-	if strong < 8 {
+	fg, ok := inkColor(nl*nh, func(k int) rgb { return samples[(m+k/nl)*ns+m+k%nl] }, in.bg)
+	if !ok {
 		return in
 	}
-	cut := 255
-	for n := 0; cut > 48; cut-- {
-		if n += dists[cut]; n >= strong/5 {
-			break
-		}
-	}
-	var sum [3]int
-	n := 0
-	for j := m; j < m+nh; j++ {
-		for i := m; i < m+nl; i++ {
-			if c := samples[j*ns+i]; diff(c, in.bg) >= cut {
-				for k := range 3 {
-					sum[k] += int(c[k])
-				}
-				n++
-			}
-		}
-	}
-	for k := range 3 {
-		in.fg[k] = uint8(sum[k] / max(n, 1))
-	}
+	in.fg = fg
 	thr := max(32, diff(in.fg, in.bg)/2)
 	inked := func(i, j int) bool { return diff(samples[j*ns+i], in.bg) > thr }
 	// The tips of strokes, such as a comma's tail, cover little of their
@@ -478,6 +447,45 @@ func (p *pixels) measure(f frame, aspect float64) ink {
 	return in
 }
 
+// inkColor is the color of the ink among n pixels on bg, at gives each:
+// the mean of the most distinct fifth of those that stand out from it.
+// It is false where fewer than 8 do.
+func inkColor(n int, at func(k int) rgb, bg rgb) (rgb, bool) {
+	var dists [256]int
+	strong := 0
+	for k := range n {
+		d := diff(at(k), bg)
+		dists[d]++
+		if d > 48 {
+			strong++
+		}
+	}
+	if strong < 8 {
+		return rgb{}, false
+	}
+	cut := 255
+	for c := 0; cut > 48; cut-- {
+		if c += dists[cut]; c >= strong/5 {
+			break
+		}
+	}
+	var sum [3]int
+	count := 0
+	for k := range n {
+		if c := at(k); diff(c, bg) >= cut {
+			for i := range 3 {
+				sum[i] += int(c[i])
+			}
+			count++
+		}
+	}
+	var fg rgb
+	for i := range 3 {
+		fg[i] = uint8(sum[i] / max(count, 1))
+	}
+	return fg, true
+}
+
 // leader reports whether r is a character a contents page's dot leaders
 // read as.
 func leader(r rune) bool {
@@ -547,7 +555,8 @@ func (in ink) strays(last bool) (edge, gap float64, ok bool) {
 // some of the dots, a dot at times as 。, which set in the line's face
 // would come out its size and weight, not the leaders'; and it reads
 // others into the line's box, but not its text. The line is set over the
-// rest of its ink, and the dots kept as printed: keep is where they lie.
+// rest of its ink, and the dots kept as printed: keep is where they lie,
+// on to the box's end, past the text's ink, as more of them may.
 //
 // Dots at an end of the ink, set apart from the rest (see strays), are
 // the leaders' where the text ends or starts with dots there, or with a
@@ -588,12 +597,14 @@ func trimLeaders(text string, in ink) (string, ink, [][2]float64) {
 		if last {
 			outer = in.s1
 		}
-		cut := func(at, gap float64) { // the ink at at, with gap to spare
+		// Keeps what lies past at, from half of gap on, and cuts the ink
+		// there.
+		cut := func(at, gap float64) {
 			if last {
-				keep = append(keep, [2]float64{at + gap/2, in.s1})
+				keep = append(keep, [2]float64{at + gap/2, math.Inf(1)})
 				in.s1 = at
 			} else {
-				keep = append([][2]float64{{in.s0, at - gap/2}}, keep...)
+				keep = append([][2]float64{{math.Inf(-1), at - gap/2}}, keep...)
 				in.s0 = at
 			}
 			changed = true
@@ -629,6 +640,7 @@ func trimLeaders(text string, in ink) (string, ink, [][2]float64) {
 				run++
 			}
 			if !slices.Contains(rs[:n], '。') || float64(run) >= 0.5*h || float64(peak) >= in.t1-0.1*h {
+				cut(outer, 4)
 				drop = n
 			}
 		}
@@ -692,7 +704,8 @@ func (p *pixels) fill(f frame, s0, s1, t0, t1 float64, c rgb) {
 
 // pictures finds what is left on a page, at dpi: everything that is not
 // white, in rectangles around the pieces that lie within a millimeter or
-// so of each other, leaving out specks of dust.
+// so of each other, leaving out specks of dust, but for rows of specks
+// that are dot leaders (see leaders), whose dots lie further apart.
 func (p *pixels) pictures(dpi float64) []image.Rectangle {
 	b := max(2, int(dpi/75+0.5)) // blocks of about a third of a millimeter
 	gw, gh := (p.w+b-1)/b, (p.h+b-1)/b
@@ -730,7 +743,7 @@ func (p *pixels) pictures(dpi float64) []image.Rectangle {
 
 	minInk := max(16, int(64*dpi*dpi/(300*300)))
 	seen := make([]bool, gw*gh)
-	var rects []image.Rectangle
+	var rects, specks []image.Rectangle
 	var stack []int
 	for start := range grown {
 		if !grown[start] || seen[start] {
@@ -762,12 +775,74 @@ func (p *pixels) pictures(dpi float64) []image.Rectangle {
 			}
 		}
 		if total < minInk {
+			specks = append(specks, box)
 			continue
 		}
-		px := image.Rect(box.Min.X*b-b, box.Min.Y*b-b, box.Max.X*b+b, box.Max.Y*b+b)
-		rects = append(rects, px.Intersect(image.Rect(0, 0, p.w, p.h)))
+		rects = append(rects, box)
+	}
+	mm := dpi / 25.4 / float64(b) // blocks a millimeter
+	rects = append(rects, leaders(specks, max(2, int(1.5*mm)), int(6*mm))...)
+	for i, r := range rects {
+		px := image.Rect(r.Min.X*b-b, r.Min.Y*b-b, r.Max.X*b+b, r.Max.Y*b+b)
+		rects[i] = px.Intersect(image.Rect(0, 0, p.w, p.h))
 	}
 	return mergeRects(rects)
+}
+
+// leaders finds the rows of specks that are dot leaders, or a dotted
+// line, among specks too small to keep alone: four or more alike, no
+// larger than size, their middles level, spaced evenly along the row,
+// each no further than gap from the next. It returns the rectangle round
+// each row. Sizes, places and rectangles are in blocks of pixels.
+func leaders(specks []image.Rectangle, size, gap int) []image.Rectangle {
+	specks = slices.DeleteFunc(specks, func(r image.Rectangle) bool { return r.Dx() > size || r.Dy() > size })
+	level := func(r image.Rectangle) int { return r.Min.Y + r.Max.Y } // twice the middle's
+	slices.SortFunc(specks, func(a, b image.Rectangle) int {
+		return cmp.Or(cmp.Compare(level(a), level(b)), cmp.Compare(a.Min.X, b.Min.X))
+	})
+	alike := func(a, b image.Rectangle) bool { return absInt(a.Dx()-b.Dx()) <= 1 && absInt(a.Dy()-b.Dy()) <= 1 }
+	used := make([]bool, len(specks))
+	var rows []image.Rectangle
+	for i := range specks {
+		if used[i] {
+			continue
+		}
+		// The specks level with this one, within a block, left to right.
+		var row []int
+		for j := i; j < len(specks) && level(specks[j]) <= level(specks[i])+2; j++ {
+			if !used[j] {
+				row = append(row, j)
+			}
+		}
+		slices.SortFunc(row, func(a, b int) int { return cmp.Compare(specks[a].Min.X, specks[b].Min.X) })
+		for start := 0; start < len(row); {
+			end := start + 1 // past the run of specks from start
+			for ; end < len(row); end++ {
+				a, z := specks[row[end-1]], specks[row[end]]
+				step := z.Min.X - a.Min.X
+				if step <= 0 || step > gap || !alike(specks[row[start]], z) {
+					break
+				}
+				if end-start >= 2 {
+					if last := a.Min.X - specks[row[end-2]].Min.X; absInt(step-last) > max(1, last/4) {
+						break
+					}
+				}
+			}
+			if end-start < 4 {
+				start++
+				continue
+			}
+			r := specks[row[start]]
+			for _, k := range row[start:end] {
+				r = r.Union(specks[k])
+				used[k] = true
+			}
+			rows = append(rows, r)
+			start = end
+		}
+	}
+	return rows
 }
 
 // edgeMark reports whether r, a piece of what is left of a page w×h pixels
@@ -920,6 +995,106 @@ func mergeRects(rects []image.Rectangle) []image.Rectangle {
 	return rects
 }
 
+// glyphColors measures the color each of a line's glyphs was printed in,
+// set as tl and origins place them: the ink's (see inkColor) across the
+// glyph's advance, from its origin to the next's, which is the most of
+// the glyph's ink, or of its neighbor's in its word, where the line is set
+// a little off its ink. A glyph that draws nothing, as a space, takes the
+// color of the glyph before it, or after it. It is nil where none can
+// tell.
+func (p *pixels) glyphColors(f frame, in ink, sh shape, tl textLine, origins []float64) []rgb {
+	colors := make([]rgb, len(sh.glyphs))
+	told := make([]bool, len(sh.glyphs))
+	var px []rgb
+	for i, g := range sh.glyphs {
+		if !g.inked {
+			continue
+		}
+		a, z := tl.x+origins[i]*tl.scale, tl.x+origins[i+1]*tl.scale
+		px = px[:0]
+		for s := math.Floor(a); s < z; s++ {
+			for t := math.Floor(in.t0); t < in.t1; t++ {
+				pt := f.point(s+0.5, t+0.5)
+				px = append(px, p.at(int(math.Floor(pt.X)), int(math.Floor(pt.Y))))
+			}
+		}
+		colors[i], told[i] = inkColor(len(px), func(k int) rgb { return px[k] }, in.bg)
+	}
+	first := slices.Index(told, true)
+	if first < 0 {
+		return nil
+	}
+	for i := range colors {
+		switch {
+		case i < first:
+			colors[i] = colors[first]
+		case !told[i]:
+			colors[i] = colors[i-1]
+		}
+	}
+	return colors
+}
+
+// lineColors sets each of a line's glyphs, as sh sets them, in the color
+// of its ink, as textColor does on a page whose black is black's luma, and
+// runs of glyphs in about the same color in their mean, as one ink printed
+// them, as a heading in black with its translation in blue. A word of
+// Latin letters, digits or punctuation is in the color most of its glyphs
+// are: one ink prints a word, and a narrow glyph's ink, measured where the
+// line is set a little off its ink, may be its neighbor's. A CJK character
+// is wide enough to tell its own. It is nil where the line is in one
+// color.
+func lineColors(inks []rgb, sh shape, bg rgb, black int) []rgb {
+	if inks == nil {
+		return nil
+	}
+	colors := make([]rgb, len(inks))
+	for i, c := range inks {
+		colors[i] = textColor(c, bg, true, black)
+	}
+	word := func(g glyph) bool { return !g.wide && !g.space }
+	for i := 0; i < len(colors); {
+		j := i + 1
+		if word(sh.glyphs[i]) {
+			for j < len(colors) && word(sh.glyphs[j]) {
+				j++
+			}
+		}
+		most, count := colors[i], 0
+		for _, c := range colors[i:j] {
+			if n := len(slices.DeleteFunc(slices.Clone(colors[i:j]), func(d rgb) bool { return diff(c, d) > 48 })); n > count {
+				most, count = c, n
+			}
+		}
+		for k := i; k < j; k++ {
+			colors[k] = most
+		}
+		i = j
+	}
+	for i := 0; i < len(colors); {
+		j := i + 1
+		for j < len(colors) && diff(colors[j], colors[i]) <= 64 {
+			j++
+		}
+		var sum [3]int
+		for _, c := range colors[i:j] {
+			for k := range 3 {
+				sum[k] += int(c[k])
+			}
+		}
+		for k := i; k < j; k++ {
+			for c := range 3 {
+				colors[k][c] = uint8(sum[c] / (j - i))
+			}
+		}
+		i = j
+	}
+	if !slices.ContainsFunc(colors, func(c rgb) bool { return c != colors[0] }) {
+		return nil
+	}
+	return colors
+}
+
 // minScore is the least confidence the recognizer reads a line with for it
 // to be set: lines of text read with less, as a lettered box read as 向 or
 // a picture's scribbles as a word, stay as printed. Lines of text score
@@ -1029,20 +1204,38 @@ func (d *textDoc) redrawPage(img image.Image, lines []ocr.Line, width, height fl
 		sizes[i] = ref.size(shapes[i], m.frame, m.ink)
 	}
 	sizes = evenSizes(sizes)
-	for i, m := range page.measured {
-		f, in := m.frame, m.ink
-		if f.length == 0 || f.height == 0 || !shapes[i].inked || m.printed {
+	// Where each line's characters lie, and the color each was printed in,
+	// before any line is erased.
+	set := make([]bool, len(page.measured))
+	bares := make([][][2]float64, len(page.measured))
+	for i := range page.measured {
+		m := &page.measured[i]
+		if set[i] = m.frame.length > 0 && m.frame.height > 0 && shapes[i].inked && !m.printed; !set[i] {
 			continue
 		}
-		_, _, bare := ref.place(shapes[i], f, in, sizes[i])
-		bare = append(bare, m.keep...)
-		slices.SortFunc(bare, func(a, b [2]float64) int { return cmp.Compare(a[0], b[0]) })
+		tl, origins, bare := ref.place(shapes[i], m.frame, m.ink, sizes[i])
+		bares[i] = bare
+		if m.ink.found {
+			m.colors = p.glyphColors(m.frame, m.ink, shapes[i], tl, origins)
+		}
+	}
+	for i, m := range page.measured {
+		if !set[i] {
+			continue
+		}
+		f, in := m.frame, m.ink
 		// The box, and the ink that runs past it, with a pixel to spare,
-		// but for the bare ink.
+		// but for the bare ink, and what is to be kept, which may run on
+		// to the box's ends, past the text's ink.
 		s0, s1, t0, t1 := 0.0, f.length, 0.0, f.height
 		if in.found {
 			s0, s1, t0, t1 = min(s0, in.s0), max(s1, in.s1), min(t0, in.t0), max(t1, in.t1)
 		}
+		bare := bares[i]
+		for _, k := range m.keep {
+			bare = append(bare, [2]float64{max(k[0], s0-1), min(k[1], s1+1)})
+		}
+		slices.SortFunc(bare, func(a, b [2]float64) int { return cmp.Compare(a[0], b[0]) })
 		from := s0 - 1
 		for _, b := range bare {
 			p.fill(f, from, b[0]-2, t0-1, t1+1, white)
@@ -1148,6 +1341,9 @@ func (d *textDoc) setLines() {
 			tl.dx, tl.dy = ux/n, uy/n
 			tl.size *= (page.sx + page.sy) / 2
 			tl.color = textColor(in.fg, in.bg, in.found, black)
+			if !m.printed {
+				tl.colors = lineColors(m.colors, sh, in.bg, black)
+			}
 			page.lines = append(page.lines, tl)
 		}
 		page.measured = nil

@@ -119,9 +119,13 @@ For each scanned page, at the resolution it was read at:
    characters abut and text extraction finds no spaces that were not
    read. A line in Kai takes its Latin letters, digits and narrow
    punctuation from the serif face, as books set them in Times beside
-   Kai, since LXGW WenKai's own are a casual hand. Ink that is about
-   black prints black, but for gray on a page printed black, as a contents
-   page's section numbers are, which stays gray.
+   Kai, since LXGW WenKai's own are a casual hand. Each character is set
+   in the color of its ink, as a heading in black with its translation in
+   blue is, measured across its advance where it is first set, and a word
+   of Latin letters or digits in the color most of its characters are,
+   as one ink prints a word. Ink that is about black prints black, but
+   for gray on a page printed black, as a contents page's section numbers
+   are, which stays gray.
 5. Lines on plain paper are erased, but for those that type would not
    match, which stay as printed under invisible text, as text on color
    does: a line whose ink is framed, as a letter in a box is; one whose
@@ -130,7 +134,9 @@ For each scanned page, at the resolution it was read at:
    picture would; and one the recognizer read with less than 85%
    confidence. What is left that is not white is cut
    into images: line art (rules, dot leaders) losslessly, the rest as JPEG
-   at 200 DPI at most. Specks of dust are dropped, and so are the marks
+   at 200 DPI at most. Specks of dust are dropped, but for rows of four or
+   more alike, level and evenly spaced, as dot leaders and dotted lines
+   are, whose dots lie too far apart to join; and so are the marks
    the scan's edges leave, the shadow of the paper's edge or the
    scanner's lid: what lies in the outer half of a margin, within 15 mm
    of the edge, as a line along it or a speck within 3 mm of it.
@@ -167,11 +173,17 @@ CGO_ENABLED=0 go test ./...
   where its ink does. A contents page's heading followed by a dot set
   apart, read as nothing, as a period or as 。, a heading whose 。 read
   has no ink and a page number after a dot are set over their own ink,
-  without the dots, which are kept, while a sentence's period and a 。
+  without the dots, which are kept with the rest of their box, while a
+  sentence's period and a 。
   set as Chinese sets it stay; a page range read with a hyphen takes the
   en dash it was printed with, and a telephone number keeps its hyphen;
   a section's number in narrow digits is set apart from its title at the
-  space between them. The marks of a scan's
+  space between them. A heading in black with its translation in blue is
+  set in both, with a color for each run; a word is set in the color most
+  of its letters were measured in, a gray section number in gray, and a
+  line in one color, its thin 。 measured lighter, in it alone. Dot
+  leaders at 300 DPI, too far apart to join, are kept as a picture, while
+  a speck of dust and three specks in a row are not. The marks of a scan's
   edges (a broken line down one, a speck on another, a shadow along a
   third) are dropped, while a rule over the text, a folio the recognizer
   missed and a picture printed to the edge are kept. A line tracked as

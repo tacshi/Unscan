@@ -296,7 +296,12 @@ type measuredLine struct {
 	text  string
 	frame frame
 	ink   ink
-	keep  [][2]float64 // ink along it to keep as printed, as dot leaders
+	// keep is ink along it to keep as printed, as dot leaders: a stretch
+	// may run on, infinitely, to the box's end.
+	keep [][2]float64
+	// colors are what each glyph of its text was printed in, set in the
+	// serif face, or nil (see glyphColors).
+	colors []rgb
 	// printed is whether the line stays as printed, under invisible text:
 	// it is on color, its ink is framed, or squeezed, or the recognizer
 	// was unsure of it (see redrawPage).
@@ -323,7 +328,8 @@ type textLine struct {
 	size   float64 // the font size
 	scale  float64 // the horizontal stretch, 1 for none
 	color  rgb
-	hidden bool // invisible, over the line as printed
+	colors []rgb // each character's, or nil where the line is in one, color
+	hidden bool  // invisible, over the line as printed
 }
 
 // newTextDoc starts a document set in the text fonts, but for the faces the
@@ -534,12 +540,18 @@ func (p *textPage) content(s *cidSet) []byte {
 		if l.hidden {
 			mode = 3 // neither fill nor stroke
 		}
-		fmt.Fprintf(&b, "BT\n%d Tr\n%s Tz\n%s %s %s rg\n%s %s %s %s %s %s Tm\n",
-			mode, num(100*l.scale),
-			num(float64(l.color[0])/255), num(float64(l.color[1])/255), num(float64(l.color[2])/255),
+		colorOf := func(k int) rgb {
+			if l.colors != nil {
+				return l.colors[k]
+			}
+			return l.color
+		}
+		color := colorOf(0)
+		fmt.Fprintf(&b, "BT\n%d Tr\n%s Tz\n%s rg\n%s %s %s %s %s %s Tm\n",
+			mode, num(100*l.scale), rg(color),
 			num(l.dx), num(l.dy), num(-l.dy), num(l.dx), num(l.x), num(l.y))
 		in := -1 // the face of the stretch being written
-		for _, c := range l.cids {
+		for k, c := range l.cids {
 			f := in
 			if c > 0 {
 				f = s.codes[c-1].face
@@ -547,18 +559,30 @@ func (p *textPage) content(s *cidSet) []byte {
 			if f < 0 {
 				f = l.face // a character out of CIDs, first
 			}
-			if f != in {
+			if f != in || colorOf(k) != color {
 				if in >= 0 {
 					b.WriteString("> Tj\n")
 				}
-				fmt.Fprintf(&b, "/F%d %s Tf\n<", p.set*allFaces+f+1, num(l.size))
-				in = f
+				if colorOf(k) != color {
+					color = colorOf(k)
+					fmt.Fprintf(&b, "%s rg\n", rg(color))
+				}
+				if f != in {
+					fmt.Fprintf(&b, "/F%d %s Tf\n", p.set*allFaces+f+1, num(l.size))
+					in = f
+				}
+				b.WriteString("<")
 			}
 			fmt.Fprintf(&b, "%04X", c)
 		}
 		b.WriteString("> Tj\nET\n")
 	}
 	return b.Bytes()
+}
+
+// rg is c as the operands of rg.
+func rg(c rgb) string {
+	return num(float64(c[0])/255) + " " + num(float64(c[1])/255) + " " + num(float64(c[2])/255)
 }
 
 // toUnicodeCMap maps each CID to its character.
