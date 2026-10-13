@@ -21,10 +21,6 @@ run locally through ONNX Runtime, so documents never leave the computer.
 It is built for Chinese and English documents, and written in Go without
 cgo.
 
-> **Status:** early prototype (v0.1.0), built with
-> [MyGo](https://github.com/egoist/mygo). macOS on Apple silicon is the
-> primary platform.
-
 ## What it makes
 
 | Output | What you get |
@@ -211,6 +207,24 @@ these environment variables:
 | `MACOS_SIGNING_IDENTITY` | Signs with this Developer ID identity, with the hardened runtime. Without it the app is signed ad hoc and runs on the Mac that built it only. |
 | `NOTARY_PROFILE` | Notarizes the disk image with this keychain profile, made by `xcrun notarytool store-credentials`, and staples the ticket. |
 | `SKIP_TESTS=1` | Builds without running the tests first. |
+
+### Publishing
+
+```sh
+scripts/publish.sh 2026.10.0               # build, sign, notarize, review the notes, publish
+scripts/publish.sh 2026.10.0 --no-upload   # the signed, notarized disk image in build/publish only
+```
+
+`publish.sh` releases from a clean, pushed `main` (`--allow-branch` for
+another branch). It builds with the release script, signed with the
+keychain's Developer ID and notarized with the `Unscan` keychain profile
+(`MACOS_SIGNING_IDENTITY` and `NOTARY_PROFILE` choose others). It then
+tags the commit `v2026.10.0` and publishes a GitHub release with the disk
+image, as `Unscan-2026.10.0-arm64.dmg`. Its notes come from
+`release-notes/Unscan-2026.10.0.md` when that exists. Otherwise they are
+drafted from the commits since the last release, for you to review or
+edit first. The version is given to the build for the run only, so
+`mygo.json` needs no commit for a release.
 
 ## How it works
 
