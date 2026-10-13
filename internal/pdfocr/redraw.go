@@ -24,7 +24,9 @@ import (
 // on color, such as a cover's title), but for the marks the scan's edges
 // leave, is cut out into images. Text on color stays as printed, since
 // retyping it would deface the design, under invisible text that makes it
-// searchable as the rest.
+// searchable as the rest; and so does text that type would not match, as
+// handwriting in a picture, a lettered box, or what the recognizer was
+// unsure of.
 
 // pixels is an RGB image, 3 bytes a pixel.
 type pixels struct {
@@ -81,9 +83,23 @@ func chroma(c rgb) int {
 	return int(max(c[0], c[1], c[2])) - int(min(c[0], c[1], c[2]))
 }
 
+// tint reports whether c is a pale color, as a panel is printed in: as
+// near white as text's paper is taken to be (see measure), but further
+// than the paper's noise, and with color, unlike the gray of a shadow the
+// scanner casts.
+func tint(c rgb) bool {
+	d := diff(c, white)
+	return d > 8 && d <= 40 && chroma(c) >= 6
+}
+
 // whiten maps the paper's color, the page's most common light color, to
 // white, along with the faint noise around it, so that pages come out
-// white however yellow or gray the scanned paper was.
+// white however yellow or gray the scanned paper was. In each channel,
+// the paper's level is the median of the pixels near its color, and the
+// noise what lies within about four times its standard deviation of it,
+// from 4 to 16 levels: six times how far from it those pixels lie, by
+// their median. A clean scan keeps a panel printed in a pale tint, which
+// a noisy one's grain would hide.
 func (p *pixels) whiten() {
 	var counts [4096]int
 	var sums [4096][3]int
@@ -110,9 +126,25 @@ func (p *pixels) whiten() {
 	if luma(paper) < 160 {
 		return // a dark page, such as a photo: no paper to whiten
 	}
+	var levels [3][256]int
+	near := 0
+	for i := 0; i < len(p.pix); i += 3 {
+		if diff(rgb(p.pix[i:i+3]), paper) <= 32 {
+			near++
+			for c := range 3 {
+				levels[c][p.pix[i+c]]++
+			}
+		}
+	}
 	var lut [3][256]uint8
 	for c := range 3 {
-		top := max(int(paper[c])-16, 64)
+		level := percentile(levels[c][:], near, 0.5)
+		var devs [256]int
+		for v, n := range levels[c] {
+			devs[absInt(v-level)] += n
+		}
+		noise := min(16, max(4, 6*percentile(devs[:], near, 0.5)))
+		top := max(level-noise, 64)
 		for v := range 256 {
 			lut[c][v] = uint8(min(255, v*255/top))
 		}
@@ -167,20 +199,52 @@ type ink struct {
 	segs    [][2]float64
 	strokes strokes // what the ink is like, for style
 	// tops are how high each column's ink reaches up the frame, from
-	// topsFrom along it, a column a pixel; -1 where it has none.
+	// topsFrom along it, a column a pixel; none where it has none.
 	tops     []float32
 	topsFrom float64
 	// plain is whether the line is printed on plain paper: its box's edge
 	// is white, but for the ink of lines close by.
 	plain bool
+	// framed is whether a frame runs round the ink, as round a label's
+	// letter: its edges are inked most of the way along.
+	framed bool
+	// tracking is how far apart the ink's pieces lie along the line, as
+	// letters tracked in a title do: the median of the blank gaps between
+	// them, over the ink's height. Pieces are where they lie, from s0 to
+	// s1 along the line, where they lie a third of the ink's height apart
+	// or more (see tracked), nil else.
+	tracking float64
+	pieces   [][2]float64
+	// gaps are where the ink's blank gaps along the line lie, from s0 to
+	// s1, those as wide as 0.15 of its height or wider, where its words
+	// may part (see spread).
+	gaps [][2]float64
+	// rules are what rules run along the line, as an underline does,
+	// from s0 to s1 along it and t0 to t1 up it, apart from its text's ink
+	// (see measureRules), which are kept as printed.
+	rules [][4]float64
 }
+
+// none is the top of a column without ink (see ink.tops).
+var none = float32(math.Inf(-1))
 
 // measure finds a line's ink: the pixels that stand out from the color
 // around the box's edge, by at least half their contrast with it. Ink
 // that runs on unbroken past the box, as glyphs a tight box cuts, counts
 // too; ink beyond a gap, as of the next line, does not. Aspect is the
-// height of the text's glyphs over their width, or 0 if unknown.
-func (p *pixels) measure(f frame, aspect float64) ink {
+// height of the text's glyphs over their width, or 0 if unknown. Rules
+// along the line are told apart from its text's ink (see measureRules).
+func (p *pixels) measure(f frame, aspect float64) ink { return p.measureRules(f, aspect, true) }
+
+// measureRules measures a line's ink as measure does, telling rules along
+// it apart from its text's ink, if rules, as an underline, a strike
+// through words, or a rule over them: bands of rows no thicker than an
+// eighth of the box's height, holding a run of ink a fifth longer than
+// the box is high, longer than any glyph's stroke. They are to be kept as
+// printed (see ink.rules), and the text's ink lies above an underline and
+// below a rule over it. A line whose text reads rules, as underscores or
+// dashes, is measured without telling them.
+func (p *pixels) measureRules(f frame, aspect float64, rules bool) ink {
 	in := ink{bg: white, fg: rgb{}}
 	nl, nh := int(math.Ceil(f.length)), int(math.Ceil(f.height))
 	if nl < 2 || nh < 2 {
@@ -212,47 +276,16 @@ func (p *pixels) measure(f frame, aspect float64) ink {
 	for k := range 3 {
 		in.bg[k] = uint8(percentile(hist[k][:], border, 0.5))
 	}
-	if diff(in.bg, white) <= 40 {
+	if diff(in.bg, white) <= 40 && !tint(in.bg) {
 		in.bg = white
 	}
 	in.plain = in.bg == white && colored <= border/10
 
-	// The ink's color: the most distinct fifth of what stands out in the box.
-	var dists [256]int
-	strong := 0
-	for j := m; j < m+nh; j++ {
-		for i := m; i < m+nl; i++ {
-			d := diff(samples[j*ns+i], in.bg)
-			dists[d]++
-			if d > 48 {
-				strong++
-			}
-		}
-	}
-	if strong < 8 {
+	fg, ok := inkColor(nl*nh, func(k int) rgb { return samples[(m+k/nl)*ns+m+k%nl] }, in.bg)
+	if !ok {
 		return in
 	}
-	cut := 255
-	for n := 0; cut > 48; cut-- {
-		if n += dists[cut]; n >= strong/5 {
-			break
-		}
-	}
-	var sum [3]int
-	n := 0
-	for j := m; j < m+nh; j++ {
-		for i := m; i < m+nl; i++ {
-			if c := samples[j*ns+i]; diff(c, in.bg) >= cut {
-				for k := range 3 {
-					sum[k] += int(c[k])
-				}
-				n++
-			}
-		}
-	}
-	for k := range 3 {
-		in.fg[k] = uint8(sum[k] / max(n, 1))
-	}
+	in.fg = fg
 	thr := max(32, diff(in.fg, in.bg)/2)
 	inked := func(i, j int) bool { return diff(samples[j*ns+i], in.bg) > thr }
 	// The tips of strokes, such as a comma's tail, cover little of their
@@ -372,6 +405,70 @@ func (p *pixels) measure(f frame, aspect float64) ink {
 		best[1]++
 	}
 
+	if rules {
+		// The runs of ink along row j a rule's would be, from their first
+		// column to past their last.
+		long := func(j int) [][2]int {
+			var runs [][2]int
+			start := -1
+			for i := m; i <= m+nl; i++ {
+				switch {
+				case i < m+nl && inked(i, j):
+					if start < 0 {
+						start = i
+					}
+				case start >= 0:
+					if float64(i-start) >= 1.2*f.height {
+						runs = append(runs, [2]int{start, i})
+					}
+					start = -1
+				}
+			}
+			return runs
+		}
+		thin := max(2, nh/8)
+		// Through the box, and the text's ink past it, as a rule may lie
+		// apart from the ink, or run into it.
+		top := max(best[1], m+nh-1)
+		for j := min(best[0], m); j <= top; j++ {
+			runs := long(j)
+			if runs == nil {
+				continue
+			}
+			// The band of rows with such runs, and the runs that overlap
+			// down it, each a rule's, as two words underlined in a line.
+			band := j
+			for band < top {
+				more := long(band + 1)
+				if more == nil {
+					break
+				}
+				band++
+				for _, r := range more {
+					k := slices.IndexFunc(runs, func(q [2]int) bool { return q[0] < r[1] && r[0] < q[1] })
+					if k < 0 {
+						runs = append(runs, r)
+					} else {
+						runs[k] = [2]int{min(runs[k][0], r[0]), max(runs[k][1], r[1])}
+					}
+				}
+			}
+			if band-j+1 <= thin {
+				// With a row of its blurred edge each side.
+				for _, r := range runs {
+					in.rules = append(in.rules, [4]float64{float64(r[0] - m - 1), float64(r[1] - m + 1), float64(j - 1 - m), float64(band + 2 - m)})
+				}
+				switch { // where it runs into the text's ink, at its foot or its head
+				case j <= best[0]+2 && band >= best[0]-1 && band+2 <= best[1]:
+					best[0] = band + 2
+				case band >= best[1]-2 && j <= best[1]+1 && j-2 >= best[0]:
+					best[1] = j - 2
+				}
+			}
+			j = band
+		}
+	}
+
 	// Along it: the first and last inked columns of those rows in the box,
 	// and on past it while the columns stay inked.
 	first, last := extent(best[0], best[1])
@@ -385,6 +482,25 @@ func (p *pixels) measure(f frame, aspect float64) ink {
 		last++
 	}
 	in.found = true
+	// A frame: each edge of the ink inked seven tenths of the way along, in
+	// one of the three rows or columns nearest it, as a box with rounded
+	// corners is.
+	full := func(n int, inked func(k int) bool) bool {
+		c := 0
+		for k := range n {
+			if inked(k) {
+				c++
+			}
+		}
+		return 10*c >= 7*n
+	}
+	rowFull := func(j int) bool { return full(last+1-first, func(k int) bool { return inked(first+k, j) }) }
+	colFull := func(i int) bool { return full(best[1]+1-best[0], func(k int) bool { return inked(i, best[0]+k) }) }
+	edge := func(from, step int, full func(int) bool) bool {
+		return full(from) || full(from+step) || full(from+2*step)
+	}
+	in.framed = last-first >= 6 && best[1]-best[0] >= 6 &&
+		edge(best[0], 1, rowFull) && edge(best[1], -1, rowFull) && edge(first, 1, colFull) && edge(last, -1, colFull)
 	// The edges to a fraction of a pixel: an edge row's ink covers as much
 	// of it as its darkest pixel is dark, and a row past it, too faint to
 	// count, as much again.
@@ -439,16 +555,80 @@ func (p *pixels) measure(f frame, aspect float64) ink {
 	in.segs = append(in.segs, [2]float64{float64(start - m), float64(end + 1 - m)})
 	in.segs[0][0], in.segs[len(in.segs)-1][1] = in.s0, in.s1
 	in.tops, in.topsFrom = make([]float32, last+1-first), float64(first-m)
+	var gaps []int
+	var pieces [][2]float64
+	gap := 0
 	for i := first; i <= last; i++ {
-		in.tops[i-first] = -1
+		in.tops[i-first] = none
 		for j := best[1]; j >= best[0]; j-- {
 			if inked(i, j) {
 				in.tops[i-first] = float32(j + 1 - m)
 				break
 			}
 		}
+		switch at := float64(i - m); {
+		case in.tops[i-first] == none:
+			gap++
+		case gap > 0 || pieces == nil:
+			if gap > 0 {
+				gaps = append(gaps, gap)
+				if float64(gap) >= 0.15*(in.t1-in.t0) {
+					in.gaps = append(in.gaps, [2]float64{at - float64(gap), at})
+				}
+			}
+			pieces, gap = append(pieces, [2]float64{at, at + 1}), 0
+		default:
+			pieces[len(pieces)-1][1] = at + 1
+		}
+	}
+	if len(gaps) > 0 {
+		slices.Sort(gaps)
+		in.tracking = float64(gaps[len(gaps)/2]) / (in.t1 - in.t0)
+	}
+	if in.tracking >= 1.0/3 {
+		pieces[0][0], pieces[len(pieces)-1][1] = in.s0, in.s1
+		in.pieces = pieces
 	}
 	return in
+}
+
+// inkColor is the color of the ink among n pixels on bg, at gives each:
+// the mean of the most distinct fifth of those that stand out from it.
+// It is false where fewer than 8 do.
+func inkColor(n int, at func(k int) rgb, bg rgb) (rgb, bool) {
+	var dists [256]int
+	strong := 0
+	for k := range n {
+		d := diff(at(k), bg)
+		dists[d]++
+		if d > 48 {
+			strong++
+		}
+	}
+	if strong < 8 {
+		return rgb{}, false
+	}
+	cut := 255
+	for c := 0; cut > 48; cut-- {
+		if c += dists[cut]; c >= strong/5 {
+			break
+		}
+	}
+	var sum [3]int
+	count := 0
+	for k := range n {
+		if c := at(k); diff(c, bg) >= cut {
+			for i := range 3 {
+				sum[i] += int(c[i])
+			}
+			count++
+		}
+	}
+	var fg rgb
+	for i := range 3 {
+		fg[i] = uint8(sum[i] / max(count, 1))
+	}
+	return fg, true
 }
 
 // leader reports whether r is a character a contents page's dot leaders
@@ -461,13 +641,81 @@ func leader(r rune) bool {
 	return false
 }
 
+// column is how high the ink reaches in its column k in from its end, or
+// its start if !last.
+func (in ink) column(k int, last bool) float32 {
+	if last {
+		return in.tops[len(in.tops)-1-k]
+	}
+	return in.tops[k]
+}
+
+// inFrom is where the ink's column k in from its end, or its start if
+// !last, meets the column outside it, along the line.
+func (in ink) inFrom(k int, last bool) float64 {
+	if last {
+		return in.topsFrom + float64(len(in.tops)-k)
+	}
+	return in.topsFrom + float64(k)
+}
+
+// strays finds dots at the end of a line's ink, or its start if !last, set
+// apart from the rest: runs of low ink, none wider than a fifth of the
+// ink's height, past a blank gap from the ink of the glyph nearest them,
+// which reaches higher, low as the glyph's own ink may start, as a 2's
+// foot does. It returns where that glyph's ink ends (or starts) along the
+// line, and how wide the gap is.
+func (in ink) strays(last bool) (edge, gap float64, ok bool) {
+	n, h := len(in.tops), in.t1-in.t0
+	low := float32(in.t0 + 0.45*h)
+	inked := func(k int) bool { return in.column(k, last) != none }
+	k := 0 // the glyph's first column inked high
+	for k < n && in.column(k, last) <= low {
+		k++
+	}
+	j := k // where its ink starts
+	for j > 0 && inked(j-1) {
+		j--
+	}
+	g := j // and the gap before it
+	for g > 0 && !inked(g-1) {
+		g--
+	}
+	if k == n || g == 0 || g == j {
+		return 0, 0, false
+	}
+	run := 0
+	for i := range g {
+		if !inked(i) {
+			run = 0
+		} else if run++; float64(run) > 0.2*h {
+			return 0, 0, false
+		}
+	}
+	return in.inFrom(j, last), float64(j - g), true
+}
+
 // trimLeaders takes the dot leaders off the ends of a line, as a contents
 // page runs them from a heading to its page number. The recognizer reads
-// some of the dots, which set in the line's face would come out its size
-// and weight, not the leaders'. Where the text starts or ends with two
-// dots or more, or an ellipsis, and the ink there is all low, half the
-// line's height along at least, the line is set without them, over the
-// rest of its ink, and theirs kept as printed: keep is where it lies.
+// some of the dots, a dot at times as 。, which set in the line's face
+// would come out its size and weight, not the leaders'; and it reads
+// others into the line's box, but not its text. The line is set over the
+// rest of its ink, and the dots kept as printed: keep is where they lie,
+// on to the box's end, past the text's ink, as more of them may.
+//
+// Dots at an end of the ink, set apart from the rest (see strays), are
+// the leaders' where the text ends or starts with dots there, or with a
+// character whose ink they cannot be, a letter or a digit, and the gap is
+// as wide as a quarter of the ink's height; or a tenth, where they are no
+// character of the text's, or follow a Chinese character, or precede a
+// digit or one, as a period of the text's does not. A single 。 must lie a
+// quarter away, a period's own spacing. So are dots of the text's, two or
+// more or an ellipsis, where the ink at that end is all low, half the
+// line's height along at least. And where the dots read have no ink of
+// their own, too faint beside the text's, the outermost column being a
+// glyph's, high, the line is set without them; a 。 centered in its em, as
+// traditional Chinese sets it, is narrower than half the ink's height, and
+// reaches nowhere near its top, as the glyph's run of ink does.
 func trimLeaders(text string, in ink) (string, ink, [][2]float64) {
 	runes := []rune(strings.TrimSpace(text))
 	if !in.found || len(in.tops) == 0 || len(runes) == 0 {
@@ -475,43 +723,82 @@ func trimLeaders(text string, in ink) (string, ink, [][2]float64) {
 	}
 	h := in.t1 - in.t0
 	low := float32(in.t0 + 0.45*h) // the dots reach no higher
-	high := func(k int) bool { return in.tops[k] > low }
-	dots := func(rs []rune) int {
+	changed := false
+	var keep [][2]float64
+	for _, last := range []bool{true, false} {
+		// The text from this end in, and the dots it reads there.
+		rs := slices.Clone(runes)
+		if last {
+			slices.Reverse(rs)
+		}
 		n := 0
-		for n < len(rs) && leader(rs[n]) {
+		for n < len(rs) && (leader(rs[n]) || rs[n] == '。') {
 			n++
 		}
-		if n == 1 && rs[0] != '…' && rs[0] != '⋯' {
-			return 0
+		if n == len(rs) {
+			continue
 		}
-		return n
+		outer := in.s0
+		if last {
+			outer = in.s1
+		}
+		// Keeps what lies past at, from half of gap on, and cuts the ink
+		// there.
+		cut := func(at, gap float64) {
+			if last {
+				keep = append(keep, [2]float64{at + gap/2, math.Inf(1)})
+				in.s1 = at
+			} else {
+				keep = append([][2]float64{{math.Inf(-1), at - gap/2}}, keep...)
+				in.s0 = at
+			}
+			changed = true
+		}
+		drop := 0
+		if edge, gap, ok := in.strays(last); ok {
+			need := 0.25 * h
+			switch next := rs[n]; {
+			case n == 0 && !unicode.IsLetter(next) && !unicode.IsDigit(next):
+				need = math.Inf(1) // the ink of the text's last character, as a comma's
+			case n == 0, cjkRune(next) && !(n == 1 && rs[0] == '。'), !last && unicode.IsDigit(next):
+				need = 0.1 * h
+			}
+			if gap >= need {
+				cut(edge, gap)
+				drop = n
+			}
+		}
+		if drop == 0 && (n >= 2 || n == 1 && (rs[0] == '…' || rs[0] == '⋯')) {
+			k := 0 // the column inked high nearest the end
+			for k < len(in.tops) && in.column(k, last) <= low {
+				k++
+			}
+			if at := in.inFrom(k, last); k < len(in.tops) && math.Abs(outer-at) >= 0.5*h {
+				cut(at, 0)
+				drop = n
+			}
+		}
+		if drop == 0 && n > 0 && in.column(0, last) > low {
+			run, peak := 0, none
+			for run < len(in.tops) && in.column(run, last) != none {
+				peak = max(peak, in.column(run, last))
+				run++
+			}
+			if !slices.Contains(rs[:n], '。') || float64(run) >= 0.5*h || float64(peak) >= in.t1-0.1*h {
+				cut(outer, 4)
+				drop = n
+			}
+		}
+		if drop > 0 {
+			if last {
+				runes = []rune(strings.TrimRightFunc(string(runes[:len(runes)-drop]), unicode.IsSpace))
+			} else {
+				runes = []rune(strings.TrimLeftFunc(string(runes[drop:]), unicode.IsSpace))
+			}
+			changed = true
+		}
 	}
-	var keep [][2]float64
-	backward := slices.Clone(runes)
-	slices.Reverse(backward)
-	if n := dots(backward); n > 0 && n < len(runes) {
-		k := len(in.tops) - 1
-		for k >= 0 && !high(k) {
-			k--
-		}
-		if end := in.topsFrom + float64(k+1); k >= 0 && in.s1-end >= 0.5*h {
-			keep = append(keep, [2]float64{end, in.s1})
-			in.s1 = end
-			runes = []rune(strings.TrimRightFunc(string(runes[:len(runes)-n]), unicode.IsSpace))
-		}
-	}
-	if n := dots(runes); n > 0 && n < len(runes) {
-		k := 0
-		for k < len(in.tops) && !high(k) {
-			k++
-		}
-		if start := in.topsFrom + float64(k); k < len(in.tops) && start-in.s0 >= 0.5*h {
-			keep = append([][2]float64{{in.s0, start}}, keep...)
-			in.s0 = start
-			runes = []rune(strings.TrimLeftFunc(string(runes[n:]), unicode.IsSpace))
-		}
-	}
-	if keep == nil {
+	if !changed {
 		return text, in, nil
 	}
 	var segs [][2]float64
@@ -538,6 +825,12 @@ func percentile(hist []int, n int, q float64) int {
 // fill paints the part of a line's frame from s0 to s1 along it and t0
 // to t1 up it in c.
 func (p *pixels) fill(f frame, s0, s1, t0, t1 float64, c rgb) {
+	p.each(f, s0, s1, t0, t1, func(i int) { copy(p.pix[i:][:3], c[:]) })
+}
+
+// each calls do with the index into pix of each pixel in the part of a
+// line's frame from s0 to s1 along it and t0 to t1 up it.
+func (p *pixels) each(f frame, s0, s1, t0, t1 float64, do func(i int)) {
 	minX, minY, maxX, maxY := math.Inf(1), math.Inf(1), math.Inf(-1), math.Inf(-1)
 	for _, st := range [][2]float64{{s0, t0}, {s1, t0}, {s0, t1}, {s1, t1}} {
 		pt := f.point(st[0], st[1])
@@ -554,24 +847,41 @@ func (p *pixels) fill(f frame, s0, s1, t0, t1 float64, c rgb) {
 			dx, dy := float64(x)+0.5-f.o.X, float64(y)+0.5-f.o.Y
 			s, t := (dx*f.v.Y-dy*f.v.X)/det, (f.u.X*dy-f.u.Y*dx)/det
 			if s >= s0 && s <= s1 && t >= t0 && t <= t1 {
-				copy(p.pix[3*(y*p.w+x):][:3], c[:])
+				do(3 * (y*p.w + x))
 			}
 		}
 	}
 }
 
 // pictures finds what is left on a page, at dpi: everything that is not
-// white, in rectangles around the pieces that lie within a millimeter or
-// so of each other, leaving out specks of dust.
+// white, pale tints too, as of a panel printed behind a picture or text,
+// whole, in rectangles around the pieces that lie within a millimeter or
+// so of each other, leaving out specks of dust, but for rows of specks
+// that are dot leaders (see leaders), whose dots lie further apart.
 func (p *pixels) pictures(dpi float64) []image.Rectangle {
 	b := max(2, int(dpi/75+0.5)) // blocks of about a third of a millimeter
 	gw, gh := (p.w+b-1)/b, (p.h+b-1)/b
 	inked := make([]int32, gw*gh)
-	for y := range p.h {
-		for x := range p.w {
-			i := 3 * (y*p.w + x)
-			if min(p.pix[i], p.pix[i+1], p.pix[i+2]) < 255-40 {
-				inked[(y/b)*gw+x/b]++
+	sums := make([][3]int, gw) // a row of blocks' colors
+	for by := range gh {
+		clear(sums)
+		y0, y1 := by*b, min(p.h, by*b+b)
+		for y := y0; y < y1; y++ {
+			for x := range p.w {
+				i := 3 * (y*p.w + x)
+				if min(p.pix[i], p.pix[i+1], p.pix[i+2]) < 255-40 {
+					inked[by*gw+x/b]++
+				}
+				for c := range 3 {
+					sums[x/b][c] += int(p.pix[i+c])
+				}
+			}
+		}
+		// A block of a pale tint, as of a panel, is inked, as a pixel is.
+		for bx, sum := range sums {
+			n := (y1 - y0) * (min(p.w, bx*b+b) - bx*b)
+			if mean := (rgb{uint8(sum[0] / n), uint8(sum[1] / n), uint8(sum[2] / n)}); inked[by*gw+bx] == 0 && tint(mean) {
+				inked[by*gw+bx] = 1
 			}
 		}
 	}
@@ -600,7 +910,7 @@ func (p *pixels) pictures(dpi float64) []image.Rectangle {
 
 	minInk := max(16, int(64*dpi*dpi/(300*300)))
 	seen := make([]bool, gw*gh)
-	var rects []image.Rectangle
+	var rects, specks []image.Rectangle
 	var stack []int
 	for start := range grown {
 		if !grown[start] || seen[start] {
@@ -632,12 +942,74 @@ func (p *pixels) pictures(dpi float64) []image.Rectangle {
 			}
 		}
 		if total < minInk {
+			specks = append(specks, box)
 			continue
 		}
-		px := image.Rect(box.Min.X*b-b, box.Min.Y*b-b, box.Max.X*b+b, box.Max.Y*b+b)
-		rects = append(rects, px.Intersect(image.Rect(0, 0, p.w, p.h)))
+		rects = append(rects, box)
+	}
+	mm := dpi / 25.4 / float64(b) // blocks a millimeter
+	rects = append(rects, leaders(specks, max(2, int(1.5*mm)), int(6*mm))...)
+	for i, r := range rects {
+		px := image.Rect(r.Min.X*b-b, r.Min.Y*b-b, r.Max.X*b+b, r.Max.Y*b+b)
+		rects[i] = px.Intersect(image.Rect(0, 0, p.w, p.h))
 	}
 	return mergeRects(rects)
+}
+
+// leaders finds the rows of specks that are dot leaders, or a dotted
+// line, among specks too small to keep alone: four or more alike, no
+// larger than size, their middles level, spaced evenly along the row,
+// each no further than gap from the next. It returns the rectangle round
+// each row. Sizes, places and rectangles are in blocks of pixels.
+func leaders(specks []image.Rectangle, size, gap int) []image.Rectangle {
+	specks = slices.DeleteFunc(specks, func(r image.Rectangle) bool { return r.Dx() > size || r.Dy() > size })
+	level := func(r image.Rectangle) int { return r.Min.Y + r.Max.Y } // twice the middle's
+	slices.SortFunc(specks, func(a, b image.Rectangle) int {
+		return cmp.Or(cmp.Compare(level(a), level(b)), cmp.Compare(a.Min.X, b.Min.X))
+	})
+	alike := func(a, b image.Rectangle) bool { return absInt(a.Dx()-b.Dx()) <= 1 && absInt(a.Dy()-b.Dy()) <= 1 }
+	used := make([]bool, len(specks))
+	var rows []image.Rectangle
+	for i := range specks {
+		if used[i] {
+			continue
+		}
+		// The specks level with this one, within a block, left to right.
+		var row []int
+		for j := i; j < len(specks) && level(specks[j]) <= level(specks[i])+2; j++ {
+			if !used[j] {
+				row = append(row, j)
+			}
+		}
+		slices.SortFunc(row, func(a, b int) int { return cmp.Compare(specks[a].Min.X, specks[b].Min.X) })
+		for start := 0; start < len(row); {
+			end := start + 1 // past the run of specks from start
+			for ; end < len(row); end++ {
+				a, z := specks[row[end-1]], specks[row[end]]
+				step := z.Min.X - a.Min.X
+				if step <= 0 || step > gap || !alike(specks[row[start]], z) {
+					break
+				}
+				if end-start >= 2 {
+					if last := a.Min.X - specks[row[end-2]].Min.X; absInt(step-last) > max(1, last/4) {
+						break
+					}
+				}
+			}
+			if end-start < 4 {
+				start++
+				continue
+			}
+			r := specks[row[start]]
+			for _, k := range row[start:end] {
+				r = r.Union(specks[k])
+				used[k] = true
+			}
+			rows = append(rows, r)
+			start = end
+		}
+	}
+	return rows
 }
 
 // edgeMark reports whether r, a piece of what is left of a page w×h pixels
@@ -710,7 +1082,8 @@ func (p *pixels) encode(r image.Rectangle, dpi float64) pageImage {
 	var lossless []byte
 	if flat >= r.Dx()*r.Dy()*9/10 {
 		// Without the scan's noise, which would not compress: near white
-		// is white, near black black, and tones between come in steps of 8.
+		// is white, but for a pale tint, near black black, and tones between
+		// come in steps of 8.
 		var raw []byte
 		if g, ok := src.(*image.Gray); ok {
 			raw = make([]byte, len(g.Pix))
@@ -723,7 +1096,7 @@ func (p *pixels) encode(r image.Rectangle, dpi float64) pageImage {
 			for i := 0; i < len(c.Pix); i += 4 {
 				px := c.Pix[i : i+3]
 				switch {
-				case min(px[0], px[1], px[2]) >= 224:
+				case min(px[0], px[1], px[2]) >= 224 && !tint(rgb(px)):
 					raw = append(raw, 255, 255, 255)
 				case max(px[0], px[1], px[2]) <= 48:
 					raw = append(raw, 0, 0, 0)
@@ -733,7 +1106,7 @@ func (p *pixels) encode(r image.Rectangle, dpi float64) pageImage {
 			}
 		}
 		var buf bytes.Buffer
-		zw, _ := zlib.NewWriterLevel(&buf, zlib.BestCompression)
+		zw := zlib.NewWriter(&buf)
 		zw.Write(raw)
 		zw.Close()
 		lossless = buf.Bytes()
@@ -790,6 +1163,294 @@ func mergeRects(rects []image.Rectangle) []image.Rectangle {
 	return rects
 }
 
+// glyphColors measures the color each of a line's glyphs was printed in,
+// set as tl and origins place them: the ink's (see inkColor) across the
+// glyph's advance, from its origin to the next's, which is the most of
+// the glyph's ink, or of its neighbor's in its word, where the line is set
+// a little off its ink. A glyph that draws nothing, as a space, takes the
+// color of the glyph before it, or after it. It is nil where none can
+// tell.
+func (p *pixels) glyphColors(f frame, in ink, sh shape, tl textLine, origins []float64) []rgb {
+	colors := make([]rgb, len(sh.glyphs))
+	told := make([]bool, len(sh.glyphs))
+	var px []rgb
+	for i, g := range sh.glyphs {
+		if !g.inked {
+			continue
+		}
+		a, z := tl.x+origins[i]*tl.scale, tl.x+origins[i+1]*tl.scale
+		px = px[:0]
+		for s := math.Floor(a); s < z; s++ {
+			for t := math.Floor(in.t0); t < in.t1; t++ {
+				pt := f.point(s+0.5, t+0.5)
+				px = append(px, p.at(int(math.Floor(pt.X)), int(math.Floor(pt.Y))))
+			}
+		}
+		colors[i], told[i] = inkColor(len(px), func(k int) rgb { return px[k] }, in.bg)
+	}
+	first := slices.Index(told, true)
+	if first < 0 {
+		return nil
+	}
+	for i := range colors {
+		switch {
+		case i < first:
+			colors[i] = colors[first]
+		case !told[i]:
+			colors[i] = colors[i-1]
+		}
+	}
+	return colors
+}
+
+// words measures the words of a line, set in the serif face as sh, tl
+// and origins place it (see wordInk): their ink across their advances, up
+// the line's ink, as measure measures a line's, and their glyphs in the
+// regular serif and sans-serif faces, at the size the line's ink gives
+// each. A word too short to have strokes to measure has none.
+func (d *textDoc) words(p *pixels, text string, f frame, in ink, sh shape, tl textLine, origins []float64) []wordInk {
+	runes := []rune(strings.TrimSpace(text))
+	if len(runes) != len(sh.glyphs) {
+		return nil
+	}
+	var sizes [2]float64
+	for k, fi := range []int{serif, sans} {
+		sizes[k] = d.size(d.shape(text, fi), f, in)
+	}
+	contrast := float64(max(1, diff(in.fg, in.bg)))
+	var words []wordInk
+	for i := 0; i < len(sh.glyphs); {
+		if g := sh.glyphs[i]; g.space || g.wide {
+			i++
+			continue
+		}
+		j := i
+		for j < len(sh.glyphs) && !sh.glyphs[j].space && !sh.glyphs[j].wide {
+			j++
+		}
+		w := wordInk{from: i, to: j, letters: letters(string(runes[i:j]))}
+		// The word's ink, a column a pixel, from the top of the line's,
+		// between the gaps parting words nearest where it is set, as it may
+		// be set a little off its ink.
+		s0, s1 := in.words(tl.x+origins[i]*tl.scale, tl.x+origins[j]*tl.scale, 0.3*tl.size)
+		cols, rows := int(s1-s0), int(math.Ceil(in.t1-in.t0))+2
+		if cols >= 2 && rows >= 2 {
+			cover := make([]float64, cols*rows)
+			for y := range rows {
+				for x := range cols {
+					pt := f.point(s0+float64(x)+0.5, in.t1+1-float64(y)-0.5)
+					c := float64(diff(p.at(int(math.Floor(pt.X)), int(math.Floor(pt.Y))), in.bg)) / contrast
+					if c >= 0.08 {
+						cover[y*cols+x] = min(1, c)
+					}
+				}
+			}
+			at := func(x, y int) float64 { return cover[y*cols+x] }
+			w.ink = strokeStats(cols, rows, at, false)
+			// How it leans, by its edges but for those in a tenth of it at
+			// each end, where a neighbor's ink may reach in, as a slanting
+			// 7's, where the line is set a little off its ink.
+			w.slant = slant(cols, rows, at, cols/10, cols-cols/10)
+			for k, fi := range []int{serif, sans} {
+				if ws := d.shape(string(runes[i:j]), fi); ws.inked {
+					rw, rh, rc := d.draw(ws, sizes[k])
+					if rc == nil {
+						continue
+					}
+					w.refs[k] = strokeStats(rw, rh, rc, false)
+					if fi == sans { // how far its letters lean upright
+						w.slant -= slant(rw, rh, rc, rw/10, rw-rw/10)
+					}
+				}
+			}
+		}
+		words = append(words, w)
+		i = j
+	}
+	return words
+}
+
+// slant is how far the upright strokes of ink w×h pixels large, cover
+// giving each pixel's, top first, lean to the right: the tangent of their
+// angle. An upright face's round and slanting strokes lean either way
+// alike, so their edges that run near upright lean, by their median, as
+// the stems do (see lean). That reads a slant short, as edges of curves
+// lean out of the near-upright ones and others into them, so the ink is
+// sheared back upright by it, and what slant is left is read again, until
+// little is. Only the edges from column from to to (not included) count.
+func slant(w, h int, cover func(x, y int) float64, from, to int) float64 {
+	k := 0.0
+	for range 6 {
+		sheared := func(x, y int) float64 { // cover sheared back by k, its columns blended
+			at := float64(x) + k*float64(h-1-y)
+			x0 := int(math.Floor(at))
+			frac := at - float64(x0)
+			c := 0.0
+			if x0 >= 0 && x0 < w {
+				c += (1 - frac) * cover(x0, y)
+			}
+			if x0+1 >= 0 && x0+1 < w {
+				c += frac * cover(x0+1, y)
+			}
+			return c
+		}
+		r := lean(w, h, sheared, from, to)
+		k += r
+		if math.Abs(r) < 0.005 {
+			break
+		}
+	}
+	return k
+}
+
+// lean is the lean of the edges of ink w×h pixels large, from column
+// from to to (not included), that run within about 30° of upright, as
+// Sobel's operator finds them: the tangent of their angle, to the right,
+// by their median, weighed by their contrast, which a few strokes leaning
+// apart from the rest, as a y's long one, sway little.
+func lean(w, h int, cover func(x, y int) float64, from, to int) float64 {
+	type edge struct{ lean, weight float64 }
+	var edges []edge
+	total := 0.0
+	for y := 1; y < h-1; y++ {
+		for x := max(1, from); x < min(w-1, to); x++ {
+			gx := cover(x+1, y-1) + 2*cover(x+1, y) + cover(x+1, y+1) - cover(x-1, y-1) - 2*cover(x-1, y) - cover(x-1, y+1)
+			gy := cover(x-1, y+1) + 2*cover(x, y+1) + cover(x+1, y+1) - cover(x-1, y-1) - 2*cover(x, y-1) - cover(x+1, y-1)
+			if m := math.Hypot(gx, gy); m >= 0.5 && math.Abs(gy) <= 0.6*math.Abs(gx) {
+				edges = append(edges, edge{gy / gx, m}) // rows run down, so a lean right reads as gy/gx > 0
+				total += m
+			}
+		}
+	}
+	slices.SortFunc(edges, func(a, b edge) int { return cmp.Compare(a.lean, b.lean) })
+	for _, e := range edges {
+		if total -= 2 * e.weight; total <= 0 {
+			return e.lean
+		}
+	}
+	return 0
+}
+
+// lineColors sets each of a line's glyphs, as sh sets them, in the color
+// of its ink, as textColor does on a page whose black is black's luma, and
+// runs of glyphs in about the same color in their mean, as one ink printed
+// them, as a heading in black with its translation in blue. A word of
+// Latin letters, digits or punctuation is in the color most of its glyphs
+// are: one ink prints a word, and a narrow glyph's ink, measured where the
+// line is set a little off its ink, may be its neighbor's. A CJK character
+// is wide enough to tell its own. It is nil where the line is in one
+// color.
+func lineColors(inks []rgb, sh shape, bg rgb, black int) []rgb {
+	if inks == nil {
+		return nil
+	}
+	colors := make([]rgb, len(inks))
+	for i, c := range inks {
+		colors[i] = textColor(c, bg, true, black)
+	}
+	word := func(g glyph) bool { return !g.wide && !g.space }
+	for i := 0; i < len(colors); {
+		j := i + 1
+		if word(sh.glyphs[i]) {
+			for j < len(colors) && word(sh.glyphs[j]) {
+				j++
+			}
+		}
+		most, count := colors[i], 0
+		for _, c := range colors[i:j] {
+			if n := len(slices.DeleteFunc(slices.Clone(colors[i:j]), func(d rgb) bool { return diff(c, d) > 48 })); n > count {
+				most, count = c, n
+			}
+		}
+		for k := i; k < j; k++ {
+			colors[k] = most
+		}
+		i = j
+	}
+	for i := 0; i < len(colors); {
+		j := i + 1
+		for j < len(colors) && diff(colors[j], colors[i]) <= 64 {
+			j++
+		}
+		var sum [3]int
+		for _, c := range colors[i:j] {
+			for k := range 3 {
+				sum[k] += int(c[k])
+			}
+		}
+		for k := i; k < j; k++ {
+			for c := range 3 {
+				colors[k][c] = uint8(sum[c] / (j - i))
+			}
+		}
+		i = j
+	}
+	if !slices.ContainsFunc(colors, func(c rgb) bool { return c != colors[0] }) {
+		return nil
+	}
+	return colors
+}
+
+// minScore is the least confidence the recognizer reads a line with for it
+// to be set: lines of text read with less, as a lettered box read as 向 or
+// a picture's scribbles as a word, stay as printed. Lines of text score
+// 0.9 and more.
+const minScore = 0.85
+
+// squeezed reports whether a line's glyphs, at the size its ink gives
+// them, would have to be squeezed to less than four fifths of their width
+// to fit it, in either regular text face: its ink is not that of its text
+// alone, as of handwriting or lettering in a picture, which stays as
+// printed.
+func (d *textDoc) squeezed(text string, f frame, in ink) bool {
+	if !in.found {
+		return false
+	}
+	for _, fi := range []int{serif, sans} {
+		sh := d.shape(text, fi)
+		if !sh.inked || sh.right <= sh.left {
+			return false
+		}
+		width := float64(sh.right-sh.left) / float64(d.fonts[fi].ttf.UnitsPerEm) * d.size(sh, f, in)
+		if in.s1-in.s0 >= 0.8*width {
+			return false
+		}
+	}
+	return true
+}
+
+// enDashes sets the hyphens between digits of a line that has nowhere to
+// space out, as a page range, 28-29, as en dashes where that fits its ink
+// better: the recognizer reads the one as the other, and a line set with
+// the narrower hyphen is stretched to the dash's width. A hyphen printed
+// as one, as a telephone number's, fits as it is.
+func (d *textDoc) enDashes(text string, f frame, in ink) string {
+	if !in.found || len(in.segs) > 1 || !strings.Contains(text, "-") {
+		return text
+	}
+	rs := []rune(text)
+	for i := 1; i+1 < len(rs); i++ {
+		if rs[i] == '-' && unicode.IsDigit(rs[i-1]) && unicode.IsDigit(rs[i+1]) {
+			rs[i] = '–'
+		}
+	}
+	dashed := string(rs)
+	if dashed == text {
+		return text
+	}
+	// How far, on a log scale, the text's outlines are from spanning the ink.
+	off := func(text string) float64 {
+		sh := d.shape(text, serif)
+		width := float64(sh.right-sh.left) / float64(d.fonts[serif].ttf.UnitsPerEm) * d.size(sh, f, in)
+		return math.Abs(math.Log((in.s1 - in.s0) / width))
+	}
+	sh := d.shape(text, serif)
+	if _, total := sh.spacing(0, len(sh.glyphs)); total > 0 || sh.right <= sh.left || off(dashed) >= off(text) {
+		return text
+	}
+	return dashed
+}
+
 // redraw turns a page rendered as img, and the lines read from it, into a
 // page of the text PDF width×height points large, and adds it to the
 // document (see redrawPage).
@@ -820,12 +1481,19 @@ func (d *textDoc) redrawPage(img image.Image, lines []ocr.Line, width, height fl
 	ref := d.ref
 	for _, l := range lines {
 		f := lineFrame(l.Box)
-		text, in, keep := trimLeaders(l.Text, p.measure(f, ref.shape(l.Text, serif).aspect()))
+		rules := !strings.ContainsAny(l.Text, "_‾—―─━－﹏")
+		text, in, keep := trimLeaders(l.Text, p.measureRules(f, ref.shape(l.Text, serif).aspect(), rules))
+		text = ref.enDashes(text, f, in)
 		in.tops = nil // for trimLeaders only: kept, a long document's would fill memory
-		page.measured = append(page.measured, measuredLine{text: text, frame: f, ink: in, keep: keep, refs: ref.refs(text, f, in)})
+		m := measuredLine{text: text, frame: f, ink: in, keep: keep,
+			printed: !in.plain || in.framed || l.Score < minScore || ref.squeezed(text, f, in)}
+		if !m.printed {
+			m.refs = ref.refs(text, f, in)
+		}
+		page.measured = append(page.measured, m)
 	}
-	// Erase the lines on plain paper, set provisionally in the serif face to
-	// find the ink no character is matched to (see place), which stays.
+	// Erase the lines to set, set provisionally in the serif face to find
+	// the ink no character is matched to (see place), which stays.
 	shapes := make([]shape, len(page.measured))
 	sizes := make([]float64, len(page.measured))
 	for i, m := range page.measured {
@@ -833,26 +1501,64 @@ func (d *textDoc) redrawPage(img image.Image, lines []ocr.Line, width, height fl
 		sizes[i] = ref.size(shapes[i], m.frame, m.ink)
 	}
 	sizes = evenSizes(sizes)
-	for i, m := range page.measured {
-		f, in := m.frame, m.ink
-		if f.length == 0 || f.height == 0 || !shapes[i].inked || !in.plain {
+	// Where each line's characters lie, and the color each was printed in,
+	// before any line is erased.
+	set := make([]bool, len(page.measured))
+	bares := make([][][2]float64, len(page.measured))
+	for i := range page.measured {
+		m := &page.measured[i]
+		if set[i] = m.frame.length > 0 && m.frame.height > 0 && shapes[i].inked && !m.printed; !set[i] {
 			continue
 		}
-		_, _, bare := ref.place(shapes[i], f, in, sizes[i])
-		bare = append(bare, m.keep...)
-		slices.SortFunc(bare, func(a, b [2]float64) int { return cmp.Compare(a[0], b[0]) })
+		tl, origins, bare := ref.place(shapes[i], m.frame, m.ink, sizes[i])
+		bares[i] = bare
+		if m.ink.found {
+			m.colors = p.glyphColors(m.frame, m.ink, shapes[i], tl, origins)
+		}
+		if m.refs.ok {
+			m.refs.words = ref.words(p, m.text, m.frame, m.ink, shapes[i], tl, origins)
+		}
+	}
+	// The rules along the lines to set, as underlines, which erasing them
+	// would take, kept as printed.
+	type pixel struct {
+		i int
+		c rgb
+	}
+	var ruled []pixel
+	for i, m := range page.measured {
+		for _, r := range m.ink.rules {
+			if set[i] {
+				p.each(m.frame, r[0], r[1], r[2], r[3], func(k int) { ruled = append(ruled, pixel{k, rgb(p.pix[k : k+3])}) })
+			}
+		}
+	}
+	for i, m := range page.measured {
+		if !set[i] {
+			continue
+		}
+		f, in := m.frame, m.ink
 		// The box, and the ink that runs past it, with a pixel to spare,
-		// but for the bare ink.
+		// but for the bare ink, and what is to be kept, which may run on
+		// to the box's ends, past the text's ink.
 		s0, s1, t0, t1 := 0.0, f.length, 0.0, f.height
 		if in.found {
 			s0, s1, t0, t1 = min(s0, in.s0), max(s1, in.s1), min(t0, in.t0), max(t1, in.t1)
 		}
+		bare := bares[i]
+		for _, k := range m.keep {
+			bare = append(bare, [2]float64{max(k[0], s0-1), min(k[1], s1+1)})
+		}
+		slices.SortFunc(bare, func(a, b [2]float64) int { return cmp.Compare(a[0], b[0]) })
 		from := s0 - 1
 		for _, b := range bare {
 			p.fill(f, from, b[0]-2, t0-1, t1+1, white)
 			from = b[1] + 2
 		}
 		p.fill(f, from, s1+1, t0-1, t1+1, white)
+	}
+	for _, px := range ruled {
+		copy(p.pix[px.i:][:3], px.c[:])
 	}
 
 	// What the lines span, which the margins lie outside of: the page's
@@ -899,6 +1605,23 @@ func (d *textDoc) setLines() {
 	for i, m := range all {
 		texts[i], frames[i], inks[i], refs[i] = m.text, m.frame, m.ink, m.refs
 	}
+	// A document in traditional Chinese is set in its forms' faces.
+	if len(d.sets) == 0 && d.traditional != ([faces]*face{}) && isTraditional(texts) {
+		d.setTraditional()
+	}
+	// Italic is set slanted as far as the document's leans, by the median
+	// of its lines', as one face printed it all.
+	var leans []float64
+	for _, m := range all {
+		if _, k := italics(m.refs.words, len([]rune(strings.TrimSpace(m.text)))); k > 0 && !m.printed {
+			leans = append(leans, k)
+		}
+	}
+	slant := 0.0
+	if len(leans) > 0 {
+		slices.Sort(leans)
+		slant = leans[len(leans)/2]
+	}
 	i := 0
 	for p, page := range d.pages {
 		for range page.measured {
@@ -918,7 +1641,7 @@ func (d *textDoc) setLines() {
 		sizes := make([]float64, len(page.measured))
 		glyphs := 0
 		for i, m := range page.measured {
-			shapes[i] = d.shape(m.text, m.face)
+			shapes[i] = d.shapeIn(m.text, m.face, glyphFaces(m))
 			sizes[i] = d.size(shapes[i], m.frame, m.ink)
 			glyphs += len(shapes[i].glyphs)
 		}
@@ -929,6 +1652,13 @@ func (d *textDoc) setLines() {
 			d.sets = append(d.sets, &cidSet{cids: map[code]uint16{}})
 		}
 		page.set = len(d.sets) - 1
+		// The page's black: the darkest of its lines' ink without color.
+		black := 255
+		for _, m := range page.measured {
+			if fg := m.ink.fg; m.ink.found && !m.printed && chroma(fg) < 48 {
+				black = min(black, luma(fg))
+			}
+		}
 		for i, m := range page.measured {
 			f, sh, in := m.frame, shapes[i], m.ink
 			if f.length == 0 || f.height == 0 || !sh.inked {
@@ -936,7 +1666,21 @@ func (d *textDoc) setLines() {
 			}
 			tl, origins, _ := d.place(sh, f, in, sizes[i])
 			tl.cids = d.number(d.sets[page.set], sh, origins, sizes[i])
-			tl.hidden = !in.plain
+			tl.hidden = m.printed
+			if !m.printed {
+				if tl.slanted, _ = italics(m.refs.words, len(sh.glyphs)); tl.slanted != nil {
+					tl.slant = slant
+					// Where each glyph starts along the line, in points, and
+					// how far to set the slanted ones back, which the slant
+					// takes right by their middle's height.
+					k := (page.sx + page.sy) / 2
+					tl.offsets = make([]float64, len(origins))
+					for g, o := range origins {
+						tl.offsets[g] = o * tl.scale * k
+					}
+					tl.back = tl.slant * float64(sh.yMin+sh.yMax) / 2 / float64(d.fonts[sh.face].ttf.UnitsPerEm) * sizes[i] * k
+				}
+			}
 			// From pixels, y down, to points, y up.
 			o := f.point(tl.x, tl.y)
 			ux, uy := f.u.X*page.sx, -f.u.Y*page.sy
@@ -944,11 +1688,99 @@ func (d *textDoc) setLines() {
 			tl.x, tl.y = o.X*page.sx, page.height-o.Y*page.sy
 			tl.dx, tl.dy = ux/n, uy/n
 			tl.size *= (page.sx + page.sy) / 2
-			tl.color = textColor(in.fg, in.bg, in.found)
+			tl.color = textColor(in.fg, in.bg, in.found, black)
+			if !m.printed {
+				tl.colors = lineColors(m.colors, sh, in.bg, black)
+			}
 			page.lines = append(page.lines, tl)
 		}
 		page.measured = nil
 	}
+}
+
+// glyphFaces is the face each of a line's glyphs is set in, its word's
+// (see styles), nil where they are all in the line's.
+func glyphFaces(m measuredLine) []int {
+	if !slices.ContainsFunc(m.refs.words, func(w wordInk) bool { return w.face != m.face }) {
+		return nil
+	}
+	faces := slices.Repeat([]int{m.face}, len([]rune(strings.TrimSpace(m.text))))
+	for i, w := range m.refs.words {
+		end := w.to // and on past the space to the next word, in the face too
+		if i+1 < len(m.refs.words) && m.refs.words[i+1].face == w.face {
+			end = m.refs.words[i+1].from
+		}
+		for k := w.from; k < end; k++ {
+			faces[k] = w.face
+		}
+	}
+	return faces
+}
+
+// italics is which of a line's glyphs, n of them, were printed italic,
+// nil where none were, and how far their strokes lean, the tangent of
+// their angle, by its words' slants (see wordInk): a line whose words of
+// two letters or more lean by 0.08 or more, by their mean, about half as
+// far as italic faces do, is italic, but for a label it starts with, as
+// "A:" or "1.", and a word that leans less than 0.04, as "Report:" before
+// an example, or a reply quoted in one, which are upright; a line leaning
+// less, upright, has a word of four letters or more italic where it leans
+// by 0.15 or more, as a short word's few strokes may lean by chance. The
+// few letters of punctuation, digits or a one-letter word lean as their
+// glyphs do, as / and 7 do: they are set as the words beside them.
+func italics(words []wordInk, n int) ([]bool, float64) {
+	var sum float64
+	var counted []float64
+	for _, w := range words {
+		if w.letters >= 2 {
+			sum += w.slant
+			counted = append(counted, w.slant)
+		}
+	}
+	if len(counted) == 0 {
+		return nil, 0
+	}
+	line := sum/float64(len(counted)) >= 0.08
+	italic := make([]bool, len(words))
+	for k, w := range words {
+		switch {
+		case w.letters < 2:
+		case line:
+			italic[k] = w.slant >= 0.04
+		default:
+			italic[k] = w.slant >= 0.15 && w.letters >= 4
+		}
+	}
+	for k := 1; k < len(words); k++ { // the short words but a label
+		if words[k].letters < 2 {
+			italic[k] = italic[k-1]
+			if k+1 < len(words) && words[k+1].letters >= 2 {
+				italic[k] = italic[k+1]
+			}
+		}
+	}
+	if !slices.Contains(italic, true) {
+		return nil, 0
+	}
+	slanted := make([]bool, n)
+	var lean []float64
+	for k, w := range words {
+		end := w.to // and on to the next word, italic too, past the space
+		if k+1 < len(words) && italic[k+1] {
+			end = words[k+1].from
+		}
+		for g := w.from; g < end && italic[k]; g++ {
+			slanted[g] = true
+		}
+		if italic[k] && w.letters >= 2 {
+			lean = append(lean, w.slant)
+		}
+	}
+	if len(lean) == 0 {
+		return nil, 0
+	}
+	slices.Sort(lean)
+	return slanted, min(max(lean[len(lean)/2], 0.1), 0.3)
 }
 
 // shape is a line of text set in a face at 1 em, in the face's units:
@@ -974,11 +1806,19 @@ type glyph struct {
 
 // shape sets text in face, but for the characters it takes from other
 // faces (see glyphFace).
-func (d *textDoc) shape(text string, face int) shape {
+func (d *textDoc) shape(text string, face int) shape { return d.shapeIn(text, face, nil) }
+
+// shapeIn sets text as shape does, each character in the face of faces at
+// its index, as a word set bold in a line, or in face where faces is nil.
+func (d *textDoc) shapeIn(text string, face int, faces []int) shape {
 	sh := shape{face: face}
 	em := d.fonts[face].ttf.UnitsPerEm
-	for _, r := range strings.TrimSpace(text) {
-		fi := d.glyphFace(face, r)
+	for i, r := range []rune(strings.TrimSpace(text)) {
+		fi := face
+		if faces != nil {
+			fi = faces[i]
+		}
+		fi = d.glyphFace(fi, r)
 		font := d.font(fi).ttf
 		g := font.Glyph(r)
 		b, inked := font.Bounds(g)
@@ -1035,13 +1875,19 @@ func (d *textDoc) glyphFace(face int, r rune) int {
 // font sets them, an em wide or not.
 func wide(r rune, advance, em int) bool {
 	switch {
-	case unicode.In(r, unicode.Han, unicode.Hiragana, unicode.Katakana, unicode.Hangul, unicode.Bopomofo),
-		r >= 0xFF01 && r <= 0xFF60, r >= 0xFFE0 && r <= 0xFFE6:
+	case cjkRune(r):
 		return true
 	case unicode.IsLetter(r), unicode.IsDigit(r):
 		return false
 	}
 	return advance >= em*4/5
+}
+
+// cjkRune reports whether r is a CJK character or a fullwidth form, which
+// every font sets about an em wide.
+func cjkRune(r rune) bool {
+	return unicode.In(r, unicode.Han, unicode.Hiragana, unicode.Katakana, unicode.Hangul, unicode.Bopomofo) ||
+		r >= 0xFF01 && r <= 0xFF60 || r >= 0xFFE0 && r <= 0xFFE6
 }
 
 // aspect is how high the line's glyphs are for their width, 0 if unknown.
@@ -1055,14 +1901,26 @@ func (sh shape) aspect() float64 {
 // spacing weighs where glyphs i to j (not included) may be spaced out,
 // after each but the last, as a typesetter would: between CJK characters,
 // three times as much where they meet Latin text, which typesetters set
-// apart, and at spaces between words, but not within them.
+// apart, and at spaces between words, but not within them; and only from
+// the first glyph that draws to the last, as a space a stretch of ink
+// starts or ends with moves none of it.
 func (sh shape) spacing(i, j int) ([]float64, float64) {
 	if j-i < 2 {
 		return nil, 0
 	}
+	lo, hi := i, j-1
+	for lo < hi && !sh.glyphs[lo].inked {
+		lo++
+	}
+	for hi > lo && !sh.glyphs[hi].inked {
+		hi--
+	}
 	weights := make([]float64, j-i-1)
 	total := 0.0
 	for k := range weights {
+		if i+k < lo || i+k+1 > hi {
+			continue
+		}
 		a, b := sh.glyphs[i+k], sh.glyphs[i+k+1]
 		switch {
 		case a.space || b.space, a.wide && b.wide:
@@ -1174,6 +2032,25 @@ func (sh shape) split(segs [][2]float64, size, em float64) []int {
 		}
 		starts[c] = best
 	}
+	// Nor do they part within a word where the text has a space close by,
+	// as after a section's number, 1.11, whose digits' outlines may span
+	// more or less than the font's.
+	for c := 1; c < k; c++ {
+		j := starts[c]
+		if j <= starts[c-1] || j >= starts[c+1] {
+			continue
+		}
+		if a, b := sh.glyphs[j-1], sh.glyphs[j]; a.space || b.space || a.wide || b.wide {
+			continue
+		}
+		best := j
+		for alt := max(starts[c-1]+1, j-2); alt <= min(starts[c+1]-1, j+2); alt++ {
+			if (sh.glyphs[alt-1].space || sh.glyphs[alt].space) && (best == j || absInt(alt-j) < absInt(best-j)) {
+				best = alt
+			}
+		}
+		starts[c] = best
+	}
 	return starts
 }
 
@@ -1206,11 +2083,151 @@ func evenSizes(sizes []float64) []float64 {
 	return out
 }
 
+// spread shares extra pixels out after glyphs i to j (not included) but
+// the last, set at size pixels an em of em font units, to space them out
+// to their ink, gaps the ink's wide gaps between them (see ink.gaps): at
+// each place to part words, as much as its gap in the ink holds beyond
+// what the glyphs leave there (see wordGaps); the rest alike after every
+// glyph, but between CJK characters, as letters are tracked out, up to
+// most pixels a glyph; and what is left at the places and between CJK
+// characters, by spacing's weights, up to an em a weight, or tracked out
+// further where there are none. A line mostly of CJK characters, or with
+// no word of letters to track, has the weights take all of it. It is nil
+// where there is nothing to share or nowhere to share it.
+func (sh shape) spread(i, j int, extra, size, em float64, gaps [][2]float64, most float64) []float64 {
+	weights, total := sh.spacing(i, j)
+	lo, hi := i, j-1 // the glyphs that draw, from the first to the last
+	for lo < hi && !sh.glyphs[lo].inked {
+		lo++
+	}
+	for hi > lo && !sh.glyphs[hi].inked {
+		hi--
+	}
+	tracks := make([]bool, len(weights)) // where tracking goes
+	pairs, tracked := 0, 0               // letters next to each other, and tracks
+	for k := range weights {
+		a, b := sh.glyphs[i+k], sh.glyphs[i+k+1]
+		if tracks[k] = i+k >= lo && i+k+1 <= hi && !(a.wide && b.wide); tracks[k] {
+			tracked++
+		}
+		if a.inked && b.inked && !a.space && !b.space && !a.wide && !b.wide {
+			pairs++
+		}
+	}
+	if extra <= 0 || total == 0 && pairs == 0 {
+		return nil
+	}
+	adds := make([]float64, len(weights))
+	rest := extra
+	if pairs > 0 && !sh.cjk() {
+		for k, e := range sh.wordGaps(i, j, size, em, gaps) {
+			e = min(e, rest)
+			adds[k-i] += e
+			rest -= e
+		}
+		track := min(rest/float64(tracked), most)
+		for k, t := range tracks {
+			if t {
+				adds[k] += track
+			}
+		}
+		rest -= track * float64(tracked)
+	}
+	if total > 0 && rest > 0 {
+		per := min(rest/total, size)
+		for k, w := range weights {
+			adds[k] += per * w
+		}
+	} else if rest > 0 && pairs > 0 && !sh.cjk() {
+		for k, t := range tracks {
+			if t {
+				adds[k] += rest / float64(tracked)
+			}
+		}
+	}
+	return adds
+}
+
+// wordGaps is how much wider, in pixels, each place to part words at in
+// glyphs i to j (not included) is in their ink than the glyphs, set at
+// size pixels an em of em font units, leave it, by the glyph it follows,
+// gaps the ink's wide gaps between them (see ink.gaps): a place is a
+// space, or where CJK characters meet Latin ones, and the widest gaps, as
+// many as there are places, are theirs, in order along the line. It is
+// nil where the ink has fewer wide gaps than the glyphs have places.
+func (sh shape) wordGaps(i, j int, size, em float64, gaps [][2]float64) map[int]float64 {
+	type place struct {
+		after   int     // the glyph it follows
+		natural float64 // what the glyphs leave there, in pixels
+	}
+	var places []place
+	for k := i; k+1 < j; k++ {
+		a, b := sh.glyphs[k], sh.glyphs[k+1]
+		switch {
+		case a.inked && b.space && k+2 < j && sh.glyphs[k+2].inked:
+			places = append(places, place{k, float64(a.advance-a.bounds[2]+b.advance+sh.glyphs[k+2].bounds[0]) / em * size})
+		case a.inked && b.inked && a.wide != b.wide:
+			places = append(places, place{k, float64(a.advance-a.bounds[2]+b.bounds[0]) / em * size})
+		}
+	}
+	if len(places) == 0 || len(gaps) < len(places) {
+		return nil
+	}
+	widest := slices.Clone(gaps)
+	slices.SortFunc(widest, func(a, b [2]float64) int { return cmp.Compare(b[1]-b[0], a[1]-a[0]) })
+	widest = widest[:len(places)]
+	slices.SortFunc(widest, func(a, b [2]float64) int { return cmp.Compare(a[0], b[0]) })
+	extra := map[int]float64{}
+	for p, pl := range places {
+		extra[pl.after] = max(widest[p][1]-widest[p][0]-pl.natural, 0)
+	}
+	return extra
+}
+
+// words is where the ink of a word set from s0 to s1 along its line lies:
+// from the end of the ink's wide gap, or its start, nearest s0 to the
+// start of the gap, or its end, nearest s1, where they lie within near
+// pixels of them, and where it is set else.
+func (in ink) words(s0, s1, near float64) (float64, float64) {
+	nearest := func(at float64, ends []float64) float64 {
+		best, off := at, near
+		for _, e := range ends {
+			if d := math.Abs(e - at); d <= off {
+				best, off = e, d
+			}
+		}
+		return best
+	}
+	starts, ends := []float64{in.s0}, []float64{in.s1}
+	for _, g := range in.gaps {
+		starts, ends = append(starts, g[1]), append(ends, g[0])
+	}
+	from, to := nearest(s0, starts), nearest(s1, ends)
+	if to-from < 2 {
+		return s0, s1
+	}
+	return from, to
+}
+
+// gapsIn is the ink's wide gaps that lie from s0 to s1.
+func (in ink) gapsIn(s0, s1 float64) [][2]float64 {
+	var gaps [][2]float64
+	for _, g := range in.gaps {
+		if g[0] >= s0 && g[1] <= s1 {
+			gaps = append(gaps, g)
+		}
+	}
+	return gaps
+}
+
 // place sets a line at size, in pixels, so that its glyphs span the ink
 // they were read from. Glyphs keep their shapes: the line is spaced out to
-// the ink's width (see spacing), each stretch of it to its own where gaps
+// the ink's width (see spread), each stretch of it to its own where gaps
 // part the ink (see split), and stretched only when it has nowhere to
-// space, or squeezed when it is wider than the ink. The line's x and y are
+// space, or squeezed when it is wider than the ink. A line tracked out,
+// as a title is, its letters apart (see ink.pieces), has each glyph's
+// outline centered on its own piece of ink, whatever spaces the
+// recognizer read between them. The line's x and y are
 // where its baseline starts, along and up the frame; origins are where
 // each glyph's origin goes along it from x, in pixels, before tl.scale,
 // and where the last glyph's advance ends. Bare are the stretches of ink
@@ -1227,6 +2244,20 @@ func (d *textDoc) place(sh shape, f frame, in ink, size float64) (tl textLine, o
 			origins[i+1] = origins[i] + float64(g.advance)/em*size
 		}
 	}
+	inked := 0
+	for _, g := range sh.glyphs {
+		if g.inked {
+			inked++
+		}
+	}
+	// How far letters may be tracked out: as far as a line tracked out, as
+	// a title is, is (see ink.tracking), and a twentieth of an em in
+	// others, where a face wider than the text fonts asks for more.
+	tracked := in.tracking >= 0.2
+	track := 0.05 * size
+	if tracked {
+		track = math.Inf(1)
+	}
 	switch {
 	case !in.found:
 		// No ink stands out: fill the box, centered.
@@ -1234,6 +2265,23 @@ func (d *textDoc) place(sh shape, f frame, in ink, size float64) (tl textLine, o
 		tl.scale = min(max(0.95*f.length/(float64(sh.advance)/em*size), 0.5), 2)
 		tl.x = 0.025 * f.length
 		tl.y = f.height/2 - float64(sh.yMin+sh.yMax)/2/em*size
+	case in.pieces != nil && inked == len(in.pieces) && !sh.cjk():
+		k := 0
+		for i, g := range sh.glyphs {
+			switch {
+			case g.inked:
+				origins[i] = (in.pieces[k][0]+in.pieces[k][1])/2 - float64(g.bounds[0]+g.bounds[2])/2/em*size
+				k++
+			case i > 0:
+				origins[i] = origins[i-1] + float64(sh.glyphs[i-1].advance)/em*size
+			}
+		}
+		origins[n] = origins[n-1] + float64(sh.glyphs[n-1].advance)/em*size
+		tl.x = origins[0]
+		for i := range origins {
+			origins[i] -= tl.x
+		}
+		tl.y = in.t0 - float64(sh.yMin)/em*size
 	case len(in.segs) > 1:
 		starts := sh.split(in.segs, size, em)
 		first := true
@@ -1254,29 +2302,36 @@ func (d *textDoc) place(sh shape, f frame, in ink, size float64) (tl textLine, o
 				tl.x, first = at, false
 			}
 			origins[i] = at - tl.x
-			extra := seg[1] - seg[0] - float64(right-left)/em*size
-			weights, total := sh.spacing(i, j)
-			per := 0.0
-			if extra > 0 && total > 0 {
-				per = min(extra/total, size)
-			}
+			adds := sh.spread(i, j, seg[1]-seg[0]-float64(right-left)/em*size, size, em, in.gapsIn(seg[0], seg[1]), track)
 			for k := i; k < j; k++ {
 				origins[k+1] = origins[k] + float64(sh.glyphs[k].advance)/em*size
-				if k-i < len(weights) {
-					origins[k+1] += per * weights[k-i]
+				if k-i < len(adds) {
+					origins[k+1] += adds[k-i]
 				}
 			}
 		}
 		tl.y = in.t0 - float64(sh.yMin)/em*size
 	default:
 		natural()
-		extra := in.s1 - in.s0 - float64(sh.right-sh.left)/em*size
-		weights, total := sh.spacing(0, n)
-		switch {
-		case extra > 0 && total > 0:
-			per := min(extra/total, size) // an em a weight at most
-			for i, w := range weights {
-				origins[i+1] = origins[i] + float64(sh.glyphs[i].advance)/em*size + per*w
+		// A line not tracked out is set in a face a little wider, as far
+		// as its ink is wider than its word gaps make it, up to a tenth,
+		// as the face it was printed in may be wider than the text fonts.
+		width, span := in.s1-in.s0, float64(sh.right-sh.left)/em*size
+		gaps := in.gapsIn(in.s0, in.s1)
+		if width > span && !tracked && !sh.cjk() {
+			words := 0.0
+			for _, e := range sh.wordGaps(0, n, size, em, gaps) {
+				words += e
+			}
+			tl.scale = min(max((width-words)/span, 1), 1.1)
+			for k := range gaps {
+				gaps[k][0], gaps[k][1] = gaps[k][0]/tl.scale, gaps[k][1]/tl.scale
+			}
+		}
+		switch adds := sh.spread(0, n, width/tl.scale-span, size, em, gaps, track); {
+		case adds != nil:
+			for i, a := range adds {
+				origins[i+1] = origins[i] + float64(sh.glyphs[i].advance)/em*size + a
 			}
 			origins[n] = origins[n-1] + float64(sh.glyphs[n-1].advance)/em*size
 		case sh.right > sh.left:
@@ -1320,14 +2375,18 @@ func (d *textDoc) number(s *cidSet, sh shape, origins []float64, size float64) [
 
 // textColor is the color a line is set in: black or white for ink that is
 // about so, as a typeset page's would be, and the ink's own color else.
-func textColor(fg, bg rgb, found bool) rgb {
+// Ink without color is about black that is darker than gray halfway to
+// white, or two fifths of the way from the page's black, the luma of its
+// darkest such ink, where that is darker: a page printed black keeps its
+// gray, as of a contents page's section numbers.
+func textColor(fg, bg rgb, found bool, black int) rgb {
 	switch {
 	case !found:
 		if luma(bg) < 128 {
 			return white
 		}
 		return rgb{}
-	case chroma(fg) < 48 && luma(fg) < 128:
+	case chroma(fg) < 48 && luma(fg) < min(128, black+(255-black)*2/5):
 		return rgb{}
 	case chroma(fg) < 48 && luma(fg) > 200:
 		return white

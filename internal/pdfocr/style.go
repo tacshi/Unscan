@@ -147,12 +147,25 @@ func strokeStats(w, h int, cover func(x, y int) float64, oblique bool) strokes {
 // is, its edges too if oblique. The faces must be the text fonts, whose
 // outlines are parsed.
 func (d *textDoc) strokes(sh shape, size float64, oblique bool) strokes {
+	w, h, cover := d.draw(sh, size)
+	if cover == nil {
+		return strokes{}
+	}
+	return strokeStats(w, h, cover, oblique)
+}
+
+// draw draws a line as sh sets it, each glyph in its face, at size pixels
+// an em, at its own advances, w×h pixels large with two to spare round
+// it, cover giving how much of each pixel the glyphs cover, top first;
+// nil where they draw nothing. The faces must be the text fonts, whose
+// outlines are parsed.
+func (d *textDoc) draw(sh shape, size float64) (w, h int, cover func(x, y int) float64) {
 	k := size / float64(d.fonts[sh.face].ttf.UnitsPerEm)
 	const pad = 2
-	w := int(math.Ceil(float64(sh.right-sh.left)*k)) + 2*pad
-	h := int(math.Ceil(float64(sh.yMax-sh.yMin)*k)) + 2*pad
+	w = int(math.Ceil(float64(sh.right-sh.left)*k)) + 2*pad
+	h = int(math.Ceil(float64(sh.yMax-sh.yMin)*k)) + 2*pad
 	if w <= 2*pad || h <= 2*pad || w*h > 1<<24 {
-		return strokes{}
+		return 0, 0, nil
 	}
 	r := vector.NewRasterizer(w, h)
 	var buf sfnt.Buffer
@@ -194,7 +207,7 @@ func (d *textDoc) strokes(sh shape, size float64, oblique bool) strokes {
 	}
 	mask := image.NewAlpha(image.Rect(0, 0, w, h))
 	r.Draw(mask, mask.Bounds(), image.Opaque, image.Point{})
-	return strokeStats(w, h, func(x, y int) float64 { return float64(mask.Pix[y*mask.Stride+x]) / 255 }, oblique)
+	return w, h, func(x, y int) float64 { return float64(mask.Pix[y*mask.Stride+x]) / 255 }
 }
 
 // lineRefs is a line as each face would print it, for styles to judge the
@@ -203,6 +216,25 @@ func (d *textDoc) strokes(sh shape, size float64, oblique bool) strokes {
 type lineRefs struct {
 	ok   bool // false for a line that cannot be judged (see styles)
 	refs [faces]strokes
+	// words are the line's words of Latin letters or digits, which styles
+	// judges the weight of too, setting each's face, as a verb set bold
+	// in a caption is, or nil.
+	words []wordInk
+}
+
+// wordInk is a word of a line's: a run of its glyphs, from from to to
+// (not included), between spaces or CJK characters, with letters letters
+// or digits. Ink is its ink's strokes, refs its strokes set in the serif
+// and sans-serif regular faces at the size the line's ink gives each, and
+// slant how far its upright strokes lean to the right, the tangent of
+// their angle (see slant), beyond how far its letters lean set upright,
+// as a y's long stroke and a W's do. Face is the face styles sets it in.
+type wordInk struct {
+	from, to, letters int
+	ink               strokes
+	refs              [2]strokes
+	slant             float64
+	face              int
 }
 
 // refs sets a line's text in each face, at the size its ink gives it,
@@ -263,12 +295,14 @@ func (d *textDoc) refs(text string, f frame, in ink) lineRefs {
 // regular face, and so is one whose lines are mostly heavier than it, as
 // where only headings are set in it.
 //
-// Lines whose ink was not found are set in the serif face, and those with
-// fewer than two letters or characters to judge by, as a paragraph's last
-// line of one character, in their paragraph's kind, regular: where it has
-// no other, as a page number alone, in the serif face.
+// Lines with fewer than two letters or characters to judge by, as a
+// paragraph's last line of one character, are set regular, in their
+// paragraph's kind: where it has no other, as a page number alone, in the
+// kind most of the document's lines of their script are (see kinds), as
+// are lines whose ink was not found.
 // Lines gives each line's lineRefs, which styles completes with Kai's for
-// the lines it judges Kai, and pages its page, or is nil for one page.
+// the lines it judges Kai, and with the faces of their words, and pages
+// its page, or is nil for one page.
 func (d *textDoc) styles(texts []string, frames []frame, inks []ink, lines []lineRefs, pages []int) []int {
 	var gains []float64
 	for i, l := range lines {
@@ -299,12 +333,13 @@ func (d *textDoc) styles(texts []string, frames []frame, inks []ink, lines []lin
 	geoms := make([]lineGeom, len(texts))
 	for i, l := range lines {
 		f, in := frames[i], inks[i]
+		geoms[i].cjk = d.shape(texts[i], serif).cjk()
 		if !in.found {
 			continue
 		}
 		top, bottom := f.point(in.s0, in.t1), f.point(in.s0, in.t0)
 		geoms[i] = lineGeom{ok: true, judged: l.ok, top: top.Y, bottom: bottom.Y, height: in.t1 - in.t0,
-			cjk: d.shape(texts[i], serif).cjk(), han: strings.ContainsFunc(texts[i], isHan), letters: letters(texts[i])}
+			cjk: geoms[i].cjk, han: strings.ContainsFunc(texts[i], isHan), letters: letters(texts[i])}
 		if pages != nil {
 			geoms[i].page = pages[i]
 		}
@@ -371,6 +406,7 @@ func (d *textDoc) styles(texts []string, frames []frame, inks []ink, lines []lin
 		return ws[len(ws)/2], true
 	}
 	heavier := make([]float64, len(texts)) // than the lines of its kind, as below
+	bases := make([]float64, len(texts))
 	for i, l := range lines {
 		if !l.ok {
 			continue
@@ -396,12 +432,60 @@ func (d *textDoc) styles(texts []string, frames []frame, inks []ink, lines []lin
 			out[i]++ // the kind's bold face
 		}
 		heavier[i] = weights[i] / b
+		bases[i] = b
 	}
-	// A paragraph of a few lines or more, most of them regular, is set
-	// regular but for a line surely heavier, as a whole line set bold in
-	// it is: one a little heavier is so for its characters, as a line of
-	// Chinese among Latin ones may be. Lines of the other kind than the
-	// paragraph's, as a heading in its size, are their own.
+	paragraphWeights(paras, out, heavier)
+
+	// A word is set in its line's face but where it is surely heavier, by
+	// a fifth, than the lines of its kind are, in a line set regular, as
+	// a verb set bold in a caption is, or no more than a tenth heavier in
+	// one set bold. A word of a letter is in the face of the word after it,
+	// or before it, as "a" is in "Take a seat", but for a line's first, as
+	// "A", which is the line's, or a label's, as "A:", which is judged as
+	// words are, but surely heavier, by three tenths.
+	for i, l := range lines {
+		kind := out[i] &^ 1
+		for k := range l.words {
+			w := &l.words[k]
+			w.face = out[i]
+			label := k == 0 && w.letters == 1 && w.to-w.from > 1 // as "A:", not "A"
+			if !l.ok || kind == kai || w.letters < 2 && !label || w.refs[kind/2].across == 0 || w.refs[kind/2].down == 0 {
+				continue
+			}
+			bold := 1.2
+			if w.letters < 2 {
+				bold = 1.3 // a label's letter, which tells less surely
+			}
+			across, down := max(w.ink.across-gain, 1.0/3), max(w.ink.down-gain, 1.0/3)
+			switch h := math.Sqrt(across/w.refs[kind/2].across*down/w.refs[kind/2].down) / bases[i]; {
+			case out[i] == kind && h >= bold:
+				w.face = kind + 1
+			case out[i] == kind+1 && h < 1.1:
+				w.face = kind
+			}
+		}
+		for k := 1; k < len(l.words); k++ {
+			if l.words[k].letters < 2 {
+				l.words[k].face = l.words[min(k+1, len(l.words)-1)].face
+				if k == len(l.words)-1 {
+					l.words[k].face = l.words[k-1].face
+				}
+			}
+		}
+	}
+	return out
+}
+
+// paragraphWeights votes on the weight of paragraphs' lines, as kinds
+// returns them: out has each line in its kind's bold face where it is 15%
+// heavier than its kind's lines are (see styles), heavier says how much.
+// A paragraph of a few lines or more, most of them regular, is set
+// regular but for a line surely heavier, as a whole line set bold in
+// it is, or a first line a fifth heavier, as a heading run into its
+// paragraph is: one a little heavier is so for its characters, as a
+// line of Chinese among Latin ones may be. Lines of the other kind than
+// the paragraph's, as a heading in its size, are their own.
+func paragraphWeights(paras [][]int, out []int, heavier []float64) {
 	for _, para := range paras {
 		if len(para) < 3 {
 			continue
@@ -420,12 +504,11 @@ func (d *textDoc) styles(texts []string, frames []frame, inks []ink, lines []lin
 			continue // mostly bold
 		}
 		for _, i := range para {
-			if out[i] == kind+1 && heavier[i] < 1.3 {
+			if out[i] == kind+1 && heavier[i] < 1.3 && !(i == para[0] && heavier[i] >= 1.2) {
 				out[i] = kind
 			}
 		}
 	}
-	return out
 }
 
 // lineGeom is what kinds knows of a line: where it is, what script it is
@@ -469,9 +552,15 @@ const brushy, brushyAlone = 0.09, 0.12
 // Latin, small and blurred, leans to sans-serif more than its face does.
 // The paragraph's kind is where its lines lean, by their median, of those
 // with a few letters to judge by; a CJK line leaning the other way surely,
-// as a heading in the paragraph's size does, keeps its own. Lines it
-// cannot judge take their paragraph's kind. It returns the paragraphs
-// too, as lists of lines.
+// as a heading in the paragraph's size does, keeps its own. A paragraph of
+// a line or two, as a heading or a label, leaning to serif less than
+// surely, is sans-serif where most of the document's lines of its script
+// lean to it: a sans-serif face's bold has more contrast than its regular,
+// and leans a little to serif. A paragraph it cannot judge at all is of
+// the kind most of the document's lines of its script lean to. Lines it
+// cannot judge take their paragraph's kind, and lines it knows nothing of,
+// whose ink was not found, the document's. It returns the paragraphs too,
+// as lists of lines.
 func kinds(lines []lineGeom, withKai bool) ([]int, [][]int) {
 	order := make([]int, 0, len(lines))
 	for i, l := range lines {
@@ -541,7 +630,33 @@ each:
 		}
 		return len(around) >= 2 && median(around) >= brushy
 	}
+	// The kind most of the document's lines of a script lean to, by their
+	// median, of those with a few letters to judge by, or of all its lines
+	// where fewer than five are of the script; serif where none are.
+	byScript := map[bool][]float64{}
+	var all []float64
+	for _, i := range order {
+		if l := lines[i]; l.judged && l.letters >= 4 {
+			byScript[l.cjk] = append(byScript[l.cjk], l.lean)
+			all = append(all, l.lean)
+		}
+	}
+	prevail := map[bool]int{}
+	for _, cjk := range []bool{false, true} {
+		v := byScript[cjk]
+		if len(v) < 5 {
+			v = all
+		}
+		if len(v) > 0 && median(slices.Clone(v)) < 0 {
+			prevail[cjk] = sans
+		}
+	}
 	out := make([]int, len(lines))
+	for i, l := range lines {
+		if !l.ok {
+			out[i] = prevail[l.cjk]
+		}
+	}
 	for _, para := range paras {
 		var leans, brushes []float64
 		for _, i := range para {
@@ -557,7 +672,10 @@ each:
 			}
 		}
 		if len(leans) == 0 {
-			continue // nothing to judge it by: serif
+			for _, i := range para {
+				out[i] = prevail[lines[i].cjk] // nothing to judge it by
+			}
+			continue
 		}
 		if isKai(para, brushes) {
 			for _, i := range para {
@@ -566,8 +684,9 @@ each:
 			continue
 		}
 		slices.Sort(leans)
+		lean := leans[len(leans)/2]
 		kind := serif
-		if leans[len(leans)/2] < 0 {
+		if lean < 0 || len(leans) < 3 && lean < sure && prevail[lines[para[0]].cjk] == sans {
 			kind = sans
 		}
 		for _, i := range para {

@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -50,11 +51,20 @@ type Font struct {
 // books set them. A face left out has no Data.
 type TextFonts struct {
 	Serif, SerifBold, Sans, SansBold, Kai Font
+	// The serif and sans-serif faces in traditional Chinese's forms, as
+	// Noto Serif TC and Noto Sans TC, which a document in it is set in
+	// instead (see isTraditional), where they are given.
+	SerifTC, SerifBoldTC, SansTC, SansBoldTC Font
 }
 
 // fonts lists the fonts by face.
 func (f TextFonts) fonts() [faces]Font {
 	return [faces]Font{f.Serif, f.SerifBold, f.Sans, f.SansBold, f.Kai, {}}
+}
+
+// traditionalFonts lists the fonts in traditional Chinese's forms by face.
+func (f TextFonts) traditionalFonts() [faces]Font {
+	return [faces]Font{f.SerifTC, f.SerifBoldTC, f.SansTC, f.SansBoldTC, {}, {}}
 }
 
 // FontNames names the fonts in a font file by their full names, as "Songti
@@ -125,28 +135,43 @@ func ReadFont(path string, i int, bold bool) (Font, []string, error) {
 }
 
 // textFontFiles are the fonts' names in cmd/fetchdeps's fonts directory,
-// "" for a face it has none of.
-var textFontFiles = [faces]string{
-	"NotoSerifSC-Regular.ttf", "NotoSerifSC-Bold.ttf", "NotoSansSC-Regular.ttf", "NotoSansSC-Bold.ttf",
-	"LXGWWenKai-Regular.ttf", "",
-}
+// "" for a face it has none of, and traditionalFontFiles those of the
+// faces in traditional Chinese's forms.
+var (
+	textFontFiles = [faces]string{
+		"NotoSerifSC-Regular.ttf", "NotoSerifSC-Bold.ttf", "NotoSansSC-Regular.ttf", "NotoSansSC-Bold.ttf",
+		"LXGWWenKai-Regular.ttf", "",
+	}
+	traditionalFontFiles = [faces]string{
+		"NotoSerifTC-Regular.ttf", "NotoSerifTC-Bold.ttf", "NotoSansTC-Regular.ttf", "NotoSansTC-Bold.ttf", "", "",
+	}
+)
 
 // LoadTextFonts reads the text fonts from where cmd/fetchdeps puts them in
-// an app's resources directory.
+// an app's resources directory. Those in traditional Chinese's forms are
+// left out where they are missing, as from resources fetched before
+// cmd/fetchdeps fetched them.
 func LoadTextFonts(resources string) (TextFonts, error) {
-	var data [faces][]byte
-	for i, name := range textFontFiles {
-		if name == "" {
-			continue
+	var data, tc [faces][]byte
+	for i := range faces {
+		if name := textFontFiles[i]; name != "" {
+			b, err := os.ReadFile(filepath.Join(resources, "fonts", name))
+			if err != nil {
+				return TextFonts{}, err
+			}
+			data[i] = b
 		}
-		b, err := os.ReadFile(filepath.Join(resources, "fonts", name))
-		if err != nil {
-			return TextFonts{}, err
+		if name := traditionalFontFiles[i]; name != "" {
+			b, err := os.ReadFile(filepath.Join(resources, "fonts", name))
+			if err != nil && !errors.Is(err, fs.ErrNotExist) {
+				return TextFonts{}, err
+			}
+			tc[i] = b
 		}
-		data[i] = b
 	}
 	return TextFonts{Font{Data: data[serif]}, Font{Data: data[serifBold]}, Font{Data: data[sans]},
-		Font{Data: data[sansBold]}, Font{Data: data[kai]}}, nil
+		Font{Data: data[sansBold]}, Font{Data: data[kai]},
+		Font{Data: tc[serif]}, Font{Data: tc[serifBold]}, Font{Data: tc[sans]}, Font{Data: tc[sansBold]}}, nil
 }
 
 // latin is the face that a line set in fi takes its Latin letters, digits
@@ -185,6 +210,23 @@ func parseFace(f Font, fi int, outlines bool) (*face, error) {
 		}
 	}
 	return fc, nil
+}
+
+// parseTraditionalFaces parses the text fonts in traditional Chinese's
+// forms, nil for a face left out. Only their metrics are needed: lines
+// are drawn, to judge them, in the others (see textDoc.ref).
+func parseTraditionalFaces(f TextFonts) ([faces]*face, error) {
+	var out [faces]*face
+	for i, font := range f.traditionalFonts() {
+		if font.Data == nil {
+			continue
+		}
+		var err error
+		if out[i], err = parseFace(font, i, false); err != nil {
+			return out, fmt.Errorf("%s font in traditional Chinese's forms: %w", faceNames[i], err)
+		}
+	}
+	return out, nil
 }
 
 // parseFaces parses the text fonts. Serif is needed; a face left out is
@@ -245,8 +287,14 @@ func parseUserFaces(f TextFonts) ([faces]*face, error) {
 type textDoc struct {
 	fonts [faces]*face
 	// Fallbacks are the text fonts behind those of fonts that are the
-	// user's, which set the characters they lack; nil behind the others.
+	// user's, which set the characters they lack, and behind those in
+	// traditional Chinese's forms (see setTraditional); nil behind the
+	// others.
 	fallbacks [faces]*face
+	// Traditional are the text fonts in traditional Chinese's forms, nil
+	// for a face it has none of, which the document is set in where it
+	// is in traditional Chinese, until it is set.
+	traditional [faces]*face
 	// Ref is the document set in the text fonts alone, which lines are
 	// measured and judged in (see styles), whatever fonts they are set
 	// in: those are the faces the judging is tuned to, and the user's
@@ -296,9 +344,18 @@ type measuredLine struct {
 	text  string
 	frame frame
 	ink   ink
-	keep  [][2]float64 // ink along it to keep as printed, as dot leaders
-	refs  lineRefs     // what styles judges it against
-	face  int          // the face it was printed in, once styles has judged it
+	// keep is ink along it to keep as printed, as dot leaders: a stretch
+	// may run on, infinitely, to the box's end.
+	keep [][2]float64
+	// colors are what each glyph of its text was printed in, set in the
+	// serif face, or nil (see glyphColors).
+	colors []rgb
+	// printed is whether the line stays as printed, under invisible text:
+	// it is on color, its ink is framed, or squeezed, or the recognizer
+	// was unsure of it (see redrawPage).
+	printed bool
+	refs    lineRefs // what styles judges it against, unless printed
+	face    int      // the face it was printed in, once styles has judged it
 }
 
 // pageImage is an image drawn at x, y, w points by h.
@@ -319,7 +376,14 @@ type textLine struct {
 	size   float64 // the font size
 	scale  float64 // the horizontal stretch, 1 for none
 	color  rgb
-	hidden bool // invisible, over the line as printed
+	colors []rgb // each character's, or nil where the line is in one, color
+	hidden bool  // invisible, over the line as printed
+	// Slanted says which characters are set slanted, as italic, nil for
+	// none, by slant, the tangent of the angle, set back by back points
+	// along the line; offsets are where each starts along it, in points.
+	slanted     []bool
+	slant, back float64
+	offsets     []float64
 }
 
 // newTextDoc starts a document set in the text fonts, but for the faces the
@@ -342,6 +406,29 @@ func newTextDoc(fonts, user [faces]*face) *textDoc {
 		d.fallbacks[k], d.fallbacks[k+1] = fonts[k], fonts[k+1]
 	}
 	return d
+}
+
+// setTraditional sets the document in the text fonts in traditional
+// Chinese's forms, where there are any: in place of the text fonts, which
+// set the characters they lack, and behind the user's (see fallbacks).
+// Its lines are measured and judged in the others all the same (see ref),
+// whose metrics they share. It is to be called before any character is
+// numbered (see cid), once.
+func (d *textDoc) setTraditional() {
+	if d.ref == d {
+		d.ref = &textDoc{fonts: d.fonts}
+		d.ref.ref = d.ref
+	}
+	for i, tc := range d.traditional {
+		switch {
+		case tc == nil:
+		case d.fallbacks[i] != nil: // the user's
+			d.fallbacks[i] = tc
+		default:
+			d.fonts[i], d.fallbacks[i] = tc, d.fonts[i]
+		}
+	}
+	d.traditional = [faces]*face{}
 }
 
 // font is the document's face i, or for fallback+i, the text font behind
@@ -530,12 +617,29 @@ func (p *textPage) content(s *cidSet) []byte {
 		if l.hidden {
 			mode = 3 // neither fill nor stroke
 		}
-		fmt.Fprintf(&b, "BT\n%d Tr\n%s Tz\n%s %s %s rg\n%s %s %s %s %s %s Tm\n",
-			mode, num(100*l.scale),
-			num(float64(l.color[0])/255), num(float64(l.color[1])/255), num(float64(l.color[2])/255),
-			num(l.dx), num(l.dy), num(-l.dy), num(l.dx), num(l.x), num(l.y))
+		colorOf := func(k int) rgb {
+			if l.colors != nil {
+				return l.colors[k]
+			}
+			return l.color
+		}
+		slanted := func(k int) bool { return l.slanted != nil && l.slanted[k] }
+		// The text matrix at character k, slanted or not, which starts a
+		// stretch of characters slanted alike where the line has both.
+		matrix := func(k int) string {
+			x, y, c, d := l.x, l.y, -l.dy, l.dx
+			if l.slanted != nil {
+				x, y = x+l.offsets[k]*l.dx, y+l.offsets[k]*l.dy
+			}
+			if slanted(k) {
+				x, y, c, d = x-l.back*l.dx, y-l.back*l.dy, l.slant*l.dx-l.dy, l.slant*l.dy+l.dx
+			}
+			return fmt.Sprintf("%s %s %s %s %s %s Tm\n", num(l.dx), num(l.dy), num(c), num(d), num(x), num(y))
+		}
+		color := colorOf(0)
+		fmt.Fprintf(&b, "BT\n%d Tr\n%s Tz\n%s rg\n%s", mode, num(100*l.scale), rg(color), matrix(0))
 		in := -1 // the face of the stretch being written
-		for _, c := range l.cids {
+		for k, c := range l.cids {
 			f := in
 			if c > 0 {
 				f = s.codes[c-1].face
@@ -543,18 +647,34 @@ func (p *textPage) content(s *cidSet) []byte {
 			if f < 0 {
 				f = l.face // a character out of CIDs, first
 			}
-			if f != in {
+			turn := k > 0 && slanted(k) != slanted(k-1)
+			if f != in || colorOf(k) != color || turn {
 				if in >= 0 {
 					b.WriteString("> Tj\n")
 				}
-				fmt.Fprintf(&b, "/F%d %s Tf\n<", p.set*allFaces+f+1, num(l.size))
-				in = f
+				if turn {
+					b.WriteString(matrix(k))
+				}
+				if colorOf(k) != color {
+					color = colorOf(k)
+					fmt.Fprintf(&b, "%s rg\n", rg(color))
+				}
+				if f != in {
+					fmt.Fprintf(&b, "/F%d %s Tf\n", p.set*allFaces+f+1, num(l.size))
+					in = f
+				}
+				b.WriteString("<")
 			}
 			fmt.Fprintf(&b, "%04X", c)
 		}
 		b.WriteString("> Tj\nET\n")
 	}
 	return b.Bytes()
+}
+
+// rg is c as the operands of rg.
+func rg(c rgb) string {
+	return num(float64(c[0])/255) + " " + num(float64(c[1])/255) + " " + num(float64(c[2])/255)
 }
 
 // toUnicodeCMap maps each CID to its character.
