@@ -15,27 +15,36 @@ import (
 	"unscan/internal/ttf"
 )
 
-// The text PDF's faces: a serif one and a sans-serif one, each regular
-// and bold, which lines are set in as they were printed (see style).
+// The text PDF's faces: a serif one, a sans-serif one and a Kai one, the
+// brush-written face of Chinese prefaces and quotations, each regular and
+// bold, which lines are set in as they were printed (see style). A face
+// and its bold are next to each other, the regular first; a kind is its
+// regular face.
 const (
 	serif = iota
 	serifBold
 	sans
 	sansBold
+	kai
+	kaiBold
 	faces
 )
 
 // TextFonts are the TrueType files that text PDFs are set in: a serif face
-// and a sans-serif one, each regular and bold, with the same characters,
-// such as Noto Serif SC and Noto Sans SC. Serif is needed; a face left out
-// is set in the one nearest it.
+// and a sans-serif one, each regular and bold, and a Kai face, with the
+// same characters and units per em, such as Noto Serif SC, Noto Sans SC
+// and LXGW WenKai. Serif is needed; a face left out is set in the one
+// nearest it. Lines set in Kai take their Latin letters, digits and
+// narrow punctuation from the serif face, as books set them.
 type TextFonts struct {
-	Serif, SerifBold, Sans, SansBold []byte
+	Serif, SerifBold, Sans, SansBold, Kai []byte
 }
 
-// textFontFiles are the fonts' names in cmd/fetchdeps's fonts directory.
+// textFontFiles are the fonts' names in cmd/fetchdeps's fonts directory,
+// "" for a face it has none of.
 var textFontFiles = [faces]string{
 	"NotoSerifSC-Regular.ttf", "NotoSerifSC-Bold.ttf", "NotoSansSC-Regular.ttf", "NotoSansSC-Bold.ttf",
+	"LXGWWenKai-Regular.ttf", "",
 }
 
 // LoadTextFonts reads the text fonts from where cmd/fetchdeps puts them in
@@ -43,13 +52,26 @@ var textFontFiles = [faces]string{
 func LoadTextFonts(resources string) (TextFonts, error) {
 	var data [faces][]byte
 	for i, name := range textFontFiles {
+		if name == "" {
+			continue
+		}
 		b, err := os.ReadFile(filepath.Join(resources, "fonts", name))
 		if err != nil {
 			return TextFonts{}, err
 		}
 		data[i] = b
 	}
-	return TextFonts{data[serif], data[serifBold], data[sans], data[sansBold]}, nil
+	return TextFonts{data[serif], data[serifBold], data[sans], data[sansBold], data[kai]}, nil
+}
+
+// latin is the face that a line set in fi takes its Latin letters, digits
+// and narrow punctuation from: the serif face of its weight for Kai,
+// whose own are a casual hand, and fi itself for the others.
+func latin(fi int) int {
+	if fi == kai || fi == kaiBold {
+		return fi - kai + serif
+	}
+	return fi
 }
 
 // face is one of the text PDF's fonts, parsed for its metrics and
@@ -63,7 +85,7 @@ type face struct {
 
 func parseFaces(f TextFonts) ([faces]*face, error) {
 	var out [faces]*face
-	for i, data := range [faces][]byte{f.Serif, f.SerifBold, f.Sans, f.SansBold} {
+	for i, data := range [faces][]byte{f.Serif, f.SerifBold, f.Sans, f.SansBold, f.Kai} {
 		if data == nil {
 			continue
 		}
@@ -80,9 +102,17 @@ func parseFaces(f TextFonts) ([faces]*face, error) {
 	if out[serif] == nil {
 		return out, errors.New("text fonts: no serif face")
 	}
+	// A line mixes faces, a Kai one with the serif one, by their units.
+	for _, fc := range out {
+		if fc != nil && fc.ttf.UnitsPerEm != out[serif].ttf.UnitsPerEm {
+			return out, fmt.Errorf("text fonts: %s has %d units per em, %s %d", fc.ttf.PostScriptName,
+				fc.ttf.UnitsPerEm, out[serif].ttf.PostScriptName, out[serif].ttf.UnitsPerEm)
+		}
+	}
 	// A face left out is set in the one nearest it: the other weight of
 	// its kind, or the serif one of its weight.
-	for _, fill := range [][2]int{{serifBold, serif}, {sans, serif}, {sansBold, sans}, {sansBold, serifBold}} {
+	for _, fill := range [][2]int{{serifBold, serif}, {sans, serif}, {sansBold, sans}, {sansBold, serifBold},
+		{kai, serif}, {kaiBold, kai}} {
 		if out[fill[0]] == nil && out[fill[1]] != nil {
 			out[fill[0]] = out[fill[1]]
 		}
@@ -211,7 +241,7 @@ func (d *textDoc) build() []byte {
 		sets = []*cidSet{{}} // no text, but a ToUnicode map all the same
 	}
 	// The faces each set's pages set text in, by what the pages call them:
-	// F1 to F4 in the first set, F5 to F8 in the next, and so on.
+	// F1 to F6 in the first set, F7 to F12 in the next, and so on.
 	fontNames := make([]string, len(sets))
 	for si, s := range sets {
 		tu := toUnicode
@@ -260,7 +290,7 @@ func (d *textDoc) build() []byte {
 		w.object(pageID, fmt.Sprintf("<< /Type /Page /Parent %d 0 R /MediaBox [0 0 %s %s] "+
 			"/Resources << /Font <<%s >> /XObject <<%s >> >> /Contents %d 0 R >>",
 			pageTree, num(p.width), num(p.height), fontNames[p.set], xobjects.String(), contentID))
-		w.stream(contentID, "", p.content())
+		w.stream(contentID, "", p.content(sets[p.set]))
 	}
 	w.object(pageTree, fmt.Sprintf("<< /Type /Pages /Kids [%s] /Count %d >>", strings.Join(kids, " "), len(d.pages)))
 	return w.finish(catalog)
@@ -329,22 +359,41 @@ func (d *textDoc) writeFont(w *pdfWriter, s *cidSet, fi int, cids []int, toUnico
 	return font
 }
 
-// content draws the page's pictures, then its lines over them.
-func (p *textPage) content() []byte {
+// content draws the page's pictures, then its lines over them, each
+// stretch of a line in the face its characters are numbered in, in s.
+func (p *textPage) content(s *cidSet) []byte {
 	var b bytes.Buffer
 	for i, img := range p.images {
 		fmt.Fprintf(&b, "q %s 0 0 %s %s %s cm /Im%d Do Q\n", num(img.w), num(img.h), num(img.x), num(img.y), i)
 	}
 	for _, l := range p.lines {
+		if len(l.cids) == 0 {
+			continue
+		}
 		mode := 0 // fill
 		if l.hidden {
 			mode = 3 // neither fill nor stroke
 		}
-		fmt.Fprintf(&b, "BT\n%d Tr\n/F%d %s Tf\n%s Tz\n%s %s %s rg\n%s %s %s %s %s %s Tm\n<",
-			mode, p.set*faces+l.face+1, num(l.size), num(100*l.scale),
+		fmt.Fprintf(&b, "BT\n%d Tr\n%s Tz\n%s %s %s rg\n%s %s %s %s %s %s Tm\n",
+			mode, num(100*l.scale),
 			num(float64(l.color[0])/255), num(float64(l.color[1])/255), num(float64(l.color[2])/255),
 			num(l.dx), num(l.dy), num(-l.dy), num(l.dx), num(l.x), num(l.y))
+		in := -1 // the face of the stretch being written
 		for _, c := range l.cids {
+			f := in
+			if c > 0 {
+				f = s.codes[c-1].face
+			}
+			if f < 0 {
+				f = l.face // a character out of CIDs, first
+			}
+			if f != in {
+				if in >= 0 {
+					b.WriteString("> Tj\n")
+				}
+				fmt.Fprintf(&b, "/F%d %s Tf\n<", p.set*faces+f+1, num(l.size))
+				in = f
+			}
 			fmt.Fprintf(&b, "%04X", c)
 		}
 		b.WriteString("> Tj\nET\n")

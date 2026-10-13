@@ -419,7 +419,7 @@ func (p *pixels) measure(f frame, aspect float64) ink {
 			return 0 // the paper's noise
 		}
 		return min(1, c)
-	})
+	}, true)
 	// A gap this wide, a quarter again the ink's height, parts stretches:
 	// wider than the one after a CJK comma mostly, whose ink stands at the
 	// left of its em, but not than one setting a label or a bullet apart.
@@ -919,6 +919,7 @@ type shape struct {
 
 type glyph struct {
 	r       rune
+	face    int // the face its glyph is from: the line's, or the one it takes Latin from
 	advance int
 	bounds  [4]int // its outline's, when inked
 	inked   bool
@@ -926,11 +927,21 @@ type glyph struct {
 	space   bool
 }
 
+// shape sets text in face, but for the characters the face takes from
+// another (see latin): those that it sets narrower than CJK characters,
+// or lacks.
 func (d *textDoc) shape(text string, face int) shape {
 	sh := shape{face: face}
-	font := d.fonts[face].ttf
-	em := font.UnitsPerEm
+	em := d.fonts[face].ttf.UnitsPerEm
 	for _, r := range strings.TrimSpace(text) {
+		fi := face
+		if from := latin(face); from != face {
+			own := d.fonts[face].ttf
+			if g := own.Glyph(r); g == 0 || !wide(r, own.Advance(g), em) {
+				fi = from
+			}
+		}
+		font := d.fonts[fi].ttf
 		g := font.Glyph(r)
 		b, inked := font.Bounds(g)
 		if inked {
@@ -942,7 +953,7 @@ func (d *textDoc) shape(text string, face int) shape {
 			sh.yMin, sh.yMax = min(sh.yMin, b[1]), max(sh.yMax, b[3])
 		}
 		adv := font.Advance(g)
-		sh.glyphs = append(sh.glyphs, glyph{r: r, advance: adv, bounds: b, inked: inked,
+		sh.glyphs = append(sh.glyphs, glyph{r: r, face: fi, advance: adv, bounds: b, inked: inked,
 			wide: wide(r, adv, em), space: unicode.IsSpace(r)})
 		sh.advance += adv
 	}
@@ -1228,7 +1239,7 @@ func (d *textDoc) number(s *cidSet, sh shape, origins []float64, size float64) [
 		want := width - float64(g.advance) + carry
 		add := int(math.Round(want/float64(q))) * q
 		carry = want - float64(add)
-		cids = append(cids, d.cid(s, sh.face, g.r, g.advance+add))
+		cids = append(cids, d.cid(s, g.face, g.r, g.advance+add))
 	}
 	return cids
 }

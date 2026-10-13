@@ -12,6 +12,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"testing"
 
@@ -288,10 +289,10 @@ func TestLineFrame(t *testing.T) {
 }
 
 // TestStyle draws pages of lines in serif and sans-serif faces, regular
-// and bold, of other families than the text fonts, as a book's are,
-// blurred and noisy as scans are: each line is set in the text face of its
-// kind and weight. Body lines are regular; a page of a few lines is judged
-// line by line.
+// and bold, and in Kai, of other families than the text fonts, as a book's
+// are, blurred and noisy as scans are: each line is set in the text face
+// of its kind and weight. Body lines are regular; a page of a few lines is
+// judged line by line.
 func TestStyle(t *testing.T) {
 	d, _ := testTextDoc(t)
 	const (
@@ -347,13 +348,25 @@ func TestStyle(t *testing.T) {
 		{hiragino, 2, "深入理解内核", sans | either},
 		{songti, 6, "第三版，陈莉君译", serif},
 	}
-	names := [faces]string{"serif", "serif bold", "sans", "sans bold"}
-	fonts := map[string]*opentype.Collection{}
-	for _, page := range []struct {
+	type page struct {
 		name  string
 		lines []line
 		size  float64
-	}{{"Chinese", cjkPage, 36}, {"Chinese", cjkPage, 64}, {"Latin", latinPage, 36}, {"Latin", latinPage, 64}, {"title", titlePage, 64}} {
+	}
+	pages := []page{{"Chinese", cjkPage, 36}, {"Chinese", cjkPage, 64}, {"Latin", latinPage, 36}, {"Latin", latinPage, 64},
+		{"title", titlePage, 64}}
+	// A preface in Kai under a heading in Hei: Apple's Kaiti, where macOS
+	// has downloaded it.
+	if kaiti, _ := filepath.Glob("/System/Library/AssetsV2/com_apple_MobileAsset_Font8/*/AssetData/Kaiti.ttc"); len(kaiti) > 0 {
+		kaiPage := []line{{hiragino, 2, "译者序", sans | either}}
+		for _, text := range cjkBody {
+			kaiPage = append(kaiPage, line{kaiti[0], 0, text, kai})
+		}
+		pages = append(pages, page{"Kai", kaiPage, 36}, page{"Kai", kaiPage, 64})
+	}
+	names := [faces]string{"serif", "serif bold", "sans", "sans bold", "Kai", "Kai bold"}
+	fonts := map[string]*opentype.Collection{}
+	for _, page := range pages {
 		var texts []string
 		var frames []frame
 		var inks []ink
@@ -548,7 +561,8 @@ func TestLeaders(t *testing.T) {
 // theirs; a CJK heading leaning surely to sans-serif keeps its kind.
 func TestKinds(t *testing.T) {
 	line := func(page int, top float64, cjk bool, lean float64) lineGeom {
-		return lineGeom{ok: true, page: page, top: top, bottom: top + 34, height: 34, cjk: cjk, letters: 20, lean: lean}
+		return lineGeom{ok: true, judged: true, page: page, top: top, bottom: top + 34, height: 34,
+			cjk: cjk, han: cjk, letters: 20, lean: lean}
 	}
 	lines := []lineGeom{
 		// An English paragraph, one line of it leaning far the wrong way.
@@ -562,8 +576,75 @@ func TestKinds(t *testing.T) {
 		line(1, 842, true, -0.20), line(1, 896, true, 0.09),
 	}
 	want := []int{serif, serif, serif, serif, serif, sans, serif, serif, serif, sans, sans, sans, sans, sans}
-	if got, _ := kinds(lines); !slices.Equal(got, want) {
+	if got, _ := kinds(lines, true); !slices.Equal(got, want) {
 		t.Errorf("kinds %v, want %v", got, want)
+	}
+}
+
+// TestKaiLatin sets a line in Kai with its Latin letters, digits and
+// spaces from the serif face, as books set Latin in Kai text, and writes
+// each stretch of it in its face's font.
+func TestKaiLatin(t *testing.T) {
+	d, _ := testTextDoc(t)
+	if d.fonts[kai] == d.fonts[serif] {
+		t.Skip("no Kai face: run go run ./cmd/fetchdeps")
+	}
+	sh := d.shape("Linux 内核，2.6", kai)
+	var got []int
+	for _, g := range sh.glyphs {
+		got = append(got, g.face)
+	}
+	want := []int{serif, serif, serif, serif, serif, serif, kai, kai, kai, serif, serif, serif}
+	if !slices.Equal(got, want) {
+		t.Fatalf("faces %v, want %v", got, want)
+	}
+	const size = 40
+	em := float64(d.fonts[kai].ttf.UnitsPerEm)
+	origins := make([]float64, len(sh.glyphs)+1)
+	for i, g := range sh.glyphs {
+		origins[i+1] = origins[i] + float64(g.advance)/em*size
+	}
+	s := &cidSet{cids: map[code]uint16{}}
+	p := &textPage{lines: []textLine{{face: kai, cids: d.number(s, sh, origins, size), size: size, scale: 1, dx: 1}}}
+	var fonts []string
+	for _, f := range regexp.MustCompile(`/F(\d+) 40 Tf`).FindAllStringSubmatch(string(p.content(s)), -1) {
+		fonts = append(fonts, f[1])
+	}
+	if want := []string{"1", "5", "1"}; !slices.Equal(fonts, want) {
+		t.Errorf("fonts %v, want %v: %s", fonts, want, p.content(s))
+	}
+}
+
+// TestKai sets a paragraph whose edges run aslant as Kai's do in Kai,
+// with its last line of one character, too short to judge, and lines alone
+// among Kai ones, as a preface's first and a line of mostly English, if
+// a little less aslant; a Song paragraph, and a bold heading of Song alone,
+// as slanted as Kai's least, are not, nor is anything without a Kai face.
+func TestKai(t *testing.T) {
+	line := func(page int, top float64, brush float64) lineGeom {
+		return lineGeom{ok: true, judged: true, page: page, top: top, bottom: top + 34, height: 34,
+			cjk: true, han: true, letters: 20, lean: 0.05, brush: brush}
+	}
+	alone := line(0, 100, 0.10) // a preface's first line, a paragraph of its own
+	short := line(0, 362, 0)    // 术。
+	short.judged, short.letters = false, 1
+	english := line(0, 470, 0.07) // Daniel P. Bovet 和 Marco Cesati 携手…
+	english.cjk = false
+	heading := line(1, 100, 0.105)
+	heading.height, heading.bottom = 60, 160
+	lines := []lineGeom{
+		alone,
+		line(0, 200, 0.12), line(0, 254, 0.10), line(0, 308, 0.13), short,
+		english, line(0, 524, 0.11), line(0, 578, 0.12),
+		// A page of Song, under a bold heading.
+		heading, line(1, 200, 0.06), line(1, 254, 0.08), line(1, 308, 0.05),
+	}
+	want := []int{kai, kai, kai, kai, kai, kai, kai, kai, serif, serif, serif, serif}
+	if got, _ := kinds(lines, true); !slices.Equal(got, want) {
+		t.Errorf("kinds %v, want %v", got, want)
+	}
+	if got, _ := kinds(lines, false); slices.Contains(got, kai) {
+		t.Errorf("kinds without a Kai face %v", got)
 	}
 }
 

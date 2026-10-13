@@ -51,9 +51,10 @@ var (
 	recConfig = remote{hf + "PP-OCRv6_small_rec_onnx/resolve/" + recRevision + "/inference.yml",
 		"ab078671bb49f06228eadccd34f1bb501e157f7a047095ffb943ba81512c77d1"}
 
-	// Noto Serif SC and Noto Sans SC, Regular and Bold (SIL Open Font
-	// License 1.1), TrueType builds from Google Fonts, and their licenses,
-	// which go with them, from the google/fonts repository.
+	// Noto Serif SC and Noto Sans SC, Regular and Bold, TrueType builds from
+	// Google Fonts, and LXGW WenKai Regular, a Kai face, from its release
+	// v1.522 (all SIL Open Font License 1.1); and their licenses, which go
+	// with them, from the google/fonts repository and LXGW WenKai's.
 	textFonts = []struct {
 		r    remote
 		name string
@@ -70,6 +71,10 @@ var (
 			"5e0da210fb04058a8c0087985d2d456b931c2579811a49655721d3cf0c36b6d6"}, "NotoSerifSC-OFL.txt"},
 		{remote{"https://raw.githubusercontent.com/google/fonts/a85815a42757630ce188fdad368c2dfc444d4773/ofl/notosanssc/OFL.txt",
 			"1c05c68c34f9708415aada51f17e1b0092d2cea709bf4a94cd38114f9e73d7d9"}, "NotoSansSC-OFL.txt"},
+		{remote{"https://github.com/lxgw/LxgwWenKai/releases/download/v1.522/LXGWWenKai-Regular.ttf",
+			"39ad71264b588165b469e35e6afb162a378dacd1f95348160240ba9038ac3009"}, "LXGWWenKai-Regular.ttf"},
+		{remote{"https://raw.githubusercontent.com/lxgw/LxgwWenKai/e8b5b48b79f19f29aa68b0a178eab3472ea9f7e8/OFL.txt",
+			"c38b1994a5e48ac30ac7d1da7d0409fd8fd8127dfe28a13d6e787d5b1ef34a5e"}, "LXGWWenKai-OFL.txt"},
 	}
 )
 

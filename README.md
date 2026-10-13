@@ -9,7 +9,8 @@ as they are, and the scans are not encoded again.
 It also makes a **text PDF**: each scanned page redrawn with its text set
 in real fonts where it was printed, at the size it was printed, in the
 kind and weight it was printed in (Noto Serif SC or Noto Sans SC, regular
-or bold), on white paper, so that the page reads like one exported from a
+or bold, or LXGW WenKai for Kai, the brush-written face of Chinese prefaces
+and running heads), on white paper, so that the page reads like one exported from a
 word processor. What else the page shows (pictures, rules, logos) is kept
 as images under the text. Text printed on color or over a picture, such as
 a cover's title, stays as printed, since retyping it would deface the
@@ -28,13 +29,13 @@ Everything builds with `CGO_ENABLED=0`, as MyGo requires:
 ## Setup
 
 ```sh
-go run ./cmd/fetchdeps                  # models, fonts and this machine's ONNX Runtime (~120 MB)
+go run ./cmd/fetchdeps                  # models, fonts and this machine's ONNX Runtime (~145 MB)
 go run ./cmd/fetchdeps -platforms all   # every platform, for cross-platform builds
 ```
 
-Every download is pinned (Hugging Face commit, ONNX Runtime release) and
-checked against its SHA-256. The files go into `resources/`, which
-`.gitignore` leaves out:
+Every download is pinned (Hugging Face commit, ONNX Runtime release, font
+release) and checked against its SHA-256. The files go into `resources/`,
+which `.gitignore` leaves out:
 
 ```
 resources/
@@ -43,7 +44,8 @@ resources/
 ├── models/rec_dict.txt        its 18,708 characters, from inference.yml
 ├── fonts/NotoSerifSC-{Regular,Bold}.ttf  the text PDF's serif faces (15 MB each, OFL-1.1)
 ├── fonts/NotoSansSC-{Regular,Bold}.ttf   and its sans-serif ones (11 MB each, OFL-1.1)
-├── fonts/NotoSerifSC-OFL.txt, NotoSansSC-OFL.txt  their licenses
+├── fonts/LXGWWenKai-Regular.ttf          and its Kai face, v1.522 (26 MB, OFL-1.1)
+├── fonts/NotoSerifSC-OFL.txt, NotoSansSC-OFL.txt, LXGWWenKai-OFL.txt  their licenses
 └── darwin-arm64/libonnxruntime.dylib  (or linux-*/libonnxruntime.so, windows-*/onnxruntime.dll)
 ```
 
@@ -132,14 +134,24 @@ For each scanned page, at the resolution it was read at:
    text shows over the regular faces, is taken off first. The kind is
    then that of the face whose upright strokes are as many times thicker
    than its level ones (a serif face's clearly are, a sans-serif face's
-   are about as thick), and a line is bold where its strokes are 15%
+   are about as thick). Kai, whose brush gives its strokes every
+   thickness, lies between the two by that measure, and is told by its
+   edges instead: as its strokes slant and curve, more of them run aslant
+   than the serif face's do, set in the same text, by more than any
+   Song's or Hei's do, whatever the thickening. A paragraph is Kai by the
+   median of its lines; a line alone, as a heading, must slant further,
+   unless the lines of its size on its page are Kai, as a preface's first
+   line is, and a line mostly of Latin, as an English title quoted in
+   Chinese, follows them. FangSong, which slants as Kai does, is set in
+   Kai too. A line is bold where its strokes are 15%
    thicker than those of its kind's lines on its page (or in the
    document, for a kind few of the page's lines are), as headings set in
    medium or bold faces are. Both are voted by paragraph (lines that
    follow each other down a page, as high as each other, in one script):
    a paragraph is set in the kind most of its lines lean to, and regular
    if most of them are, but for a CJK line leaning surely to the other
-   kind, as a heading does, or a line surely heavier.
+   kind, as a heading does, or a line surely heavier. A line too short to
+   judge, as a paragraph's last of one character, takes its paragraph's.
 4. The line is set in its face so that its glyphs' outlines cover its
    ink. Their height gives the font size, which lines within 7% of
    each other on a page share, as a paragraph's do. Glyphs keep their
@@ -155,7 +167,10 @@ For each scanned page, at the resolution it was read at:
    is stretched or squeezed (`Tz`) instead. The spacing goes into the
    characters' advances, with a CID for each character and advance, so
    characters abut and text extraction finds no spaces that were not
-   read. Ink that is about black prints black.
+   read. A line in Kai takes its Latin letters, digits and narrow
+   punctuation from the serif face, as books set them in Times beside
+   Kai, since LXGW WenKai's own are a casual hand. Ink that is about
+   black prints black.
 5. Lines on plain paper are erased. What is left that is not white is cut
    into images: line art (rules, dot leaders) losslessly, the rest as JPEG
    at 200 DPI at most. Specks of dust are dropped.
@@ -190,8 +205,13 @@ CGO_ENABLED=0 go test ./...
   was drawn at 40 pixels an em, and extract from PDFium as they read.
   Lines measure within 1.5% of their size, from 24 to 64 pixels an em.
   Pages of lines in faces of other families (Songti SC, Hiragino Sans GB,
-  Times New Roman, Arial), blurred and noisy as scans are, are set in the
-  text face of their kind and weight. Pages numbered in CID sets of their
+  Times New Roman, Arial, and Kaiti SC where macOS has downloaded it),
+  blurred and noisy as scans are, are set in the text face of their kind
+  and weight. A Kai paragraph's last line of one character, a preface's
+  first line alone and a line mostly of English among Kai ones are Kai
+  too, and a bold Song heading as slanted as Kai's least is not. A line
+  set in Kai takes its Latin and digits from the serif face, and switches
+  fonts where it does. Pages numbered in CID sets of their
   own extract and render pixel for pixel as numbered in one. End to end,
   the turned and offset pages of the scanned PDF become a text PDF whose
   pages keep their size, whose text extracts, whose type covers the
@@ -241,11 +261,13 @@ internal/testscan/       synthetic scans and scanned PDFs for tests
   providers are untried; `onnxruntime_purego` binds neither yet.
 - **Characters outside the BMP** (such as emoji) are written as two UTF-16
   code units, which some viewers extract as two characters.
-- **Text PDF:** a line is set in one face, serif or sans-serif, regular
-  or bold, so a bold phrase within a regular line comes out as its line
+- **Text PDF:** a line is set in one face, serif, sans-serif or Kai,
+  regular or bold, so a bold phrase within a regular line comes out as its line
   is, and italics come out upright. Medium weights come out bold, and
   display faces, such as a title's condensed one, are squeezed into the
-  nearest of the four. A face used only for bold lines in a document, with
+  nearest of the five; FangSong comes out Kai, and bold Kai, which LXGW
+  WenKai has no face for, regular. Calligraphic lettering on covers, as a
+  publisher's name, often comes out Kai. A face used only for bold lines in a document, with
   none of its lines regular, comes out regular, as there is no body text
   of its kind to judge them against. OCR mistakes show, where the searchable PDF hides them under the scan, and characters
   the recognizer misses (such as some dashes) are erased with their line.
@@ -258,8 +280,9 @@ internal/testscan/       synthetic scans and scanned PDFs for tests
 ## Licenses
 
 PP-OCRv6 models: Apache-2.0. ONNX Runtime: MIT. PDFium: Apache-2.0 / BSD.
-Noto Serif SC and Noto Sans SC: SIL Open Font License 1.1, which
-`fonts/NotoSerifSC-OFL.txt` and `fonts/NotoSansSC-OFL.txt` carry into the
-app; subsets of them are embedded in text PDFs, as the license allows.
+Noto Serif SC, Noto Sans SC and LXGW WenKai: SIL Open Font License 1.1,
+which `fonts/NotoSerifSC-OFL.txt`, `fonts/NotoSansSC-OFL.txt` and
+`fonts/LXGWWenKai-OFL.txt` carry into the app; subsets of them are
+embedded in text PDFs, as the license allows.
 go-pdfium, onnxruntime_purego, purego: MIT / Apache-2.0. Check the
 dependencies' own terms before you ship.
