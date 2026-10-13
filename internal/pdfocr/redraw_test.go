@@ -83,8 +83,8 @@ func TestRedraw(t *testing.T) {
 		{X: float64(x0 + adv - 4), Y: base}, {X: x0 + 4, Y: base}}
 	scan := image.NewRGBA(img.Rect)
 	copy(scan.Pix, img.Pix)
-	cut := d.redraw(scan, []ocr.Line{{Box: tight, Text: text}}, w, h)
-	page := d.redraw(img, []ocr.Line{{Box: box, Text: text}}, w, h)
+	cut := d.redraw(scan, []ocr.Line{{Score: 1, Box: tight, Text: text}}, w, h)
+	page := d.redraw(img, []ocr.Line{{Score: 1, Box: box, Text: text}}, w, h)
 	d.setLines()
 
 	if len(page.lines) != 1 {
@@ -165,7 +165,7 @@ func TestRedrawOnColor(t *testing.T) {
 	dr.DrawString("内核")
 
 	box := ocr.Quad{{X: 90, Y: 90}, {X: float64(110 + adv), Y: 90}, {X: float64(110 + adv), Y: 175}, {X: 90, Y: 175}}
-	page := d.redraw(img, []ocr.Line{{Box: box, Text: "内核"}}, 800, 300)
+	page := d.redraw(img, []ocr.Line{{Score: 1, Box: box, Text: "内核"}}, 800, 300)
 	d.setLines()
 	if len(page.lines) != 1 || !page.lines[0].hidden {
 		t.Fatalf("lines %+v: want one, hidden", page.lines)
@@ -249,7 +249,7 @@ func TestRedrawSqueezed(t *testing.T) {
 		dr.Dot.X -= fixed.I(12)
 	}
 	box := ocr.Quad{{X: 90, Y: 60}, {X: float64(inkRight + 10), Y: 60}, {X: float64(inkRight + 10), Y: 150}, {X: 90, Y: 150}}
-	page := d.redraw(img, []ocr.Line{{Box: box, Text: "KERNEL"}}, 800, 200)
+	page := d.redraw(img, []ocr.Line{{Score: 1, Box: box, Text: "KERNEL"}}, 800, 200)
 	d.setLines()
 	if len(page.lines) != 1 {
 		t.Fatalf("%d lines", len(page.lines))
@@ -302,7 +302,7 @@ func TestEdgeMarks(t *testing.T) {
 		dr := font.Drawer{Dst: img, Src: image.Black, Face: face, Dot: fixed.P(200, int(base))}
 		right := float64(212 + dr.MeasureString(text).Ceil())
 		dr.DrawString(text)
-		lines = append(lines, ocr.Line{Text: text, Box: ocr.Quad{{X: 188, Y: base - 48}, {X: right, Y: base - 48},
+		lines = append(lines, ocr.Line{Score: 1, Text: text, Box: ocr.Quad{{X: 188, Y: base - 48}, {X: right, Y: base - 48},
 			{X: right, Y: base + 16}, {X: 188, Y: base + 16}}})
 	}
 	marks := []image.Rectangle{
@@ -578,7 +578,7 @@ func TestLeaders(t *testing.T) {
 	numEnd := dr.Dot.X.Ceil()
 	head := ocr.Quad{{X: 50, Y: 52}, {X: float64(headEnd + 410), Y: 52}, {X: float64(headEnd + 410), Y: 112}, {X: 50, Y: 112}}
 	num := ocr.Quad{{X: 50, Y: 172}, {X: float64(numEnd + 10), Y: 172}, {X: float64(numEnd + 10), Y: 232}, {X: 50, Y: 232}}
-	page := d.redraw(img, []ocr.Line{{Box: head, Text: "前言.."}, {Box: num, Text: "....84"}}, 1000, 300)
+	page := d.redraw(img, []ocr.Line{{Score: 1, Box: head, Text: "前言.."}, {Score: 1, Box: num, Text: "....84"}}, 1000, 300)
 	d.setLines()
 	if len(page.lines) != 2 {
 		t.Fatalf("%d lines", len(page.lines))
@@ -769,7 +769,7 @@ func TestCommaGap(t *testing.T) {
 		if track == 20 && !parted {
 			t.Fatal("the widely tracked line's ink is one stretch: track it wider")
 		}
-		page := d.redraw(img, []ocr.Line{{Box: box, Text: text}}, 2200, 200)
+		page := d.redraw(img, []ocr.Line{{Score: 1, Box: box, Text: text}}, 2200, 200)
 		d.setLines()
 		l := page.lines[0]
 		tf := d.fonts[l.face].ttf
@@ -944,5 +944,250 @@ func TestReadFont(t *testing.T) {
 	if _, _, err := ReadFont("/System/Library/Fonts/Hiragino Sans GB.ttc", -1, false); err == nil ||
 		!strings.Contains(err.Error(), "PostScript (CFF)") {
 		t.Errorf("Hiragino: %v, want PostScript outlines refused", err)
+	}
+}
+
+// TestStrayDots trims lines whose dot leaders the recognizer read into
+// their text, or into their box only: a heading followed by a dot set
+// apart, read as nothing, as a period or as 。, a heading whose 。 read
+// has no ink, and a page number after a dot. They are set over their own
+// ink, without the dots, which are kept as printed. A sentence's period,
+// and a 。 set as Chinese sets it, stay.
+func TestStrayDots(t *testing.T) {
+	d, fonts := testTextDoc(t)
+	sf, err := opentype.Parse(fonts.Serif.Data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	face, err := opentype.NewFace(sf, &opentype.FaceOptions{Size: 40, DPI: 72, Hinting: font.HintingNone})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer face.Close()
+	for _, c := range []struct {
+		drawn, read, want   string
+		dotBefore, dotAfter bool
+	}{
+		{"前言", "前言", "前言", false, true},
+		{"前言", "前言.", "前言", false, true},
+		{"前言", "前言。", "前言", false, true},
+		{"前言", "前言。", "前言", false, false},
+		{"17", ".17", "17", true, false},
+		{"Hello.", "Hello.", "Hello.", false, false},
+		{"内核。", "内核。", "内核。", false, false},
+	} {
+		img := image.NewRGBA(image.Rect(0, 0, 600, 150))
+		draw.Draw(img, img.Rect, image.White, image.Point{}, draw.Src)
+		dot := func(x int) { draw.Draw(img, image.Rect(x, 95, x+5, 100), image.Black, image.Point{}, draw.Src) }
+		x := 60
+		if c.dotBefore {
+			dot(x)
+			x += 5 + 12
+		}
+		// The text's own ink, drawn alone.
+		own := image.NewRGBA(img.Rect)
+		draw.Draw(own, own.Rect, image.White, image.Point{}, draw.Src)
+		(&font.Drawer{Dst: own, Src: image.Black, Face: face, Dot: fixed.P(x, 100)}).DrawString(c.drawn)
+		textInk := inkBounds(own, own.Rect)
+		dr := font.Drawer{Dst: img, Src: image.Black, Face: face, Dot: fixed.P(x, 100)}
+		dr.DrawString(c.drawn)
+		end := dr.Dot.X.Ceil()
+		if c.dotAfter {
+			dot(textInk.Max.X + 12)
+		}
+		box := ocr.Quad{{X: 50, Y: 52}, {X: float64(end + 30), Y: 52}, {X: float64(end + 30), Y: 112}, {X: 50, Y: 112}}
+		f := lineFrame(box)
+		p := newPixels(img)
+		p.whiten()
+		in := p.measure(f, d.shape(c.read, serif).aspect())
+		text, got, keep := trimLeaders(c.read, in)
+		if text != c.want {
+			t.Errorf("%q read %q: set as %q, want %q", c.drawn, c.read, text, c.want)
+		}
+		kept := func(x int) bool {
+			for _, k := range keep {
+				if s := float64(x) + 2.5 - 50; s >= k[0] && s <= k[1] {
+					return true
+				}
+			}
+			return false
+		}
+		switch {
+		case c.dotAfter:
+			if e := got.s1 + 50; math.Abs(e-float64(textInk.Max.X)) > 2 || !kept(textInk.Max.X+12) {
+				t.Errorf("%q read %q: set to %.1f, its ink ending at %d; dot kept %v", c.drawn, c.read, e, textInk.Max.X, kept(textInk.Max.X+12))
+			}
+		case c.dotBefore:
+			if s := got.s0 + 50; math.Abs(s-float64(textInk.Min.X)) > 2 || !kept(60) {
+				t.Errorf("%q read %q: set from %.1f, its ink starting at %d; dot kept %v", c.drawn, c.read, s, textInk.Min.X, kept(60))
+			}
+		case got.s0 != in.s0 || got.s1 != in.s1 || keep != nil:
+			t.Errorf("%q read %q: ink cut to %.1f–%.1f from %.1f–%.1f", c.drawn, c.read, got.s0, got.s1, in.s0, in.s1)
+		}
+	}
+}
+
+// TestAsPrinted redraws lines whose type would not match their ink: a
+// letter in a box, a line the recognizer was unsure of, and a word read as
+// more than its ink holds, as a picture's handwriting may be. They stay as
+// printed, under invisible text.
+func TestAsPrinted(t *testing.T) {
+	d, fonts := testTextDoc(t)
+	sf, err := opentype.Parse(fonts.Serif.Data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	face, err := opentype.NewFace(sf, &opentype.FaceOptions{Size: 40, DPI: 72, Hinting: font.HintingNone})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer face.Close()
+	for _, c := range []struct {
+		name, drawn, read string
+		score             float32
+		framed            bool
+	}{
+		{"a boxed letter", "R", "R", 1, true},
+		{"an unsure line", "KERNEL", "KERNEL", 0.6, false},
+		{"handwriting", "KERNEL", "KERNEL CODE BASE", 1, false},
+	} {
+		img := image.NewRGBA(image.Rect(0, 0, 400, 150))
+		draw.Draw(img, img.Rect, image.White, image.Point{}, draw.Src)
+		(&font.Drawer{Dst: img, Src: image.Black, Face: face, Dot: fixed.P(60, 100)}).DrawString(c.drawn)
+		ink := inkBounds(img, img.Rect)
+		r := ink.Inset(-4)
+		if c.framed {
+			r = ink.Inset(-12)
+			for _, side := range []image.Rectangle{{r.Min, image.Pt(r.Max.X, r.Min.Y+3)}, {image.Pt(r.Min.X, r.Max.Y-3), r.Max},
+				{r.Min, image.Pt(r.Min.X+3, r.Max.Y)}, {image.Pt(r.Max.X-3, r.Min.Y), r.Max}} {
+				draw.Draw(img, side, image.Black, image.Point{}, draw.Src)
+			}
+			r = r.Inset(-4)
+		}
+		box := ocr.Quad{{X: float64(r.Min.X), Y: float64(r.Min.Y)}, {X: float64(r.Max.X), Y: float64(r.Min.Y)},
+			{X: float64(r.Max.X), Y: float64(r.Max.Y)}, {X: float64(r.Min.X), Y: float64(r.Max.Y)}}
+		page := d.redraw(img, []ocr.Line{{Score: c.score, Box: box, Text: c.read}}, 400, 150)
+		d.setLines()
+		if len(page.lines) != 1 || !page.lines[0].hidden {
+			t.Errorf("%s: lines %+v, want one, hidden", c.name, page.lines)
+		}
+		// The ink is kept, as an image.
+		cx, cy := float64(ink.Min.X+ink.Max.X)/2, 150-float64(ink.Min.Y+ink.Max.Y)/2
+		if !slices.ContainsFunc(page.images, func(im pageImage) bool {
+			return cx >= im.x && cx <= im.x+im.w && cy >= im.y && cy <= im.y+im.h
+		}) {
+			t.Errorf("%s: the ink is not kept: %d images", c.name, len(page.images))
+		}
+	}
+}
+
+// TestKindsShort sets lines too few or too short to tell their kind by, as
+// the document's lines of their script mostly are: in a sans-serif
+// document, a heading leaning a little to serif, as bold sans-serif faces
+// do, a page number and a line whose ink was not found are sans-serif. In
+// a serif document, a heading leaning a little to sans-serif keeps its
+// kind, and the page number is serif.
+func TestKindsShort(t *testing.T) {
+	line := func(top, height, lean float64, letters int) lineGeom {
+		return lineGeom{ok: true, judged: letters >= 2, top: top, bottom: top + height, height: height,
+			letters: letters, lean: lean}
+	}
+	doc := func(body, heading float64) []lineGeom {
+		lines := []lineGeom{line(200, 50, heading, 9)}
+		for k := range 5 {
+			lines = append(lines, line(1000+54*float64(k), 34, body, 20))
+		}
+		return append(lines, line(3000, 34, 0, 0), lineGeom{})
+	}
+	for _, c := range []struct {
+		name          string
+		body, heading float64
+		want          []int
+	}{
+		{"sans-serif", -0.15, 0.08, []int{sans, sans, sans, sans, sans, sans, sans, sans}},
+		{"serif", 0.3, -0.08, []int{sans, serif, serif, serif, serif, serif, serif, serif}},
+	} {
+		if got, _ := kinds(doc(c.body, c.heading), false); !slices.Equal(got, c.want) {
+			t.Errorf("%s document: kinds %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+// TestTextColor sets ink about black in black, but keeps the gray of a
+// page printed black, as of a contents page's section numbers; on a page
+// printed lighter, or with no ink without color to tell its black by,
+// gray as dark is set black.
+func TestTextColor(t *testing.T) {
+	gray, blue := rgb{121, 129, 124}, rgb{0, 117, 195}
+	for _, c := range []struct {
+		fg    rgb
+		black int
+		want  rgb
+	}{
+		{rgb{8, 9, 8}, 8, rgb{}},
+		{gray, 0, gray},
+		{gray, 8, gray},
+		{gray, 60, rgb{}},
+		{gray, 255, rgb{}},
+		{rgb{90, 92, 90}, 60, rgb{}},
+		{blue, 8, blue},
+		{rgb{230, 230, 230}, 8, white},
+	} {
+		if got := textColor(c.fg, white, true, c.black); got != c.want {
+			t.Errorf("ink %v on a page whose black is %d: set in %v, want %v", c.fg, c.black, got, c.want)
+		}
+	}
+}
+
+// TestEnDashes sets a page range read with a hyphen, 28-29, with the en
+// dash it was printed with, which fits its ink, but leaves a hyphen
+// printed as one, as a telephone number's.
+func TestEnDashes(t *testing.T) {
+	d, fonts := testTextDoc(t)
+	sf, err := opentype.Parse(fonts.Serif.Data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	face, err := opentype.NewFace(sf, &opentype.FaceOptions{Size: 40, DPI: 72, Hinting: font.HintingNone})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer face.Close()
+	for _, c := range []struct{ drawn, read, want string }{
+		{"28–29", "28-29", "28–29"},
+		{"555-1234", "555-1234", "555-1234"},
+	} {
+		img := image.NewRGBA(image.Rect(0, 0, 400, 150))
+		draw.Draw(img, img.Rect, image.White, image.Point{}, draw.Src)
+		dr := font.Drawer{Dst: img, Src: image.Black, Face: face, Dot: fixed.P(60, 100)}
+		dr.DrawString(c.drawn)
+		end := float64(dr.Dot.X.Ceil() + 10)
+		box := ocr.Quad{{X: 50, Y: 52}, {X: end, Y: 52}, {X: end, Y: 112}, {X: 50, Y: 112}}
+		f := lineFrame(box)
+		p := newPixels(img)
+		p.whiten()
+		in := p.measure(f, d.shape(c.read, serif).aspect())
+		if got := d.enDashes(c.read, f, in); got != c.want {
+			t.Errorf("%q read %q: set as %q, want %q", c.drawn, c.read, got, c.want)
+		}
+	}
+}
+
+// TestSplitWords parts a line's stretches of ink at the space its text has
+// between them, not within the word before, however the word's outlines
+// span: a section's number, 1.11, printed in narrower digits than the
+// font's, before its title.
+func TestSplitWords(t *testing.T) {
+	d, _ := testTextDoc(t)
+	sh := d.shape("1.11 Numbers", sans)
+	em, size := float64(d.fonts[sans].ttf.UnitsPerEm), 40.0
+	span := func(i, j int) float64 {
+		left, right, _ := sh.inkSpan(i, j)
+		return float64(right-left) / em * size
+	}
+	number, title := 0.75*span(0, 4), span(5, len(sh.glyphs))
+	segs := [][2]float64{{0, number}, {number + 60, number + 60 + title}}
+	if starts := sh.split(segs, size, em); starts[1] != 4 && starts[1] != 5 {
+		t.Errorf("the title's stretch starts at glyph %d, %q: want the space, 4, or after it", starts[1], sh.glyphs[starts[1]].r)
 	}
 }

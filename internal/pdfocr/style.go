@@ -263,10 +263,11 @@ func (d *textDoc) refs(text string, f frame, in ink) lineRefs {
 // regular face, and so is one whose lines are mostly heavier than it, as
 // where only headings are set in it.
 //
-// Lines whose ink was not found are set in the serif face, and those with
-// fewer than two letters or characters to judge by, as a paragraph's last
-// line of one character, in their paragraph's kind, regular: where it has
-// no other, as a page number alone, in the serif face.
+// Lines with fewer than two letters or characters to judge by, as a
+// paragraph's last line of one character, are set regular, in their
+// paragraph's kind: where it has no other, as a page number alone, in the
+// kind most of the document's lines of their script are (see kinds), as
+// are lines whose ink was not found.
 // Lines gives each line's lineRefs, which styles completes with Kai's for
 // the lines it judges Kai, and pages its page, or is nil for one page.
 func (d *textDoc) styles(texts []string, frames []frame, inks []ink, lines []lineRefs, pages []int) []int {
@@ -299,12 +300,13 @@ func (d *textDoc) styles(texts []string, frames []frame, inks []ink, lines []lin
 	geoms := make([]lineGeom, len(texts))
 	for i, l := range lines {
 		f, in := frames[i], inks[i]
+		geoms[i].cjk = d.shape(texts[i], serif).cjk()
 		if !in.found {
 			continue
 		}
 		top, bottom := f.point(in.s0, in.t1), f.point(in.s0, in.t0)
 		geoms[i] = lineGeom{ok: true, judged: l.ok, top: top.Y, bottom: bottom.Y, height: in.t1 - in.t0,
-			cjk: d.shape(texts[i], serif).cjk(), han: strings.ContainsFunc(texts[i], isHan), letters: letters(texts[i])}
+			cjk: geoms[i].cjk, han: strings.ContainsFunc(texts[i], isHan), letters: letters(texts[i])}
 		if pages != nil {
 			geoms[i].page = pages[i]
 		}
@@ -469,9 +471,15 @@ const brushy, brushyAlone = 0.09, 0.12
 // Latin, small and blurred, leans to sans-serif more than its face does.
 // The paragraph's kind is where its lines lean, by their median, of those
 // with a few letters to judge by; a CJK line leaning the other way surely,
-// as a heading in the paragraph's size does, keeps its own. Lines it
-// cannot judge take their paragraph's kind. It returns the paragraphs
-// too, as lists of lines.
+// as a heading in the paragraph's size does, keeps its own. A paragraph of
+// a line or two, as a heading or a label, leaning to serif less than
+// surely, is sans-serif where most of the document's lines of its script
+// lean to it: a sans-serif face's bold has more contrast than its regular,
+// and leans a little to serif. A paragraph it cannot judge at all is of
+// the kind most of the document's lines of its script lean to. Lines it
+// cannot judge take their paragraph's kind, and lines it knows nothing of,
+// whose ink was not found, the document's. It returns the paragraphs too,
+// as lists of lines.
 func kinds(lines []lineGeom, withKai bool) ([]int, [][]int) {
 	order := make([]int, 0, len(lines))
 	for i, l := range lines {
@@ -541,7 +549,33 @@ each:
 		}
 		return len(around) >= 2 && median(around) >= brushy
 	}
+	// The kind most of the document's lines of a script lean to, by their
+	// median, of those with a few letters to judge by, or of all its lines
+	// where fewer than five are of the script; serif where none are.
+	byScript := map[bool][]float64{}
+	var all []float64
+	for _, i := range order {
+		if l := lines[i]; l.judged && l.letters >= 4 {
+			byScript[l.cjk] = append(byScript[l.cjk], l.lean)
+			all = append(all, l.lean)
+		}
+	}
+	prevail := map[bool]int{}
+	for _, cjk := range []bool{false, true} {
+		v := byScript[cjk]
+		if len(v) < 5 {
+			v = all
+		}
+		if len(v) > 0 && median(slices.Clone(v)) < 0 {
+			prevail[cjk] = sans
+		}
+	}
 	out := make([]int, len(lines))
+	for i, l := range lines {
+		if !l.ok {
+			out[i] = prevail[l.cjk]
+		}
+	}
 	for _, para := range paras {
 		var leans, brushes []float64
 		for _, i := range para {
@@ -557,7 +591,10 @@ each:
 			}
 		}
 		if len(leans) == 0 {
-			continue // nothing to judge it by: serif
+			for _, i := range para {
+				out[i] = prevail[lines[i].cjk] // nothing to judge it by
+			}
+			continue
 		}
 		if isKai(para, brushes) {
 			for _, i := range para {
@@ -566,8 +603,9 @@ each:
 			continue
 		}
 		slices.Sort(leans)
+		lean := leans[len(leans)/2]
 		kind := serif
-		if leans[len(leans)/2] < 0 {
+		if lean < 0 || len(leans) < 3 && lean < sure && prevail[lines[para[0]].cjk] == sans {
 			kind = sans
 		}
 		for _, i := range para {

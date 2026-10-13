@@ -297,8 +297,12 @@ type measuredLine struct {
 	frame frame
 	ink   ink
 	keep  [][2]float64 // ink along it to keep as printed, as dot leaders
-	refs  lineRefs     // what styles judges it against
-	face  int          // the face it was printed in, once styles has judged it
+	// printed is whether the line stays as printed, under invisible text:
+	// it is on color, its ink is framed, or squeezed, or the recognizer
+	// was unsure of it (see redrawPage).
+	printed bool
+	refs    lineRefs // what styles judges it against, unless printed
+	face    int      // the face it was printed in, once styles has judged it
 }
 
 // pageImage is an image drawn at x, y, w points by h.

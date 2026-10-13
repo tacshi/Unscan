@@ -62,7 +62,13 @@ For each scanned page, at the resolution it was read at:
    the height that the recognized text's glyphs give for its width. Dot
    leaders that a contents page's headings end with, or its page numbers
    start with, are kept as printed: the recognizer reads a few of the dots,
-   which set in the heading's face would come out its size and weight.
+   a dot at times as 。, which set in the heading's face would come out its
+   size and weight, and takes others into a line's box without reading
+   them. Dots at the end of a line's ink, set apart from the rest by a
+   quarter of its height, are the leaders', or by a tenth after a Chinese
+   character or before a digit, which a sentence's period does not follow
+   or precede; and dots read that have no ink of their own, too faint
+   beside the line's, are dropped.
 3. Once every page is measured, each line's face is judged from its
    strokes, against each face's glyphs drawn at the line's size.
    Printing and scanning thicken every stroke by about as much, which
@@ -87,7 +93,13 @@ For each scanned page, at the resolution it was read at:
    a paragraph is set in the kind most of its lines lean to, and regular
    if most of them are, but for a CJK line leaning surely to the other
    kind, as a heading does, or a line surely heavier. A line too short to
-   judge, as a paragraph's last of one character, takes its paragraph's.
+   judge, as a paragraph's last of one character, takes its paragraph's,
+   and a paragraph of such lines, as a page number alone, the kind most
+   of the document's lines of its script lean to. So does a heading or a
+   label, a paragraph of a line or two, that leans to serif less than
+   surely, where most of the document's lines are sans-serif: a
+   sans-serif face's bold has more contrast than its regular, and leans a
+   little to serif.
 4. The line is set in its face so that its glyphs' outlines cover its
    ink. Their height gives the font size, which lines within 7% of
    each other on a page share, as a paragraph's do. Glyphs keep their
@@ -97,17 +109,26 @@ For each scanned page, at the resolution it was read at:
    ink is high, by a quarter, part the ink, as a label from what it
    labels, the characters are matched to each stretch by how far their
    outlines span, parting where the text itself leaves a gap, as after a
-   comma, and set on it,
-   and ink no character is matched to, such as a bullet, is kept as
-   printed. A line that has nowhere to space, or is wider than its ink,
-   is stretched or squeezed (`Tz`) instead. The spacing goes into the
+   comma, but not within a word where the text has a space close by, and
+   set on it, and ink no character is matched to, such as a bullet, is
+   kept as printed. A line that has nowhere to space, or is wider than its
+   ink, is stretched or squeezed (`Tz`) instead; a hyphen read between its
+   digits, as a page range's, is set as an en dash where that fits the
+   ink better. The spacing goes into the
    characters' advances, with a CID for each character and advance, so
    characters abut and text extraction finds no spaces that were not
    read. A line in Kai takes its Latin letters, digits and narrow
    punctuation from the serif face, as books set them in Times beside
    Kai, since LXGW WenKai's own are a casual hand. Ink that is about
-   black prints black.
-5. Lines on plain paper are erased. What is left that is not white is cut
+   black prints black, but for gray on a page printed black, as a contents
+   page's section numbers are, which stays gray.
+5. Lines on plain paper are erased, but for those that type would not
+   match, which stay as printed under invisible text, as text on color
+   does: a line whose ink is framed, as a letter in a box is; one whose
+   glyphs, at the size its ink gives them, would have to be squeezed to
+   less than four fifths of their width, as handwriting or lettering in a
+   picture would; and one the recognizer read with less than 85%
+   confidence. What is left that is not white is cut
    into images: line art (rules, dot leaders) losslessly, the rest as JPEG
    at 200 DPI at most. Specks of dust are dropped, and so are the marks
    the scan's edges leave, the shadow of the paper's edge or the
@@ -140,8 +161,17 @@ CGO_ENABLED=0 go test ./...
 - `internal/pdfocr` (text PDF): a line set in the font on yellowed paper
   comes back at its size and place, in a loose box or a tight one, with
   the picture beside it kept and the dust dropped; white text on a red
-  band stays as printed under invisible text; a word set tighter than the
-  font is squeezed to end where its ink does. The marks of a scan's
+  band stays as printed under invisible text, and so do a letter in a
+  box, a line read with little confidence and a word read as more than
+  its ink holds; a word set tighter than the font is squeezed to end
+  where its ink does. A contents page's heading followed by a dot set
+  apart, read as nothing, as a period or as 。, a heading whose 。 read
+  has no ink and a page number after a dot are set over their own ink,
+  without the dots, which are kept, while a sentence's period and a 。
+  set as Chinese sets it stay; a page range read with a hyphen takes the
+  en dash it was printed with, and a telephone number keeps its hyphen;
+  a section's number in narrow digits is set apart from its title at the
+  space between them. The marks of a scan's
   edges (a broken line down one, a speck on another, a shadow along a
   third) are dropped, while a rule over the text, a folio the recognizer
   missed and a picture printed to the edge are kept. A line tracked as
@@ -154,7 +184,12 @@ CGO_ENABLED=0 go test ./...
   blurred and noisy as scans are, are set in the text face of their kind
   and weight. A Kai paragraph's last line of one character, a preface's
   first line alone and a line mostly of English among Kai ones are Kai
-  too, and a bold Song heading as slanted as Kai's least is not. A line
+  too, and a bold Song heading as slanted as Kai's least is not. In a
+  sans-serif document, a heading leaning a little to serif, a page number
+  and a line whose ink was not found are sans-serif; in a serif one, a
+  heading leaning a little to sans-serif stays so. Gray ink keeps its
+  gray on a page printed black, and is set black on one printed lighter.
+  A line
   set in Kai takes its Latin and digits from the serif face, and switches
   fonts where it does. Pages numbered in CID sets of their
   own extract and render pixel for pixel as numbered in one. End to end,

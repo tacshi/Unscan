@@ -390,7 +390,7 @@ func TestTrackedText(t *testing.T) {
 	right := dr.Dot.X.Round()
 	box := ocr.Quad{{X: x0 - 10, Y: base - 46}, {X: float64(right + 10), Y: base - 46},
 		{X: float64(right + 10), Y: base + 14}, {X: x0 - 10, Y: base + 14}}
-	page := d.redraw(img, []ocr.Line{{Box: box, Text: text}}, w, h)
+	page := d.redraw(img, []ocr.Line{{Score: 1, Box: box, Text: text}}, w, h)
 	d.setLines()
 	if len(page.lines) != 1 || page.lines[0].scale != 1 {
 		t.Fatalf("lines %+v: want one, unstretched", page.lines)
@@ -465,7 +465,7 @@ func TestCIDSets(t *testing.T) {
 				dr.Dot.X += fixed.I(3 + 2*p) // tracked, a little more on each page
 			}
 			right := float64(dr.Dot.X.Round())
-			lines = append(lines, ocr.Line{Text: text, Box: ocr.Quad{{X: x0 - 10, Y: float64(base - 46)},
+			lines = append(lines, ocr.Line{Score: 1, Text: text, Box: ocr.Quad{{X: x0 - 10, Y: float64(base - 46)},
 				{X: right + 10, Y: float64(base - 46)}, {X: right + 10, Y: float64(base + 14)}, {X: x0 - 10, Y: float64(base + 14)}}})
 		}
 		scans = append(scans, scan{img, lines})
@@ -545,7 +545,7 @@ func TestAlignedLabel(t *testing.T) {
 	right := dr.Dot.X.Round()
 	box := ocr.Quad{{X: x0 - 80, Y: base - 46}, {X: float64(right + 10), Y: base - 46},
 		{X: float64(right + 10), Y: base + 14}, {X: x0 - 80, Y: base + 14}}
-	page := d.redraw(img, []ocr.Line{{Box: box, Text: text}}, w, h)
+	page := d.redraw(img, []ocr.Line{{Score: 1, Box: box, Text: text}}, w, h)
 	d.setLines()
 	if len(page.lines) != 1 || len(page.images) != 1 {
 		t.Fatalf("%d lines and %d images: want the line, and the bullet as an image", len(page.lines), len(page.images))
@@ -815,7 +815,7 @@ func TestUserFonts(t *testing.T) {
 	box := ocr.Quad{{X: x0 - 10, Y: base - 46}, {X: float64(right + 10), Y: base - 46},
 		{X: float64(right + 10), Y: base + 14}, {X: x0 - 10, Y: base + 14}}
 	scan := inkBounds(img, img.Rect)
-	page := d.redraw(img, []ocr.Line{{Box: box, Text: text}}, w, h)
+	page := d.redraw(img, []ocr.Line{{Score: 1, Box: box, Text: text}}, w, h)
 	d.setLines()
 	if len(page.lines) != 1 || page.lines[0].face != serif {
 		t.Fatalf("lines %+v: want one, in the serif face", page.lines)

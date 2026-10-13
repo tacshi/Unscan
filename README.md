@@ -35,7 +35,8 @@ prefaces and running heads, or in [fonts of your own](#your-own-fonts).
 Pictures, rules and logos are kept as images under the text. Text printed
 on color or over a picture, such as a cover's title, stays as printed,
 since retyping it would deface the design, with invisible text over it
-that keeps it searchable.
+that keeps it searchable; and so does text that type would not match,
+such as handwriting in an illustration or a letter in a box.
 
 ## Features
 
