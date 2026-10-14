@@ -229,6 +229,104 @@ type ink struct {
 	rules [][4]float64
 }
 
+// foreignInk says which of a line's samples of ink, ns×nt from its
+// frame's origin less m each way, as measureRules takes them, inked as
+// ink says, are other lines' rather than its own: the ink of a line
+// close by, which runs into its box, as a title's character's box holds
+// the ends of the lines beside it, or past it, where the line's ink is
+// looked for, as under a character set close above another. A pixel is
+// the line's whose box it lies deepest in, its own where it lies in
+// none; and a piece of ink, its pixels joined, is the line's that most of
+// it is, as a descender dipping into the line below is its own line's,
+// but for a piece of which no more than a fifth and less than half is
+// the line's, as of two characters run together, which is shared out as
+// its pixels are. Others are the boxes of the page's other lines.
+func foreignInk(f frame, others []frame, m, ns, nt int, ink func(k int) bool) []bool {
+	foreign := make([]bool, ns*nt)
+	// The others whose boxes reach where the samples lie.
+	lo, hi := f.point(float64(-m), float64(-m)), f.point(float64(-m), float64(-m))
+	for _, c := range [][2]float64{{float64(ns - m), float64(-m)}, {float64(-m), float64(nt - m)}, {float64(ns - m), float64(nt - m)}} {
+		pt := f.point(c[0], c[1])
+		lo.X, lo.Y, hi.X, hi.Y = min(lo.X, pt.X), min(lo.Y, pt.Y), max(hi.X, pt.X), max(hi.Y, pt.Y)
+	}
+	var near []frame
+	for _, o := range others {
+		x0, y0, x1, y1 := math.Inf(1), math.Inf(1), math.Inf(-1), math.Inf(-1)
+		for _, c := range [][2]float64{{0, 0}, {o.length, 0}, {0, o.height}, {o.length, o.height}} {
+			pt := o.point(c[0], c[1])
+			x0, y0, x1, y1 = min(x0, pt.X), min(y0, pt.Y), max(x1, pt.X), max(y1, pt.Y)
+		}
+		if x0 < hi.X && x1 > lo.X && y0 < hi.Y && y1 > lo.Y {
+			near = append(near, o)
+		}
+	}
+	if len(near) == 0 {
+		return foreign
+	}
+	// How deep inside a box a point lies, less than 0 outside it.
+	depth := func(g frame, pt ocr.Point) float64 {
+		dx, dy := pt.X-g.o.X, pt.Y-g.o.Y
+		s, t := dx*g.u.X+dy*g.u.Y, dx*g.v.X+dy*g.v.Y
+		return min(s, g.length-s, t, g.height-t)
+	}
+	theirs := func(k int) bool {
+		pt := f.point(float64(k%ns-m)+0.5, float64(k/ns-m)+0.5)
+		own := max(depth(f, pt), 0)
+		for _, o := range near {
+			if depth(o, pt) > own {
+				return true
+			}
+		}
+		return false
+	}
+	// The pieces of ink, eight ways joined.
+	seen := make([]bool, ns*nt)
+	var piece, queue []int
+	for start := range ns * nt {
+		if seen[start] || !ink(start) {
+			continue
+		}
+		piece, queue = piece[:0], append(queue[:0], start)
+		seen[start] = true
+		for len(queue) > 0 {
+			k := queue[len(queue)-1]
+			queue = queue[:len(queue)-1]
+			piece = append(piece, k)
+			x, y := k%ns, k/ns
+			for dy := -1; dy <= 1; dy++ {
+				for dx := -1; dx <= 1; dx++ {
+					nx, ny := x+dx, y+dy
+					if nx < 0 || ny < 0 || nx >= ns || ny >= nt {
+						continue
+					}
+					if n := ny*ns + nx; !seen[n] && ink(n) {
+						seen[n] = true
+						queue = append(queue, n)
+					}
+				}
+			}
+		}
+		mine := 0
+		for _, k := range piece {
+			if !theirs(k) {
+				mine++
+			}
+		}
+		switch share := float64(mine) / float64(len(piece)); {
+		case share >= 0.5:
+		case share <= 0.2:
+			for _, k := range piece {
+				foreign[k] = true
+			}
+		default:
+			for _, k := range piece {
+				foreign[k] = theirs(k)
+			}
+		}
+	}
+	return foreign
+}
+
 // none is the top of a column without ink (see ink.tops).
 var none = float32(math.Inf(-1))
 
@@ -238,7 +336,7 @@ var none = float32(math.Inf(-1))
 // too; ink beyond a gap, as of the next line, does not. Aspect is the
 // height of the text's glyphs over their width, or 0 if unknown. Rules
 // along the line are told apart from its text's ink (see measureRules).
-func (p *pixels) measure(f frame, aspect float64) ink { return p.measureRules(f, aspect, true) }
+func (p *pixels) measure(f frame, aspect float64) ink { return p.measureRules(f, aspect, true, nil) }
 
 // measureRules measures a line's ink as measure does, telling rules along
 // it apart from its text's ink, if rules, as an underline, a strike
@@ -247,8 +345,9 @@ func (p *pixels) measure(f frame, aspect float64) ink { return p.measureRules(f,
 // the box is high, longer than any glyph's stroke. They are to be kept as
 // printed (see ink.rules), and the text's ink lies above an underline and
 // below a rule over it. A line whose text reads rules, as underscores or
-// dashes, is measured without telling them.
-func (p *pixels) measureRules(f frame, aspect float64, rules bool) ink {
+// dashes, is measured without telling them. The ink of others, the boxes
+// of the page's other lines, is not the line's (see foreignInk).
+func (p *pixels) measureRules(f frame, aspect float64, rules bool, others []frame) ink {
 	in := ink{bg: white, fg: rgb{}}
 	nl, nh := int(math.Ceil(f.length)), int(math.Ceil(f.height))
 	if nl < 2 || nh < 2 {
@@ -291,6 +390,14 @@ func (p *pixels) measureRules(f frame, aspect float64, rules bool) ink {
 	}
 	in.fg = fg
 	thr := max(32, diff(in.fg, in.bg)/2)
+	if len(others) > 0 {
+		faint := max(24, thr/2)
+		for k, theirs := range foreignInk(f, others, m, ns, nt, func(k int) bool { return diff(samples[k], in.bg) > faint }) {
+			if theirs {
+				samples[k] = in.bg
+			}
+		}
+	}
 	inked := func(i, j int) bool { return diff(samples[j*ns+i], in.bg) > thr }
 	// The tips of strokes, such as a comma's tail, cover little of their
 	// pixels: at the ink's edges, a quarter of the contrast counts.
@@ -1670,12 +1777,21 @@ func (d *textDoc) redrawPage(img image.Image, lines []ocr.Line, width, height fl
 		frames[i] = lineFrame(l.Box)
 	}
 	for i, l := range lines {
+		// The other lines' boxes, whose ink is theirs, but for those the
+		// recognizer was unsure of, as of a picture's scribbles, whose
+		// boxes may cover anything.
+		var others []frame
+		for k, o := range frames {
+			if k != i && lines[k].Score >= minScore {
+				others = append(others, o)
+			}
+		}
 		todo := []linePart{{l.Text, frames[i]}}
 		for len(todo) > 0 {
 			text, f := todo[0].text, todo[0].frame
 			todo = todo[1:]
 			rules := !strings.ContainsAny(text, "_‾—―─━－﹏")
-			in := p.measureRules(f, ref.shape(text, serif).aspect(), rules)
+			in := p.measureRules(f, ref.shape(text, serif).aspect(), rules, others)
 			if parts := ref.apart(p, text, f, in, frames); parts != nil {
 				todo = append(parts, todo...)
 				continue

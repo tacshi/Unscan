@@ -152,7 +152,15 @@ For each scanned page, at the resolution it was read at:
    that differ from it by half the ink's contrast are the ink, its edges
    read to a fraction of a pixel from how dark their pixels are. Where a
    box holds the edges of other lines too, the ink kept is what matches
-   the height that the recognized text's glyphs give for its width. Dot
+   the height that the recognized text's glyphs give for its width. Ink
+   is the line's it mostly lies in: each piece of it, its pixels joined,
+   is measured with the line in whose box most of it lies deepest, as a
+   descender dipping into the line below is its own line's, and the end
+   of a line that runs into a large character's box, as a cover's title
+   sets them beside it, is not the character's; a piece mostly another
+   line's, but a fifth or more this one's, as of two characters run
+   together, is shared out by its pixels. Boxes the recognizer was unsure
+   of claim no ink. Dot
    leaders that a contents page's headings end with, or its page numbers
    start with, are kept as printed: the recognizer reads a few of the dots,
    a dot at times as 。, which set in the heading's face would come out its
@@ -487,7 +495,10 @@ CGO_ENABLED=0 go test ./...
   the recognizer read nothing of, which runs into the box, kept as
   printed, and an author's name and the 著 under it, smaller, as columns
   of their own at their sizes; a line printed sideways is set along its
-  box, lying as it was printed. Dot
+  box, lying as it was printed. A cover's title characters, large, each
+  a line of its own, the first's box taking in the end of the line beside
+  it and overlapping the next's, are each measured within 3 pixels of
+  its own ink and set at its size. Dot
   leaders at 300 DPI, too far apart to join, are kept, while
   a speck of dust and three specks in a row are not. A line printed on a
   panel of a pale tint, scanned clean, stays as printed on it, and the

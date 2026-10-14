@@ -1900,6 +1900,66 @@ func TestApart(t *testing.T) {
 	}
 }
 
+// TestNeighborInk redraws a cover's title characters, each a line of its
+// own, set large and close: 思, whose box takes in the end of the line
+// beside it, and 维 under it, whose box its box overlaps. Each is measured
+// to its own ink, not the line's or the other's, and set at its size.
+func TestNeighborInk(t *testing.T) {
+	d, fonts := testTextDoc(t)
+	faceOf := func(data []byte, size float64) font.Face {
+		sf, err := opentype.Parse(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		face, err := opentype.NewFace(sf, &opentype.FaceOptions{Size: size, DPI: 72, Hinting: font.HintingNone})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return face
+	}
+	small, big := faceOf(fonts.Sans.Data, 40), faceOf(fonts.SansBold.Data, 200)
+	defer closeOrFail(t, small)
+	defer closeOrFail(t, big)
+	img := image.NewRGBA(image.Rect(0, 0, 1000, 800))
+	draw.Draw(img, img.Rect, image.White, image.Point{}, draw.Src)
+	// The line, its end in the first character's box.
+	dr := font.Drawer{Dst: img, Src: image.Black, Face: small, Dot: fixed.P(60, 200)}
+	dr.DrawString("重要先说&形式标记")
+	end := dr.Dot.X.Ceil()
+	lines := []ocr.Line{{Score: 1, Text: "重要先说&形式标记",
+		Box: ocr.Quad{{X: 52, Y: 152}, {X: float64(end + 8), Y: 152}, {X: float64(end + 8), Y: 214}, {X: 52, Y: 214}}}}
+	// The characters, one under the other, each in a box a little larger
+	// than its em, overlapping the next's.
+	var inks []image.Rectangle
+	x := end - 6
+	for k, c := range []string{"思", "维"} {
+		top := 60 + 205*k
+		b, _ := font.BoundString(big, c)
+		base := top + 176
+		inks = append(inks, image.Rect(x+b.Min.X.Floor(), base+b.Min.Y.Floor(), x+b.Max.X.Ceil(), base+b.Max.Y.Ceil()))
+		dr := font.Drawer{Dst: img, Src: image.Black, Face: big, Dot: fixed.P(x, base)}
+		dr.DrawString(c)
+		lines = append(lines, ocr.Line{Score: 1, Text: c, Box: ocr.Quad{{X: float64(x - 4), Y: float64(top - 10)},
+			{X: float64(x + 204), Y: float64(top - 10)}, {X: float64(x + 204), Y: float64(top + 240)}, {X: float64(x - 4), Y: float64(top + 240)}}})
+	}
+	page := d.redraw(img, lines, 1000, 800)
+	for k, want := range inks {
+		m := page.measured[k+1]
+		q := lines[k+1].Box
+		got := image.Rect(int(math.Round(q[3].X+m.ink.s0)), int(math.Round(q[3].Y-m.ink.t1)),
+			int(math.Round(q[3].X+m.ink.s1)), int(math.Round(q[3].Y-m.ink.t0)))
+		if d := max(absInt(got.Min.X-want.Min.X), absInt(got.Min.Y-want.Min.Y), absInt(got.Max.X-want.Max.X), absInt(got.Max.Y-want.Max.Y)); d > 3 {
+			t.Errorf("%q measured over %v, drawn over %v", lines[k+1].Text, got, want)
+		}
+	}
+	d.setLines()
+	for k, l := range page.lines[1:] {
+		if math.Abs(l.size-200) > 12 {
+			t.Errorf("%q set at %.0f px, want 200", lines[k+1].Text, l.size)
+		}
+	}
+}
+
 // TestUnderline redraws a line with a word underlined, the rule running
 // into its letters' feet, and one with the rule apart from them: both are
 // set at their size, and their rules kept as printed.
