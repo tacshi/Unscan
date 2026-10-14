@@ -80,7 +80,9 @@ the right, as **Compare with Original** shows them:
   app's only connection is its daily check for updates, which Settings
   turns off.
 - **Leaves digital pages alone.** Pages that already have text, such as
-  born-digital ones, are kept as they are, in both PDFs.
+  born-digital ones, are kept as they are, in both PDFs. A scan read by
+  OCR before, whose text is an invisible layer over its pages, is read
+  again for the retyped PDF, while the searchable PDF keeps its layer.
 - **Reads columns in order.** A layout model finds each page's blocks,
   its columns, headings, captions and page numbers, and the order they
   read in, so the text of a page of two columns reads down one, then

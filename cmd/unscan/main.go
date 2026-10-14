@@ -93,15 +93,18 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	lines, skipped := 0, 0
+	lines, skipped, layered := 0, 0, 0
 	for _, p := range pages {
 		lines += p.Lines
 		if p.Skipped {
 			skipped++
 		}
+		if p.Layered {
+			layered++
+		}
 	}
-	log.Printf("%d pages (%d had text already), %d lines in %.1fs → %s",
-		len(pages), skipped, lines, time.Since(start).Seconds(), *out)
+	log.Printf("%d pages (%d had text already, %d a scan's text layer, read again for the text PDF), %d lines in %.1fs → %s",
+		len(pages), skipped, layered, lines, time.Since(start).Seconds(), *out)
 	if *txt != "" {
 		if err := os.WriteFile(*txt, []byte(pdfocr.Text(pages)), 0o644); err != nil { // #nosec G306 -- the user's document
 			log.Fatal(err)

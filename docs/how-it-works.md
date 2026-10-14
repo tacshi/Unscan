@@ -12,6 +12,14 @@ command line (`-text`), and so it is here.
 
 ## How a page is read
 
+A page with text of its own, 20 characters or more, as a born-digital
+page has, is left as it is. But a page whose text is all invisible,
+drawn in render mode 3, or only to clip (mode 7), in its forms too, is a
+scan that OCR has read before, as the Internet Archive's books are, and
+Unscan's own searchable PDFs: when a retyped PDF is asked for, it is
+read again and redrawn, while the searchable PDF keeps its layer and
+adds none.
+
 `ocr.Engine.Read` takes a page rendered at 300 DPI through four models:
 
 1. **Orientation.** PP-LCNet_x1_0_doc_ori sees the page as PaddleX shows
@@ -431,7 +439,10 @@ CGO_ENABLED=0 go test ./...
   the turned and offset pages of the scanned PDF become a text PDF whose
   pages keep their size, whose text extracts, whose type covers the
   scan's ink within half a millimeter at each edge, whose picture is
-  kept, and whose paper is white; pages with text are kept as they were.
+  kept, and whose paper is white. Converted again, the searchable PDF's
+  pages, scans under invisible text, are read again and redrawn, while
+  the searchable PDF made of it keeps their layer alone, not doubled; and
+  the text PDF's pages, whose text is drawn, are kept as they were.
   Lines set in a font of the user's, Times of 2048 units an em from a
   collection, take the Chinese characters it lacks from the text font, as
   Kai's do from the text fonts' Kai face, are measured in the text fonts,
@@ -443,8 +454,8 @@ CGO_ENABLED=0 go test ./...
   180° and 270°, one with an offset MediaBox) is converted, then checked.
   The test confirms that PDFium extracts the text, that the text lies
   over the lines it was read from, that pages render pixel for pixel as
-  before, that the file grows by kilobytes only, and that a second run
-  skips every page. A page turned by its `/Rotate` previews upright, as
+  before, that the file grows by kilobytes only, and that a second run,
+  for a searchable PDF alone, skips every page. A page turned by its `/Rotate` previews upright, as
   large as asked. Pages fed into the scanner sideways and upside down,
   one turned by its `/Rotate` too, are found turned, read upright, shown
   upright in the searchable PDF, which reads upright again, and redrawn

@@ -458,17 +458,40 @@ func TestConvertText(t *testing.T) {
 		}
 	}
 
-	// Pages with text are kept as they are.
+	// The searchable PDF's pages, scans under invisible text, are read
+	// again for a text PDF, which redraws them, while the searchable PDF
+	// keeps their layer, alone; the text PDF's pages, whose text is drawn,
+	// are kept as they are.
 	closeOrFail(t, inst)
 	again := convert(t, c, res.PDF, true, nil)
+	retyped := convert(t, c, res.TextPDF, true, nil)
 	if inst, err = c.pool.GetInstance(time.Minute); err != nil {
 		t.Fatal(err)
 	}
-	kept := openDoc(t, inst, again.TextPDF)
+	first, searchable := openDoc(t, inst, res.PDF), openDoc(t, inst, again.PDF)
+	redrawn, kept := openDoc(t, inst, again.TextPDF), openDoc(t, inst, retyped.TextPDF)
+	at := func(doc references.FPDF_DOCUMENT, i int) requests.Page {
+		return requests.Page{ByIndex: &requests.PageByIndex{Document: doc, Index: i}}
+	}
+	textOf := func(doc references.FPDF_DOCUMENT, i int) string {
+		text, err := inst.GetPageText(&requests.GetPageText{Page: at(doc, i)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return text.Text
+	}
 	for i, p := range pages {
-		text, err := inst.GetPageText(&requests.GetPageText{Page: requests.Page{ByIndex: &requests.PageByIndex{Document: kept, Index: i}}})
-		if err != nil || !again.Pages[i].Skipped || !containsAll(text.Text, p.lines) {
-			t.Errorf("kept page %d: text %q (%v), skipped %v", i+1, text.Text, err, again.Pages[i].Skipped)
+		if a := again.Pages[i]; a.Skipped || !a.Layered || !containsAll(a.Text, p.lines) {
+			t.Errorf("searchable page %d: skipped %v, layered %v, read %q: want it read again", i+1, a.Skipped, a.Layered, a.Text)
+		}
+		if got, want := textOf(searchable, i), textOf(first, i); got != want {
+			t.Errorf("searchable page %d extracts %q, was %q: want its layer alone", i+1, got, want)
+		}
+		if !drawsText(inst, at(redrawn, i)) || !containsAll(textOf(redrawn, i), p.lines) {
+			t.Errorf("searchable page %d is not redrawn: text %q", i+1, textOf(redrawn, i))
+		}
+		if !retyped.Pages[i].Skipped || !containsAll(textOf(kept, i), p.lines) {
+			t.Errorf("text PDF's page %d: text %q, skipped %v: want it kept", i+1, textOf(kept, i), retyped.Pages[i].Skipped)
 		}
 	}
 }
