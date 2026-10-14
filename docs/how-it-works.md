@@ -181,7 +181,22 @@ For each scanned page, at the resolution it was read at:
    of its box's height with a run of ink a fifth longer than the box is
    high, longer than a glyph's stroke. They are kept as printed, and the
    text's ink lies above an underline that runs into its letters' feet,
-   so that an underlined word is not set too large. A label set apart
+   so that an underlined word is not set too large. An underline drawn by
+   hand, as a reader's pen draws it, slanting and wavy, is no level band:
+   it is followed column by column as the lowest ink, thin, an eighth of
+   the box high at most, each column's within two rows of the last's,
+   unbroken but where it runs into a glyph's foot, one and a half times
+   as long as the box is high or longer, thin along seven tenths of it,
+   and running more rows up or down than it is thick, as a printed rule
+   does not. It is kept as printed too, and taken out of the text's ink
+   below the text's foot, the row the deepest twentieth of its columns
+   reach, with a row of its blur each way, and so is the ink it runs on
+   into there, along it or down, as where its ends hook away. Where it
+   runs among the glyphs' feet, whose ink it cannot be told from, it is
+   left to the text's ink, but taken for no printed rule, which would cut
+   the glyphs' feet off above it, and it does not lengthen the text's ink
+   along the line, which would spread a short line's characters out to
+   the stroke's end. A label set apart
    from what it labels in a smaller face is read as one line with it, and
    set at one size would come out the larger's size: as "Chapter 14",
    hanging in the margin before a contents page's chapter title, and
@@ -541,7 +556,13 @@ CGO_ENABLED=0 go test ./...
   and in an upright line only a long word leaning far is; the Chinese
   between two italic words is not slanted with them. A word
   underlined, the rule running into its letters or apart from them, is
-  set at its size, and the rule kept. A cover's columns, read in tall
+  set at its size, and the rule kept; a line of Chinese a reader
+  underlined by hand, the stroke slanting down 14 pixels along it and
+  wavy, starting among the characters' feet, is measured within the faint
+  tail of its comma of the same line without it, set at its size, and
+  the stroke kept; one whose stroke rises into the characters' feet at
+  the line's end and runs on past it is measured as high as the line
+  without it, and no further along. A cover's columns, read in tall
   boxes, are set upright, one character under the other, each within 5
   pixels of where it was drawn: an arrow among them in its vertical form,
   pointing down, and copying out as the arrow read, an exclamation mark

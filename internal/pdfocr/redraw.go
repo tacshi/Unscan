@@ -363,6 +363,109 @@ func foreignInk(f frame, others []frame, m, ns, nt int, ink func(k int) bool) []
 	return foreign
 }
 
+// penCol is a column of a stroke drawn by hand (see handRules): column i
+// of a line's samples, its rows lo to hi.
+type penCol struct{ i, lo, hi int }
+
+// handRules finds the underlines drawn by hand under a line's text, in its
+// samples, ns a row, m of them past the box each way, nl along it and nh up
+// it, inked as inked says: strokes no thicker than an eighth of the box's
+// height, the lowest ink of the columns they run along in the box's lower
+// half or below it, each column's no more than two rows from the last's,
+// so that they curve and slant as a pen's do, unbroken, but where they run
+// into a glyph's foot, whose ink covers where they go on. A stroke is one
+// at least one and a half times as long as the box is high, thin along
+// seven tenths of it, and not level: running more rows up or down than it
+// is thick, as the rules a printer sets, level, are told elsewhere (see
+// measureRules), and a line of glyphs' feet, level, is parted by the gaps
+// between them. It returns each stroke's columns, the rows of each that
+// are the stroke's, or where it runs into a glyph, where it goes on.
+func handRules(ns, m, nl, nh int, inked func(i, j int) bool) [][]penCol {
+	thin := max(2, nh/8)
+	// The lowest run of ink in each column, starting in the box's lower
+	// half or below it.
+	type run struct {
+		lo, hi int
+		ok     bool
+	}
+	low := make([]run, ns)
+	for i := m; i < m+nl; i++ {
+		for j := 0; j < m+nh/2; j++ {
+			if inked(i, j) {
+				k := j
+				for k+1 < 2*m+nh && inked(i, k+1) {
+					k++
+				}
+				low[i] = run{j, k, true}
+				break
+			}
+		}
+	}
+	var strokes [][]penCol
+	for i := m; i < m+nl; {
+		if r := low[i]; !r.ok || r.hi-r.lo+1 > thin {
+			i++
+			continue
+		}
+		// Follow the stroke from column i, its middle row and thickness as
+		// the last thin column has them.
+		mid := float64(low[i].lo+low[i].hi) / 2
+		half := float64(low[i].hi-low[i].lo) / 2
+		var cols []penCol
+		thinCols, last := 0, i
+		lowest, highest := mid, mid
+		k := i
+		for ; k < m+nl; k++ {
+			r := low[k]
+			if !r.ok {
+				break
+			}
+			if r.hi-r.lo+1 <= thin {
+				c := float64(r.lo+r.hi) / 2
+				if math.Abs(c-mid) > 2 {
+					break
+				}
+				mid, half = c, float64(r.hi-r.lo)/2
+				lowest, highest = min(lowest, mid), max(highest, mid)
+				cols = append(cols, penCol{k, r.lo, r.hi})
+				thinCols, last = thinCols+1, k
+				continue
+			}
+			// A glyph's foot the stroke runs into: its ink must cover where
+			// the stroke goes on.
+			if float64(r.lo) > mid+1 || float64(r.hi) < mid-1 {
+				break
+			}
+			cols = append(cols, penCol{k, max(r.lo, int(math.Floor(mid-half))), int(math.Ceil(mid + half))})
+		}
+		for len(cols) > 0 && cols[len(cols)-1].i > last {
+			cols = cols[:len(cols)-1]
+		}
+		if span := last - i + 1; float64(span) >= 1.5*float64(nh) && 10*thinCols >= 7*span && highest-lowest > float64(thin) {
+			strokes = append(strokes, cols)
+		}
+		i = max(k, i+1)
+	}
+	return strokes
+}
+
+// ruleRects is where a stroke of a line's samples, m past the box each
+// way, lies, as rules are (see ink.rules): along it a sixteen columns at a
+// time, from the lowest row of theirs to the highest, with a row each way
+// for the blur round its edges, in the frame's pixels.
+func ruleRects(stroke []penCol, m int) [][4]float64 {
+	var rects [][4]float64
+	for k := 0; k < len(stroke); k += 16 {
+		part := stroke[k:min(k+16, len(stroke))]
+		lo, hi := part[0].lo, part[0].hi
+		for _, c := range part {
+			lo, hi = min(lo, c.lo), max(hi, c.hi)
+		}
+		rects = append(rects, [4]float64{float64(part[0].i - m), float64(part[len(part)-1].i - m + 1), float64(lo - 1 - m), float64(hi + 2 - m)})
+	}
+	return rects
+}
+
 // none is the top of a column without ink (see ink.tops).
 var none = float32(math.Inf(-1))
 
@@ -380,7 +483,8 @@ func (p *pixels) measure(f frame, aspect float64) ink { return p.measureRules(f,
 // eighth of the box's height, holding a run of ink a fifth longer than
 // the box is high, longer than any glyph's stroke. They are to be kept as
 // printed (see ink.rules), and the text's ink lies above an underline and
-// below a rule over it. A line whose text reads rules, as underscores or
+// below a rule over it. Underlines drawn by hand are told too (see
+// handRules). A line whose text reads rules, as underscores or
 // dashes, is measured without telling them. The ink of others, the boxes
 // of the page's other lines, is not the line's (see foreignInk).
 func (p *pixels) measureRules(f frame, aspect float64, rules bool, others []frame) ink {
@@ -438,6 +542,99 @@ func (p *pixels) measureRules(f frame, aspect float64, rules bool, others []fram
 	// The tips of strokes, such as a comma's tail, cover little of their
 	// pixels: at the ink's edges, a quarter of the contrast counts.
 	faint := func(i, j int) bool { return diff(samples[j*ns+i], in.bg) > max(24, thr/2) }
+	// Underlines drawn by hand under the text, as a reader's pen draws
+	// them, slanting and wavy, which the level bands of rows told as rules
+	// below do not take: kept as printed too, and left out of the text's
+	// ink, which they would stretch down to them.
+	var pen []bool // the strokes' pixels the text's ink is left with
+	if rules {
+		strokes := handRules(ns, m, nl, nh, inked)
+		// The text's foot: the row the deepest of its columns reach, a
+		// twentieth of them, above a stroke under them; the stroke is taken
+		// out below it only, where it would stretch the text's ink down,
+		// not where it runs among the glyphs' feet, or starts on one, as on
+		// a character's last stroke, level, whose ink it cannot be told from.
+		above := make([]int, ns) // where each column's text may start
+		for _, stroke := range strokes {
+			for _, c := range stroke {
+				above[c.i] = c.hi + 2
+			}
+		}
+		var feet []int
+		for i := m; i < m+nl && len(strokes) > 0; i++ {
+			for j := above[i]; j < m+nh/2; j++ {
+				if inked(i, j) {
+					feet = append(feet, j)
+					break
+				}
+			}
+		}
+		slices.Sort(feet)
+		foot := m
+		if len(feet) > 0 {
+			foot = feet[len(feet)/20]
+		}
+		if len(strokes) > 0 {
+			pen = make([]bool, ns*nt)
+		}
+		lo, hi := make([]int, ns), make([]int, ns) // each column's rows of a stroke
+		for _, stroke := range strokes {
+			for i := range ns {
+				lo[i], hi[i] = nt, -1
+			}
+			var queue []int
+			// With a row each way, its edges' blur, faint, which the text's
+			// ink would else be taken to reach down to. Above the foot, it
+			// is left as the text's, but no rule's (see long below), which
+			// would cut the glyphs' feet off where it runs among them, and
+			// it does not stretch the text along (see extent below).
+			for _, c := range stroke {
+				lo[c.i], hi[c.i] = c.lo, c.hi
+				for j := max(0, c.lo-1); j <= min(nt-1, c.hi+1); j++ {
+					pen[j*ns+c.i] = true
+					if j < foot {
+						samples[j*ns+c.i] = in.bg
+						if j >= c.lo && j <= c.hi {
+							queue = append(queue, j*ns+c.i)
+						}
+					}
+				}
+			}
+			// And below the foot, the ink it runs on into, along it or down,
+			// as where its ends hook away more steeply than it was followed,
+			// or it comes out of a glyph's foot lower than it went in; up,
+			// only the blur round it, not the ink of a glyph's foot it
+			// touches, which would lead along the glyphs' feet.
+			for len(queue) > 0 {
+				k := queue[0]
+				queue = queue[1:]
+				for j := max(0, k/ns-1); j <= min(foot-1, k/ns+1); j++ {
+					for i := max(0, k%ns-1); i <= min(ns-1, k%ns+1); i++ {
+						switch {
+						case !faint(i, j):
+						case j <= k/ns:
+							if inked(i, j) {
+								lo[i], hi[i] = min(lo[i], j), max(hi[i], j)
+							}
+							samples[j*ns+i] = in.bg
+							queue = append(queue, j*ns+i)
+						case !inked(i, j):
+							samples[j*ns+i] = in.bg
+						}
+					}
+				}
+			}
+			var reach []penCol
+			for i := range ns {
+				if lo[i] <= hi[i] {
+					reach = append(reach, penCol{i, lo[i], hi[i]})
+				}
+			}
+			in.rules = append(in.rules, ruleRects(reach, m)...)
+		}
+	}
+	// Ink that is the text's, not a stroke's drawn by hand.
+	text := func(i, j int) bool { return inked(i, j) && (pen == nil || !pen[j*ns+i]) }
 
 	// Up the line: the runs of inked rows in the box. The line's ink is the
 	// run nearest the box's middle, joined to the runs beside it while that
@@ -478,7 +675,7 @@ func (p *pixels) measureRules(f frame, aspect float64, rules bool, others []fram
 		clear(cols)
 		for j := lo; j <= hi; j++ {
 			for i := range ns {
-				if inked(i, j) {
+				if text(i, j) {
 					cols[i]++
 				}
 			}
@@ -554,13 +751,13 @@ func (p *pixels) measureRules(f frame, aspect float64, rules bool, others []fram
 
 	if rules {
 		// The runs of ink along row j a rule's would be, from their first
-		// column to past their last.
+		// column to past their last, a stroke drawn by hand's left out.
 		long := func(j int) [][2]int {
 			var runs [][2]int
 			start := -1
 			for i := m; i <= m+nl; i++ {
 				switch {
-				case i < m+nl && inked(i, j):
+				case i < m+nl && text(i, j):
 					if start < 0 {
 						start = i
 					}

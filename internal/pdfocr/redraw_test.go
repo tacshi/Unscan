@@ -2399,6 +2399,122 @@ func TestDrawn(t *testing.T) {
 	}
 }
 
+// TestPenUnderline redraws a line of Chinese a reader underlined by hand,
+// the pen's stroke slanting down along it and wavy, running into the
+// characters' feet where it starts: the line is set at its size, as its
+// text's ink gives it, not stretched down to the stroke, and the stroke is
+// kept as printed; and a line with no stroke under it is set as before.
+func TestPenUnderline(t *testing.T) {
+	d, fonts := testTextDoc(t)
+	sf, err := opentype.Parse(fonts.Serif.Data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	face, err := opentype.NewFace(sf, &opentype.FaceOptions{Size: 40, DPI: 72, Hinting: font.HintingNone})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeOrFail(t, face)
+	img := image.NewRGBA(image.Rect(0, 0, 1400, 500))
+	draw.Draw(img, img.Rect, image.White, image.Point{}, draw.Src)
+	text := "线性地址通常用十六进制数字表示，值的范围从零到四个字节的最大值"
+	var lines []ocr.Line
+	var strokeAt []image.Point
+	for k, base := range []int{150, 350} {
+		dr := font.Drawer{Dst: img, Src: image.Black, Face: face, Dot: fixed.P(60, base)}
+		dr.DrawString(text)
+		end := dr.Dot.X.Ceil()
+		if k == 0 {
+			// From the characters' feet down 14 pixels along the line, a
+			// pixel and a half up and down as it goes, 3 thick.
+			for x := 200; x < end-40; x++ {
+				f := float64(x-200) / float64(end-240)
+				y := float64(base) + 2 + 14*f + 1.5*math.Sin(f*14)
+				for dy := 0.0; dy < 3; dy++ {
+					img.Set(x, int(y+dy), color.Black)
+				}
+				if x%97 == 0 {
+					strokeAt = append(strokeAt, image.Point{X: x, Y: int(y + 1)})
+				}
+			}
+		}
+		box := ocr.Quad{{X: 52, Y: float64(base - 44)}, {X: float64(end + 8), Y: float64(base - 44)},
+			{X: float64(end + 8), Y: float64(base + 12)}, {X: 52, Y: float64(base + 12)}}
+		lines = append(lines, ocr.Line{Score: 1, Box: box, Text: text})
+	}
+	page := d.redraw(img, lines, 1400, 500)
+	under, plain := page.measured[0].ink, page.measured[1].ink
+	// Within the faint tail of its comma, which the stroke passes under:
+	// stretched down to the stroke, it would measure 13 pixels more.
+	if math.Abs((under.t1-under.t0)-(plain.t1-plain.t0)) > 2.5 {
+		t.Errorf("underlined, the ink measured %.1f high, %.1f without the stroke", under.t1-under.t0, plain.t1-plain.t0)
+	}
+	d.setLines()
+	if len(page.lines) != 2 || math.Abs(page.lines[0].size-page.lines[1].size) > 0.5 {
+		t.Fatalf("lines %+v: want two, set alike", page.lines)
+	}
+	for _, at := range strokeAt {
+		if !keeps(page, float64(at.X), 500-float64(at.Y)) {
+			t.Errorf("the stroke at %v not kept as printed", at)
+		}
+	}
+}
+
+// TestPenUnderlineRising redraws a line of Chinese a reader underlined by
+// hand, the stroke rising from under the characters into their feet at
+// the line's end and running on past it, as far as the box the recognizer
+// drew round both, and the line without it: measured as high, and no
+// further along, as the stroke among the feet is not the text's ink along
+// the line, which would spread its characters out to the stroke's end.
+func TestPenUnderlineRising(t *testing.T) {
+	d, fonts := testTextDoc(t)
+	sf, err := opentype.Parse(fonts.Serif.Data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	face, err := opentype.NewFace(sf, &opentype.FaceOptions{Size: 40, DPI: 72, Hinting: font.HintingNone})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeOrFail(t, face)
+	img := image.NewRGBA(image.Rect(0, 0, 1500, 500))
+	draw.Draw(img, img.Rect, image.White, image.Point{}, draw.Src)
+	text := "线性地址通常用十六进制数字表示，值的范围从零到四个字节的最大值"
+	var lines []ocr.Line
+	for k, base := range []int{150, 350} {
+		dr := font.Drawer{Dst: img, Src: image.Black, Face: face, Dot: fixed.P(60, base)}
+		dr.DrawString(text)
+		end := dr.Dot.X.Ceil()
+		if k == 0 {
+			// 10 pixels under the characters' feet, 3 thick, up into them
+			// along the last fifth of the line, and on past its end.
+			for x := 100; x < end+80; x++ {
+				f := max(0, float64(x-100)/float64(end-100)-0.8) / 0.2
+				y := float64(base) + 10 - 11*min(1, f) + math.Sin(float64(x)/30)
+				for dy := 0.0; dy < 3; dy++ {
+					img.Set(x, int(y+dy), color.Black)
+				}
+			}
+			end += 80
+		}
+		box := ocr.Quad{{X: 52, Y: float64(base - 44)}, {X: float64(end + 8), Y: float64(base - 44)},
+			{X: float64(end + 8), Y: float64(base + 12)}, {X: 52, Y: float64(base + 12)}}
+		lines = append(lines, ocr.Line{Score: 1, Box: box, Text: text})
+	}
+	page := d.redraw(img, lines, 1500, 500)
+	under, plain := page.measured[0].ink, page.measured[1].ink
+	if math.Abs((under.t1-under.t0)-(plain.t1-plain.t0)) > 2.5 {
+		t.Errorf("underlined, the ink measured %.1f high, %.1f without the stroke", under.t1-under.t0, plain.t1-plain.t0)
+	}
+	if math.Abs(under.s1-plain.s1) > 3 {
+		t.Errorf("underlined, the ink measured to %.1f along, %.1f without the stroke", under.s1, plain.s1)
+	}
+	d.setLines()
+	if len(page.lines) != 2 || math.Abs(page.lines[0].size-page.lines[1].size) > 0.5 {
+		t.Fatalf("lines %+v: want two, set alike", page.lines)
+	}
+}
+
 // TestUnderline redraws a line with a word underlined, the rule running
 // into its letters' feet, and one with the rule apart from them: both are
 // set at their size, and their rules kept as printed.
