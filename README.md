@@ -49,11 +49,13 @@ bold, or Noto Serif TC and Noto Sans TC for a document in traditional
 Chinese, whose punctuation they center as it is printed, or in LXGW
 WenKai for Kai (楷体), the brush-written face of Chinese prefaces and
 running heads, or in [fonts of your own](#your-own-fonts).
-Pictures, rules and logos are kept as images under the text. Text printed
-on color or over a picture, such as a cover's title, stays as printed,
-since retyping it would deface the design, with invisible text over it
-that keeps it searchable; and so does text that type would not match,
-such as handwriting in an illustration or a letter in a box.
+Line art, such as a figure's boxes, arrows and rules, is traced into
+outlines that stay as sharp as the type at any zoom; photos and shading
+are kept as images under the text. Text printed on color or over a
+picture, such as a cover's title, stays as printed, since retyping it
+would deface the design, with invisible text over it that keeps it
+searchable; and so does text that type would not match, such as
+handwriting in an illustration or a letter in a box.
 
 Each pair below is a scanned page, on the left, and its retyped PDF, on
 the right, as **Compare with Original** shows them:
@@ -373,10 +375,12 @@ about 6 GB, mostly the models, or 3.5 GB on the CPU.
 To retype a page, Unscan maps the paper's color to white, measures each
 line's ink to a fraction of a pixel, judges its face from its strokes
 (voted by paragraph), and sets it so that its glyphs' outlines cover the
-ink, spaced out as books are set. What is left that is not white
-(pictures, rules, dot leaders) is kept as images; dust and the marks the
-scan's edges leave are dropped. Each face is subset to the glyphs used,
-and a `ToUnicode` map makes the text copy out as it was read.
+ink, spaced out as books are set. What is left that is not white is
+traced into outlines where it is line art of one color (rules, boxes,
+arrows, dot leaders), or kept as images (photos, shading); dust and the
+marks the scan's edges leave are dropped. Each face is subset to the
+glyphs used, and a `ToUnicode` map makes the text copy out as it was
+read.
 
 [docs/how-it-works.md](docs/how-it-works.md) has the details, step by
 step.
@@ -443,6 +447,10 @@ docs/                    how it works, in depth, the app icon's source (icon.svg
   - A face used only for bold lines in a document, with none of its lines
     regular, comes out regular, as there is no body text of its kind to
     judge them against.
+  - Line art is traced as it was scanned: sharper, but no straighter,
+    so a box whose edges the scan left uneven keeps them so; and shading
+    that a black-and-white scan broke into specks, with whatever was
+    printed on it, stays as the scan has it.
   - OCR mistakes show, where the searchable PDF hides them under the
     scan, and characters the recognizer misses (such as some dashes) are
     erased with their line.

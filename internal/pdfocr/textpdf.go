@@ -331,6 +331,7 @@ type code struct {
 type textPage struct {
 	width, height float64
 	images        []pageImage
+	paths         []pagePath // line art traced, drawn over the images
 	lines         []textLine
 	// What redraw measured, in the rendered page's pixels, which are sx by
 	// sy points, until setLines sets it as lines.
@@ -602,12 +603,23 @@ func (d *textDoc) writeFont(w *pdfWriter, s *cidSet, fi int, cids []int, toUnico
 	return font
 }
 
-// content draws the page's pictures, then its lines over them, each
-// stretch of a line in the face its characters are numbered in, in s.
+// content draws the page's pictures and its line art, then its lines over
+// them, each stretch of a line in the face its characters are numbered in,
+// in s.
 func (p *textPage) content(s *cidSet) []byte {
 	var b bytes.Buffer
 	for i, img := range p.images {
 		fmt.Fprintf(&b, "q %s 0 0 %s %s %s cm /Im%d Do Q\n", num(img.w), num(img.h), num(img.x), num(img.y), i)
+	}
+	if len(p.paths) > 0 {
+		// Line art is drawn in the rendered page's pixels, y down.
+		fmt.Fprintf(&b, "q %s 0 0 %s 0 %s cm\n", num(p.sx), num(-p.sy), num(p.height))
+		for _, a := range p.paths {
+			fmt.Fprintf(&b, "%s rg\n", rg(a.color))
+			b.Write(a.ops)
+			b.WriteString("f\n")
+		}
+		b.WriteString("Q\n")
 	}
 	for _, l := range p.lines {
 		if len(l.cids) == 0 {

@@ -170,28 +170,17 @@ func TestRedrawOnColor(t *testing.T) {
 	if len(page.lines) != 1 || !page.lines[0].hidden {
 		t.Fatalf("lines %+v: want one, hidden", page.lines)
 	}
-	if len(page.images) != 1 || page.images[0].gray {
-		t.Fatalf("%d images: want the band, in color", len(page.images))
+	// The band, of one flat color, is traced in it, its letters holes in it.
+	if len(page.images) != 0 || len(page.paths) != 1 {
+		t.Fatalf("%d images and %d traced: want the band traced", len(page.images), len(page.paths))
 	}
-	im := page.images[0]
-	if math.Abs(im.y-float64(300-band.Max.Y)) > 3 || math.Abs(im.h-float64(band.Dy())) > 6 {
-		t.Errorf("image at y %.0f, %.0f high: want the band", im.y, im.h)
+	a := page.paths[0]
+	if diff(a.color, rgb{red.R, red.G, red.B}) > 8 || a.bounds != band {
+		t.Errorf("traced in %v over %v: want the band's red over %v", a.color, a.bounds, band)
 	}
-	if im.filter != "FlateDecode" {
-		t.Errorf("the flat band is %s, want it lossless", im.filter)
-	}
-	dec := decodeImage(t, im)
-	// The letters are still in it, white on red.
-	whites := 0
-	for y := range dec.Bounds().Dy() {
-		for x := range dec.Bounds().Dx() {
-			if r, g, _, _ := dec.At(x, y).RGBA(); r>>8 > 220 && g>>8 > 220 {
-				whites++
-			}
-		}
-	}
-	if whites < 500 {
-		t.Errorf("%d white pixels in the band: its letters are gone", whites)
+	// An outline round the band, and one round each of the letters' strokes.
+	if loops := bytes.Count(a.ops, []byte("h\n")); loops < 4 {
+		t.Errorf("%d outlines: the letters are gone", loops)
 	}
 }
 
@@ -222,6 +211,29 @@ func decodeImage(t *testing.T, im pageImage) image.Image {
 		img.Pix[4*i+3] = 255
 	}
 	return img
+}
+
+// keptRects is where a redrawn page keeps what is left of its scan, as
+// images or traced, in the scan's pixels, y down.
+func keptRects(page *textPage) []image.Rectangle {
+	var rects []image.Rectangle
+	for _, im := range page.images {
+		x0, y0 := int(math.Round(im.x/page.sx)), int(math.Round((page.height-im.y-im.h)/page.sy))
+		rects = append(rects, image.Rect(x0, y0, x0+int(math.Round(im.w/page.sx)), y0+int(math.Round(im.h/page.sy))))
+	}
+	for _, a := range page.paths {
+		rects = append(rects, a.bounds)
+	}
+	return rects
+}
+
+// keeps reports whether a redrawn page keeps what lay at x, y of its scan,
+// in points from its bottom left, as an image or traced.
+func keeps(page *textPage, x, y float64) bool {
+	return slices.ContainsFunc(keptRects(page), func(r image.Rectangle) bool {
+		return x >= float64(r.Min.X)*page.sx && x <= float64(r.Max.X)*page.sx &&
+			y >= page.height-float64(r.Max.Y)*page.sy && y <= page.height-float64(r.Min.Y)*page.sy
+	})
 }
 
 // TestRedrawSqueezed redraws a word set tighter than the font sets it, as
@@ -321,20 +333,15 @@ func TestEdgeMarks(t *testing.T) {
 	}
 
 	page := d.redraw(img, lines, w*72.0/dpi, h*72.0/dpi)
-	// The images where they lie on the scan, in pixels, y down.
-	var got []image.Rectangle
-	for _, im := range page.images {
-		x0, y0 := int(math.Round(im.x/page.sx)), h-int(math.Round((im.y+im.h)/page.sy))
-		got = append(got, image.Rect(x0, y0, x0+int(math.Round(im.w/page.sx)), y0+int(math.Round(im.h/page.sy))))
-	}
+	got := keptRects(page)
 	for _, r := range kept {
 		if !slices.ContainsFunc(got, r.In) {
-			t.Errorf("%v is gone: images %v", r, got)
+			t.Errorf("%v is gone: kept %v", r, got)
 		}
 	}
 	for _, r := range marks {
 		if slices.ContainsFunc(got, r.Overlaps) {
-			t.Errorf("the edge's mark %v is kept: images %v", r, got)
+			t.Errorf("the edge's mark %v is kept: kept %v", r, got)
 		}
 	}
 }
@@ -605,17 +612,9 @@ func TestLeaders(t *testing.T) {
 	if n := page.lines[1]; n.x < 400 {
 		t.Errorf("the page number starts at %.1f, before its ink at 410", n.x)
 	}
-	// Both runs of leaders are kept, as images.
-	covered := func(x, y float64) bool {
-		for _, im := range page.images {
-			if x >= im.x && x <= im.x+im.w && 300-y >= im.y && 300-y <= im.y+im.h {
-				return true
-			}
-		}
-		return false
-	}
-	if !covered(float64(headEnd+200), 98) || !covered(200, 218) {
-		t.Errorf("the leaders are not kept: images %d", len(page.images))
+	// Both runs of leaders are kept.
+	if !keeps(page, float64(headEnd+200), 300-98) || !keeps(page, 200, 300-218) {
+		t.Errorf("the leaders are not kept: %d images, %d traced", len(page.images), len(page.paths))
 	}
 }
 
@@ -1073,12 +1072,9 @@ func TestAsPrinted(t *testing.T) {
 		if len(page.lines) != 1 || !page.lines[0].hidden {
 			t.Errorf("%s: lines %+v, want one, hidden", c.name, page.lines)
 		}
-		// The ink is kept, as an image.
-		cx, cy := float64(ink.Min.X+ink.Max.X)/2, 150-float64(ink.Min.Y+ink.Max.Y)/2
-		if !slices.ContainsFunc(page.images, func(im pageImage) bool {
-			return cx >= im.x && cx <= im.x+im.w && cy >= im.y && cy <= im.y+im.h
-		}) {
-			t.Errorf("%s: the ink is not kept: %d images", c.name, len(page.images))
+		// The ink is kept.
+		if !keeps(page, float64(ink.Min.X+ink.Max.X)/2, 150-float64(ink.Min.Y+ink.Max.Y)/2) {
+			t.Errorf("%s: the ink is not kept: %d images, %d traced", c.name, len(page.images), len(page.paths))
 		}
 	}
 }
@@ -1440,6 +1436,9 @@ func TestRedrawPanel(t *testing.T) {
 	if math.Abs(im.x-100) > 6 || math.Abs(im.w-600) > 12 || math.Abs(im.y-850) > 6 || math.Abs(im.h-300) > 12 {
 		t.Errorf("image at %.0f, %.0f, %.0f×%.0f: want the panel's 100, 850, 600×300", im.x, im.y, im.w, im.h)
 	}
+	if im.filter != "FlateDecode" {
+		t.Errorf("the flat panel is %s, want it lossless", im.filter)
+	}
 	dec := decodeImage(t, im)
 	r, g, b, _ := dec.At(dec.Bounds().Dx()/8, dec.Bounds().Dy()/8).RGBA()
 	if c := (rgb{uint8(r >> 8), uint8(g >> 8), uint8(b >> 8)}); !tint(c) {
@@ -1650,11 +1649,8 @@ func TestUnderline(t *testing.T) {
 		if size := page.lines[0].size; math.Abs(size/40-1) > 0.03 {
 			t.Errorf("gap %d: set at %.1f, drawn at 40", gap, size)
 		}
-		cx, cy := float64(rule.Min.X+rule.Max.X)/2, 600-float64(rule.Min.Y+rule.Max.Y)/2
-		if !slices.ContainsFunc(page.images, func(im pageImage) bool {
-			return cx >= im.x && cx <= im.x+im.w && cy >= im.y && cy <= im.y+im.h
-		}) {
-			t.Errorf("gap %d: the rule is not kept: %d images", gap, len(page.images))
+		if !keeps(page, float64(rule.Min.X+rule.Max.X)/2, 600-float64(rule.Min.Y+rule.Max.Y)/2) {
+			t.Errorf("gap %d: the rule is not kept: %d images, %d traced", gap, len(page.images), len(page.paths))
 		}
 	}
 }

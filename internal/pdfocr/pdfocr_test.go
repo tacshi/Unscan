@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"image"
+	"image/color"
 	"image/draw"
 	"io"
 	"math"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"slices"
@@ -23,6 +25,7 @@ import (
 	"golang.org/x/image/font/opentype"
 	"golang.org/x/image/font/sfnt"
 	"golang.org/x/image/math/fixed"
+	"golang.org/x/image/vector"
 
 	"unscan/internal/ocr"
 	"unscan/internal/testscan"
@@ -670,8 +673,8 @@ func TestAlignedLabel(t *testing.T) {
 		{X: float64(right + 10), Y: base + 14}, {X: x0 - 80, Y: base + 14}}
 	page := d.redraw(img, []ocr.Line{{Score: 1, Box: box, Text: text}}, w, h)
 	d.setLines()
-	if len(page.lines) != 1 || len(page.images) != 1 {
-		t.Fatalf("%d lines and %d images: want the line, and the bullet as an image", len(page.lines), len(page.images))
+	if len(page.lines) != 1 || len(page.images)+len(page.paths) != 1 {
+		t.Fatalf("%d lines, %d images and %d traced: want the line, and the bullet kept", len(page.lines), len(page.images), len(page.paths))
 	}
 
 	inst, err := c.pool.GetInstance(time.Minute)
@@ -703,6 +706,163 @@ func TestAlignedLabel(t *testing.T) {
 		if math.Abs(mids[i]-centers[i]) > 2.5 {
 			t.Errorf("%q is centered at %.1f, drawn at %.1f", r, mids[i], centers[i])
 		}
+	}
+}
+
+// TestTrace redraws a figure's line art as a page scanned at 300 DPI shows
+// it, its edges fading into the paper: a box with its shadow, a ring, a
+// slanting arrow, a thin rule and a rule in blue. Each is traced, in its
+// color, and draws the scan's ink to within a pixel at every edge, its
+// corners sharp; while a photo, a gray panel and a halftone of specks
+// beside them stay images.
+func TestTrace(t *testing.T) {
+	c, err := New(nil, DefaultCacheDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeOrFail(t, c)
+	d, _ := testTextDoc(t)
+	const w, h = 1600, 1100
+	img := image.NewRGBA(image.Rect(0, 0, w, h))
+	draw.Draw(img, img.Rect, image.White, image.Point{}, draw.Src)
+	type pt = [2]float32
+	shape := func(col color.Color, loops ...[]pt) {
+		z := vector.NewRasterizer(w, h)
+		for _, l := range loops {
+			z.MoveTo(l[0][0], l[0][1])
+			for _, p := range l[1:] {
+				z.LineTo(p[0], p[1])
+			}
+			z.ClosePath()
+		}
+		z.Draw(img, img.Rect, image.NewUniform(col), image.Point{})
+	}
+	rect := func(x0, y0, x1, y1 float32) []pt { return []pt{{x0, y0}, {x1, y0}, {x1, y1}, {x0, y1}} }
+	hole := func(x0, y0, x1, y1 float32) []pt { return []pt{{x0, y0}, {x0, y1}, {x1, y1}, {x1, y0}} }
+	circle := func(cx, cy, r float64, turn float64) []pt {
+		var l []pt
+		for i := range 360 {
+			a := turn * float64(i) * math.Pi / 180
+			l = append(l, pt{float32(cx + r*math.Cos(a)), float32(cy + r*math.Sin(a))})
+		}
+		return l
+	}
+	ink := color.Gray{20}
+	blue := color.RGBA{30, 80, 200, 255}
+	// A box and its shadow, at a third of a pixel, as a scan places them.
+	shape(ink, rect(240.3, 240.3, 600.3, 440.3), hole(248.3, 248.3, 592.3, 432.3),
+		rect(600.3, 254.3, 614.3, 454.3), rect(254.3, 440.3, 600.3, 454.3))
+	shape(ink, circle(820, 340, 90, 1), circle(820, 340, 80, -1)) // a ring
+	// An arrow, slanting down to the right.
+	p0, p1 := [2]float64{1000, 250}, [2]float64{1260, 397}
+	l := math.Hypot(p1[0]-p0[0], p1[1]-p0[1])
+	u := [2]float64{(p1[0] - p0[0]) / l, (p1[1] - p0[1]) / l}
+	at := func(p [2]float64, along, across float64) pt {
+		return pt{float32(p[0] + along*u[0] - across*u[1]), float32(p[1] + along*u[1] + across*u[0])}
+	}
+	shape(ink, []pt{at(p0, 0, 5), at(p1, 0, 5), at(p1, 0, 16), at(p1, 30, 0), at(p1, 0, -16), at(p1, 0, -5), at(p0, 0, -5)})
+	shape(ink, rect(250, 520, 252.4, 760))     // a thin rule
+	shape(blue, rect(600, 560.5, 1000, 566.5)) // a rule in blue
+	// Beside them, a photo, a gray panel and a halftone of specks, a third
+	// of its pixels.
+	photo, panel, halftone := image.Rect(1100, 600, 1400, 880), image.Rect(300, 800, 560, 900), image.Rect(650, 680, 950, 900)
+	for y := photo.Min.Y; y < photo.Max.Y; y++ {
+		for x := photo.Min.X; x < photo.Max.X; x++ {
+			img.Set(x, y, color.Gray{uint8(40 + (x-photo.Min.X)*150/photo.Dx())})
+		}
+	}
+	draw.Draw(img, panel, image.NewUniform(color.Gray{180}), image.Point{}, draw.Src)
+	rnd := rand.New(rand.NewPCG(1, 2)) // #nosec G404 -- a halftone's specks, the same each run
+	for y := halftone.Min.Y; y < halftone.Max.Y; y++ {
+		for x := halftone.Min.X; x < halftone.Max.X; x++ {
+			if rnd.IntN(3) == 0 {
+				img.Set(x, y, ink)
+			}
+		}
+	}
+	scan := image.NewRGBA(img.Rect)
+	copy(scan.Pix, img.Pix)
+	page := d.redraw(scan, nil, w*72.0/300, h*72.0/300)
+
+	var images []image.Rectangle
+	for _, im := range page.images {
+		x0, y0 := int(math.Round(im.x/page.sx)), int(math.Round((page.height-im.y-im.h)/page.sy))
+		images = append(images, image.Rect(x0, y0, x0+int(math.Round(im.w/page.sx)), y0+int(math.Round(im.h/page.sy))))
+	}
+	for _, r := range []image.Rectangle{photo, panel, halftone} {
+		if !slices.ContainsFunc(images, r.In) {
+			t.Errorf("%v is not an image: images %v", r, images)
+		}
+	}
+	if len(images) != 3 {
+		t.Errorf("images %v: want the photo, the panel and the halftone alone", images)
+	}
+	var black, blues bool
+	for _, a := range page.paths {
+		switch {
+		case a.color == rgb{}:
+			black = true
+		case diff(a.color, rgb{blue.R, blue.G, blue.B}) <= 8:
+			blues = true
+		default:
+			t.Errorf("traced in %v", a.color)
+		}
+	}
+	if !black || !blues {
+		t.Errorf("traced in black %v, in blue %v: want both", black, blues)
+	}
+
+	inst, err := c.pool.GetInstance(time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeOrFail(t, inst)
+	got := renderRGBA(t, inst, requests.Page{ByIndex: &requests.PageByIndex{Document: openDoc(t, inst, d.build()), Index: 0}}, 300)
+	if got.Rect.Dx() != w || got.Rect.Dy() != h {
+		t.Fatalf("rendered %v, want %d×%d", got.Rect, w, h)
+	}
+	// Ink is what lies halfway from white or further.
+	inked := func(m *image.RGBA) []bool {
+		ink := make([]bool, w*h)
+		for i := range ink {
+			ink[i] = diff(rgb(m.Pix[4*i:][:3]), white) >= 128
+		}
+		return ink
+	}
+	want, have := inked(img), inked(got)
+	wantNear, haveNear := grow(want, w, h, 1), grow(have, w, h, 1)
+	extra, lost, edges := 0, 0, 0
+	for i := range want {
+		if slices.ContainsFunc(images, image.Pt(i%w, i/w).In) {
+			continue
+		}
+		if have[i] && !wantNear[i] {
+			extra++
+		}
+		if want[i] && !haveNear[i] {
+			lost++
+		}
+		if want[i] != have[i] {
+			edges++
+		}
+	}
+	if extra > 0 || lost > 0 {
+		t.Errorf("%d pixels drawn and %d lost a pixel or more from the scan's ink", extra, lost)
+	}
+	t.Logf("%d pixels differ along the ink's edges", edges)
+	// The box's corners are sharp, outside and in, and the blue rule blue.
+	for _, p := range []image.Point{{241, 241}, {599, 241}, {241, 439}} {
+		if !have[p.Y*w+p.X] {
+			t.Errorf("the box's corner at %v is cut", p)
+		}
+	}
+	for _, p := range []image.Point{{249, 249}, {591, 249}, {591, 431}} {
+		if have[p.Y*w+p.X] {
+			t.Errorf("the box's inner corner at %v is filled", p)
+		}
+	}
+	if c := rgb(got.Pix[got.PixOffset(800, 563):][:3]); diff(c, rgb{blue.R, blue.G, blue.B}) > 12 {
+		t.Errorf("the blue rule is drawn in %v", c)
 	}
 }
 

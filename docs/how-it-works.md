@@ -6,7 +6,8 @@ where it can; how it keeps memory flat on long documents; how it makes
 the retyped PDF; and what its tests check.
 
 The retyped PDF is called the *text PDF* in the code
-(`internal/pdfocr/textpdf.go`, `redraw.go` and `style.go`) and on the
+(`internal/pdfocr/textpdf.go`, `redraw.go`, `style.go` and `trace.go`)
+and on the
 command line (`-text`), and so it is here.
 
 ## How a page is read
@@ -262,14 +263,46 @@ For each scanned page, at the resolution it was read at:
    less than four fifths of their width, as handwriting or lettering in a
    picture would; and one the recognizer read with less than 85%
    confidence. What is left that is not white, a pale tint too, whole,
-   as a panel behind a picture or text, is cut
-   into images: line art (rules, dot leaders) losslessly, the rest as JPEG
-   at 200 DPI at most. Specks of dust are dropped, but for rows of four or
-   more alike, level and evenly spaced, as dot leaders and dotted lines
-   are, whose dots lie too far apart to join; and so are the marks
-   the scan's edges leave, the shadow of the paper's edge or the
-   scanner's lid: what lies in the outer half of a margin, within 15 mm
-   of the edge, as a line along it or a speck within 3 mm of it.
+   as a panel behind a picture or text, is cut out in parts: its line art
+   is traced (see 6), and the rest goes into images, what is mostly white
+   and ink losslessly, the rest as JPEG at 200 DPI at most. Specks of dust
+   are dropped, but for rows of four or more alike, level and evenly
+   spaced, as dot leaders and dotted lines are, whose dots lie too far
+   apart to join; and so are the marks the scan's edges leave, the shadow
+   of the paper's edge or the scanner's lid: what lies in the outer half
+   of a margin, within 15 mm of the edge, as a line along it or a speck
+   within 3 mm of it.
+6. Line art, as a figure's boxes, arrows and rules, or text kept as
+   printed, is traced: drawn as outlines filled in its ink's color, as
+   sharp as the type at any zoom, rather than as an image of the scan's
+   pixels. A part is line art where its pixels are ink, about halfway
+   from white to black or further, or paper, but for those within two
+   pixels of ink, where it fades into the paper, and a few more: a photo,
+   a gray panel or a tint stays an image. So does a halftone that a
+   black-and-white scan broke into specks, which would be as many
+   outlines: a part of more than 64 outlines, most of them round 6
+   pixels or fewer. Each piece of ink, its pixels joined edge to edge or
+   corner to corner, is filled in its color, that of its pixels a pixel
+   from its edges, or of its darkest, for a piece too thin to have any;
+   black where about black. A piece whose pixels inside vary by more than
+   40 levels, on average, as ink of two colors does, or shades, stays in
+   the image. Its outlines run along its pixels' edges, through the
+   middle of each, which takes off the stairs of a slanting line or a
+   curve, and through the corners where straight runs of three pixels or
+   more meet, as a box's do, or where a thin line ends. They are
+   simplified to the fewest straight lines within 0.6 pixels of those
+   points, by Douglas and Peucker's method, and each corner between two
+   is turned by a Bézier curve, as Selinger's Potrace turns them: one
+   that passes where the square of the pixel round the corner reaches
+   toward the line between the two lines' middles, or sharply, where
+   that would take a curve tighter than a cubic bends, or where the
+   corner is kept. An outline of fewer than 12 pixels' edges, as a dot's,
+   is drawn as its pixels are, and so is one that simplifies to a line,
+   as round a hairline slanting. What is traced is erased, with the paler
+   pixels along its edges, before what is left of the part goes into an
+   image. Outlines run round ink one way and round its holes the other,
+   and are filled by the nonzero rule, so that pieces close together
+   overlap rather than cancel where their curves meet.
 
 Each face is subset to the glyphs set in it, keeping their IDs, and only
 faces a document uses are embedded; each character gets its own CID,
@@ -303,7 +336,8 @@ CGO_ENABLED=0 go test ./...
 - `internal/pdfocr` (text PDF): a line set in the font on yellowed paper
   comes back at its size and place, in a loose box or a tight one, with
   the picture beside it kept and the dust dropped; white text on a red
-  band stays as printed under invisible text, and so do a letter in a
+  band stays as printed under invisible text, traced in red with the
+  letters holes in it, and so do a letter in a
   box, a line read with little confidence and a word read as more than
   its ink holds; a word set tighter than the font is squeezed to end
   where its ink does. A contents page's heading followed by a dot set
@@ -332,11 +366,17 @@ CGO_ENABLED=0 go test ./...
   and in an upright line only a long word leaning far is. A word
   underlined, the rule running into its letters or apart from them, is
   set at its size, and the rule kept. Dot
-  leaders at 300 DPI, too far apart to join, are kept as a picture, while
+  leaders at 300 DPI, too far apart to join, are kept, while
   a speck of dust and three specks in a row are not. A line printed on a
   panel of a pale tint, scanned clean, stays as printed on it, and the
-  panel is kept whole, in its tint, as one picture. A line in traditional
-  Chinese is set in the TC faces, which center its 。, and judged in the
+  panel is kept whole, in its tint, as one picture, losslessly. A
+  figure's line art at 300 DPI, its edges fading into the paper (a box
+  with its shadow, a ring, a slanting arrow, a thin rule and a rule in
+  blue), is traced, each piece in its color, and renders over its ink to
+  within a pixel at every edge, the box's corners sharp outside and in;
+  while a photo, a gray panel and a halftone of specks beside it stay
+  images. A line in
+  traditional Chinese is set in the TC faces, which center its 。, and judged in the
   SC ones, and a line in simplified Chinese in the SC faces; traditional
   Chinese is told from simplified, and from Japanese, whose 説 is left
   as read on its pages. The marks of a scan's

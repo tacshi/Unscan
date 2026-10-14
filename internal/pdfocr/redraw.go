@@ -908,7 +908,7 @@ func (p *pixels) pictures(dpi float64) []image.Rectangle {
 		}
 	}
 
-	minInk := max(16, int(64*dpi*dpi/(300*300)))
+	minInk := dust(dpi)
 	seen := make([]bool, gw*gh)
 	var rects, specks []image.Rectangle
 	var stack []int
@@ -955,6 +955,10 @@ func (p *pixels) pictures(dpi float64) []image.Rectangle {
 	}
 	return mergeRects(rects)
 }
+
+// dust is how many pixels of ink, at dpi, a piece has at least that is
+// not a speck of dust.
+func dust(dpi float64) int { return max(16, int(64*dpi*dpi/(300*300))) }
 
 // leaders finds the rows of specks that are dot leaders, or a dotted
 // line, among specks too small to keep alone: four or more alike, no
@@ -1580,6 +1584,12 @@ func (d *textDoc) redrawPage(img image.Image, lines []ocr.Line, width, height fl
 	for _, r := range p.pictures(dpi) {
 		if edgeMark(r, text, p.w, p.h, dpi) {
 			continue
+		}
+		if paths := p.trace(r, dpi); len(paths) > 0 {
+			page.paths = append(page.paths, paths...)
+			if r = p.leftover(r, dpi); r.Empty() {
+				continue
+			}
 		}
 		img := p.encode(r, dpi)
 		if img.data == nil {
