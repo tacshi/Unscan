@@ -1938,6 +1938,7 @@ func (d *textDoc) redrawPage(img image.Image, lines []ocr.Line, width, height fl
 		}
 		if m.refs.ok && !m.stacked {
 			m.refs.words = ref.words(p, m.text, m.frame, m.ink, shapes[i], tl, origins)
+			m.refs.hanBrush, m.refs.hans = ref.hanBrush(p, m.frame, m.ink, shapes[i], tl, origins)
 		}
 	}
 	// The rules along the lines to set, as underlines, which erasing them

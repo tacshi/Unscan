@@ -653,6 +653,111 @@ func TestKinds(t *testing.T) {
 	}
 }
 
+// TestKaiExamples redraws a page of Song body text with example lines
+// mostly of English, each with its Chinese translation: in Kai, as a
+// grammar book sets them, the Chinese is set in Kai, regular, and the
+// English in the serif face; in Song, in the serif face throughout. A
+// line's Kai is told by its Chinese alone, as its English, in a face of
+// its own, slants as it does.
+func TestKaiExamples(t *testing.T) {
+	d, _ := testTextDoc(t)
+	if d.fonts[kai] == d.fonts[serif] {
+		t.Skip("no Kai face: run go run ./cmd/fetchdeps")
+	}
+	coll := func(path string, index int) font.Face {
+		data := systemFont(t, path)
+		c, err := opentype.ParseCollection(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sf, err := c.Font(index)
+		if err != nil {
+			t.Fatal(err)
+		}
+		face, err := opentype.NewFace(sf, &opentype.FaceOptions{Size: 40, DPI: 72, Hinting: font.HintingNone})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return face
+	}
+	// Apple's Kaiti, where macOS has downloaded it: a brush's Kai, as
+	// books print, which LXGW WenKai, a pen's, is not.
+	kaiti, _ := filepath.Glob("/System/Library/AssetsV2/com_apple_MobileAsset_Font8/*/AssetData/Kaiti.ttc")
+	if len(kaiti) == 0 {
+		t.Skip("no Kaiti SC")
+	}
+	song := coll("/System/Library/Fonts/Supplemental/Songti.ttc", 6)
+	times := coll("/System/Library/Fonts/Supplemental/Times New Roman.ttf", 0)
+	brush := coll(kaiti[0], 0)
+	defer closeOrFail(t, song)
+	defer closeOrFail(t, times)
+	defer closeOrFail(t, brush)
+	examples := [][2]string{{"Is he Chinese? ", "他是中国人吗？"}, {"Can he come? ", "他能来吗？"},
+		{"Do you learn English? ", "你学英语吗？"}, {"Are you married? ", "你结婚了吗？"}}
+	for _, inKai := range []bool{true, false} {
+		img := image.NewRGBA(image.Rect(0, 0, 1200, 1100))
+		draw.Draw(img, img.Rect, image.White, image.Point{}, draw.Src)
+		box := func(x0, x1, base int) ocr.Quad {
+			return ocr.Quad{{X: float64(x0 - 6), Y: float64(base - 44)}, {X: float64(x1 + 6), Y: float64(base - 44)},
+				{X: float64(x1 + 6), Y: float64(base + 14)}, {X: float64(x0 - 6), Y: float64(base + 14)}}
+		}
+		var lines []ocr.Line
+		for k, text := range []string{"当着手翻译第三版时，我不由得回想起开始接触的那段日子。", "几年前，当我们拿到内核代码开始研究时，可以说茫然无措。",
+			"其规模之大，叫覆压三百余里，隔离天日似乎不为过。", "其关系错综复杂，也非言过其实，可能正是因为它的结构。",
+			"阿房宫在规模和结构上给人的震撼可能与之有异曲同工之妙。"} {
+			dr := font.Drawer{Dst: img, Src: image.Black, Face: song, Dot: fixed.P(60, 80+70*k)}
+			dr.DrawString(text)
+			lines = append(lines, ocr.Line{Score: 1, Text: text, Box: box(60, dr.Dot.X.Ceil(), 80+70*k)})
+		}
+		chinese := song
+		if inKai {
+			chinese = brush
+		}
+		for k, ex := range examples {
+			base := 520 + 70*k
+			dr := font.Drawer{Dst: img, Src: image.Black, Face: times, Dot: fixed.P(120, base)}
+			dr.DrawString(ex[0])
+			dr.Face = chinese
+			dr.DrawString(ex[1])
+			lines = append(lines, ocr.Line{Score: 1, Text: ex[0] + ex[1], Box: box(120, dr.Dot.X.Ceil(), base)})
+		}
+		// Blurred as a scan's are, that edges measure as they do.
+		blurred := image.NewRGBA(img.Rect)
+		for y := range img.Rect.Dy() {
+			for x := range img.Rect.Dx() {
+				sum, n := 0, 0
+				for dy := -1; dy <= 1; dy++ {
+					for dx := -1; dx <= 1; dx++ {
+						if p := (image.Point{X: x + dx, Y: y + dy}); p.In(img.Rect) {
+							sum += int(img.RGBAAt(p.X, p.Y).R)
+							n++
+						}
+					}
+				}
+				v := uint8(sum / n)
+				blurred.SetRGBA(x, y, color.RGBA{v, v, v, 255})
+			}
+		}
+		page := d.redraw(blurred, lines, 1200, 1100)
+		d.setLines()
+		for _, l := range page.lines[5:] {
+			var text string
+			for _, c := range l.cids {
+				code := d.sets[page.set].codes[c-1]
+				text += string(code.r)
+				want := serif // the English, and in Kai its translation and its punctuation
+				if inKai && (isHan(code.r) || code.r == '？') {
+					want = kai
+				}
+				if code.face != want {
+					t.Errorf("Chinese in Kai %v: %q of %q set in %s, want %s", inKai, string(code.r), text, faceNames[code.face], faceNames[want])
+					break
+				}
+			}
+		}
+	}
+}
+
 // TestKindsBrushed tells Kai and FangSong paragraphs by how far their
 // edges run aslant: FangSong's even strokes, blurred in a pale scan, a
 // little less than Kai's from Song's, and a paragraph a little short of it
@@ -699,6 +804,50 @@ func TestKindsBrushed(t *testing.T) {
 		}
 		if got, _ := kinds(lines, true, false); !slices.Equal(got, want) {
 			t.Errorf("%s, without FangSong: kinds %v, want %v", c.name, got, want)
+		}
+	}
+}
+
+// TestKindsMixed tells paragraphs mostly of English, as examples with
+// their Chinese translations, by their Chinese alone: Kai where it slants
+// as Kai does, by the lower median of a paragraph's lines, or a line alone
+// more surely, as a Song footnote's small type slants nearly as far; and
+// FangSong where the Chinese lines about them are, which tell Kai from
+// FangSong as a few characters cannot.
+func TestKindsMixed(t *testing.T) {
+	line := func(top float64, cjk bool, lean, brush float64) lineGeom {
+		return lineGeom{ok: true, judged: true, top: top, bottom: top + 40, height: 40,
+			cjk: cjk, han: true, letters: 20, lean: lean, brush: brush, hanBrushed: !cjk}
+	}
+	// A page of Song body text, and of FangSong.
+	body := func(brush, lean float64) []lineGeom {
+		var lines []lineGeom
+		for k := range 4 {
+			lines = append(lines, line(100+54*float64(k), true, lean, brush))
+		}
+		return lines
+	}
+	for _, c := range []struct {
+		name  string
+		page  []lineGeom
+		mixed []float64 // the mixed lines' Chinese's brushes, one paragraph
+		want  int
+	}{
+		{"Kai examples on a Song page", body(0.06, 0.2), []float64{0.15, 0.17, 0.13}, kai},
+		{"a Kai example alone", body(0.06, 0.2), []float64{0.15}, kai},
+		{"a Song footnote alone", body(0.06, 0.2), []float64{0.13}, serif},
+		{"Song lines with English", body(0.06, 0.2), []float64{0.07, 0.09, 0.06}, serif},
+		{"examples on a FangSong page", body(0.10, -0.2), []float64{0.14, 0.13}, fangsong},
+	} {
+		lines := c.page
+		for k, b := range c.mixed {
+			lines = append(lines, line(600+54*float64(k), false, 0.1, b))
+		}
+		got, _ := kinds(lines, true, true)
+		for k := range c.mixed {
+			if g := got[len(c.page)+k]; g != c.want {
+				t.Errorf("%s: line %d is %s, want %s", c.name, k, faceNames[g], faceNames[c.want])
+			}
 		}
 	}
 }

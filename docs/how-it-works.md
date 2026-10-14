@@ -228,7 +228,16 @@ For each scanned page, at the resolution it was read at:
    median of its lines; a line alone, as a heading, must slant further,
    unless the lines of its size on its page are Kai, as a preface's first
    line is, and a line mostly of Latin, as an English title quoted in
-   Chinese, follows them. FangSong slants as Kai does, a little less: a
+   Chinese, follows them. Else a paragraph mostly of Latin, as English
+   examples with their Chinese translations, is told by the lines with
+   four Chinese characters or more, measured on their Chinese alone, each
+   run of it set over its ink: their Latin, printed in a face of its own,
+   slants as that face does, as much as Kai at times. It is Kai where they
+   slant as far as a line alone must, by their lower median, and a line
+   alone by 0.14, as a Song footnote's small type slants up to 0.13; a
+   few characters cannot tell Kai from FangSong, so it is Kai. Such a line
+   is weighed on its Latin too, unlike the text fonts', and is bold only
+   where surely heavier, by three tenths. FangSong slants as Kai does, a little less: a
    paragraph slanting less than a Kai paragraph's least is FangSong.
    FangSong's even strokes also lean to sans-serif, as Song's never do,
    so a paragraph of them is Kai or FangSong by a little less slant, as a
@@ -577,6 +586,12 @@ CGO_ENABLED=0 go test ./...
   paragraph of FangSong, slanting a little less than Kai, is FangSong,
   as is one of even strokes a pale scan straightened, or one a little
   short of either among FangSong ones; one of Song, as slanted, is not.
+  On a page of Song text, English examples whose Chinese translations
+  are in Kai (Kaiti SC) are set with their Chinese in Kai, regular, and
+  their English in the serif face, while the same examples with Song
+  translations stay in the serif face; and of paragraphs mostly of
+  English, a single line's Chinese must slant further than a paragraph's,
+  and on a FangSong page they are FangSong.
   In a
   sans-serif document, a heading leaning a little to serif, a page number
   and a line whose ink was not found are sans-serif; in a serif one, a

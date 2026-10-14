@@ -220,6 +220,12 @@ type lineRefs struct {
 	// judges the weight of too, setting each's face, as a verb set bold
 	// in a caption is, or nil.
 	words []wordInk
+	// hanBrush is how much more of the edges of the line's Chinese
+	// characters run aslant than the serif face's set in them, its Latin
+	// left out, and hans how many there are, 0 where unmeasured (see
+	// hanBrush).
+	hanBrush float64
+	hans     int
 }
 
 // wordInk is a word of a line's: a run of its glyphs, from from to to
@@ -261,6 +267,72 @@ func (d *textDoc) refs(text string, f frame, in ink) lineRefs {
 	}
 	l.ok = true
 	return l
+}
+
+// minHans is how many Chinese characters a line part Latin must have to
+// be told Kai by them alone (see hanBrush).
+const minHans = 4
+
+// hanBrush measures how much more of the edges of a line's Chinese
+// characters run aslant than the serif face's set in them, set in the
+// serif face as sh, tl and origins place it, each run of them over its
+// ink, their Latin left out, as styles judges a line by its whole ink
+// (see strokes): it returns that and how many Chinese characters there
+// are, or 0, 0 where fewer than minHans.
+func (d *textDoc) hanBrush(p *pixels, f frame, in ink, sh shape, tl textLine, origins []float64) (float64, int) {
+	if !in.found {
+		return 0, 0
+	}
+	// The runs of Chinese characters, by glyph.
+	var runs [][2]int
+	var text []rune
+	for i := 0; i < len(sh.glyphs); {
+		if !isHan(sh.glyphs[i].r) {
+			i++
+			continue
+		}
+		j := i
+		for j < len(sh.glyphs) && isHan(sh.glyphs[j].r) {
+			text = append(text, sh.glyphs[j].r)
+			j++
+		}
+		runs = append(runs, [2]int{i, j})
+		i = j
+	}
+	if len(text) < minHans {
+		return 0, 0
+	}
+	// Their ink, a column a pixel, run after run, three blank columns
+	// apart, up the line's ink with a row each way.
+	rows := int(math.Ceil(in.t1-in.t0)) + 2
+	contrast := float64(max(1, diff(in.fg, in.bg)))
+	var cols [][]float64
+	em := float64(d.fonts[sh.face].ttf.UnitsPerEm)
+	for _, r := range runs {
+		// From the first character's outline to the last's, with a pixel
+		// each way, not the punctuation's ink beside them, as a quote's.
+		first, last := sh.glyphs[r[0]], sh.glyphs[r[1]-1]
+		s0 := tl.x + (origins[r[0]]+float64(first.bounds[0])/em*tl.size)*tl.scale - 1
+		s1 := tl.x + (origins[r[1]-1]+float64(last.bounds[2])/em*tl.size)*tl.scale + 1
+		for s := math.Floor(s0); s < s1; s++ {
+			col := make([]float64, rows)
+			for y := range rows {
+				pt := f.point(s+0.5, in.t1+1-float64(y)-0.5)
+				if c := float64(diff(p.at(int(math.Floor(pt.X)), int(math.Floor(pt.Y))), in.bg)) / contrast; c >= 0.08 {
+					col[y] = min(1, c)
+				}
+			}
+			cols = append(cols, col)
+		}
+		cols = append(cols, make([]float64, rows), make([]float64, rows), make([]float64, rows))
+	}
+	if len(cols) < 3 || rows < 3 {
+		return 0, 0
+	}
+	ink := strokeStats(len(cols), rows, func(x, y int) float64 { return cols[x][y] }, true)
+	hsh := d.shape(string(text), serif)
+	ref := d.strokes(hsh, d.size(hsh, f, in), true)
+	return ink.oblique - ref.oblique, len(text)
 }
 
 // styles picks the face each line of a document was printed in, from its
@@ -358,6 +430,12 @@ func (d *textDoc) styles(texts []string, frames []frame, inks []ink, lines []lin
 		}
 		geoms[i].lean = nearest[1] - nearest[0]
 		geoms[i].brush = in.strokes.oblique - l.refs[serif].oblique
+		// A line mostly of Latin, as an example and its translation, is
+		// told Kai by its Chinese alone: its Latin, set in another face,
+		// slants as that face does, as much as Kai at times.
+		if l.hans >= minHans && !geoms[i].cjk {
+			geoms[i].brush, geoms[i].hanBrushed = l.hanBrush, true
+		}
 	}
 	// Kai is told only where there is a Kai face to set it in, and
 	// FangSong from it where there is a FangSong one.
@@ -429,7 +507,14 @@ func (d *textDoc) styles(texts []string, frames []frame, inks []ink, lines []lin
 				b = 1
 			}
 		}
-		if weights[i]/b >= 1.15 {
+		// A line told Kai or FangSong by its Chinese alone is weighed on
+		// its Latin too, printed in a face proportioned unlike the text
+		// fonts': it is bold only where surely heavier.
+		bold := 1.15
+		if geoms[i].hanBrushed && (out[i] == kai || out[i] == fangsong) {
+			bold = 1.3
+		}
+		if weights[i]/b >= bold {
 			out[i]++ // the kind's bold face
 		}
 		heavier[i] = weights[i] / b
@@ -530,6 +615,9 @@ type lineGeom struct {
 	letters     int
 	lean        float64
 	brush       float64
+	// hanBrushed is whether brush is its Chinese characters' alone, as
+	// of a line part Latin (see styles).
+	hanBrushed bool
 }
 
 // sure is how far a CJK line's strokes must lean to a kind for the line to
@@ -555,6 +643,14 @@ const brushy, brushyAlone = 0.09, 0.12
 // brushyNear is how much a paragraph's must for it to be either where the
 // CJK lines of its size on its page are.
 const brushyEven, brushyNear = 0.08, 0.07
+
+// hanAlone is how much more of the edges of a line's Chinese characters,
+// measured alone, as of a line mostly of Latin (see hanBrush), must run
+// aslant than the serif face's for the line alone to be Kai: in a book's
+// pages, its Song lines' run 0.05 to 0.085 more, a few up to 0.13, as a
+// footnote's small type, and its Kai examples' translations 0.12 to 0.22,
+// 0.15 by their median.
+const hanAlone = 0.14
 
 // kaiBrush is how much more of a paragraph's edges run aslant than the
 // serif face's, by their median, for it to be Kai rather than FangSong,
@@ -631,8 +727,10 @@ each:
 	// A paragraph mostly of Chinese tells by its own edges. A line alone
 	// does unless it slants less than brushyAlone, and one mostly of Latin,
 	// as an English title quoted in Chinese, whose Latin slants no more than
-	// the serif face's, never does: they are Kai where the CJK lines of
-	// their size on their page are.
+	// the serif face's, is Kai where the CJK lines of its size on its page
+	// are, and else by its lines with Chinese enough to tell by, their
+	// Chinese alone (see styles), as an English example and its Kai
+	// translation.
 	// It returns how far, by the median, the edges it was told by run
 	// aslant, which tells Kai from FangSong (see kaiBrush).
 	// A paragraph whose strokes lean to sans-serif, as FangSong's even ones
@@ -665,10 +763,35 @@ each:
 				around, aroundLeans = append(around, m.brush), append(aroundLeans, m.lean)
 			}
 		}
-		if len(around) < 2 {
+		if len(around) >= 2 && brushed(around, aroundLeans) {
+			return true, median(around)
+		}
+		if l.cjk {
 			return false, 0
 		}
-		return brushed(around, aroundLeans), median(around)
+		// A paragraph mostly of Latin whose lines have Chinese enough to
+		// tell by, by their Chinese alone (see styles), as surely as a line
+		// alone, by their lower median, and a line alone more surely, from
+		// hanAlone: a few characters' edges tell less than a paragraph's,
+		// nor Kai from FangSong, which the CJK lines about it, where they
+		// are either, have told; so it is Kai.
+		var hb []float64
+		for _, i := range para {
+			if m := lines[i]; m.judged && m.hanBrushed {
+				hb = append(hb, m.brush)
+			}
+		}
+		least := brushyAlone
+		if len(hb) == 1 {
+			least = hanAlone
+		}
+		if len(hb) > 0 {
+			v := slices.Sorted(slices.Values(hb))
+			if b := v[(len(v)-1)/2]; b >= least {
+				return true, max(b, kaiBrush)
+			}
+		}
+		return false, 0
 	}
 	// The kind most of the document's lines of a script lean to, by their
 	// median, of those with a few letters to judge by, or of all its lines
