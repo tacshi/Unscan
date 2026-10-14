@@ -714,7 +714,9 @@ func TestAlignedLabel(t *testing.T) {
 // slanting arrow, a thin rule and a rule in blue. Each is traced, in its
 // color, and draws the scan's ink to within a pixel at every edge, its
 // corners sharp; while a photo, a gray panel and a halftone of specks
-// beside them stay images.
+// beside them stay images, and so do a green disc with a yellow bubble on
+// its edge, as an icon of a picture dictionary's, and dot leaders printed
+// soft, whose darkest pixels alone would be traced.
 func TestTrace(t *testing.T) {
 	c, err := New(nil, DefaultCacheDir())
 	if err != nil {
@@ -780,6 +782,19 @@ func TestTrace(t *testing.T) {
 			}
 		}
 	}
+	icon := image.Rect(1214, 464, 1292, 536)
+	shape(color.RGBA{20, 110, 60, 255}, circle(1250, 500, 35, 1))
+	shape(color.RGBA{240, 200, 60, 255}, circle(1274, 516, 8, 1))
+	// Dots of a gray, soft round their middles.
+	leaders := image.Rect(297, 647, 564, 654)
+	for x := 300; x < 562; x += 10 {
+		for dy := -2; dy <= 2; dy++ {
+			for dx := -2; dx <= 2; dx++ {
+				g := [...]uint8{120, 150, 185, 225, 255}[min(4, dx*dx+dy*dy)]
+				img.Set(x+dx, 650+dy, color.Gray{g})
+			}
+		}
+	}
 	scan := image.NewRGBA(img.Rect)
 	copy(scan.Pix, img.Pix)
 	page := d.redraw(scan, nil, w*72.0/300, h*72.0/300)
@@ -789,13 +804,13 @@ func TestTrace(t *testing.T) {
 		x0, y0 := int(math.Round(im.x/page.sx)), int(math.Round((page.height-im.y-im.h)/page.sy))
 		images = append(images, image.Rect(x0, y0, x0+int(math.Round(im.w/page.sx)), y0+int(math.Round(im.h/page.sy))))
 	}
-	for _, r := range []image.Rectangle{photo, panel, halftone} {
+	for _, r := range []image.Rectangle{photo, panel, halftone, icon, leaders} {
 		if !slices.ContainsFunc(images, r.In) {
 			t.Errorf("%v is not an image: images %v", r, images)
 		}
 	}
-	if len(images) != 3 {
-		t.Errorf("images %v: want the photo, the panel and the halftone alone", images)
+	if len(images) != 5 {
+		t.Errorf("images %v: want the photo, the panel, the halftone, the icon and the leaders alone", images)
 	}
 	var black, blues bool
 	for _, a := range page.paths {

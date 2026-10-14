@@ -2108,16 +2108,17 @@ func evenSizes(sizes []float64) []float64 {
 
 // spread shares extra pixels out after glyphs i to j (not included) but
 // the last, set at size pixels an em of em font units, to space them out
-// to their ink, gaps the ink's wide gaps between them (see ink.gaps): at
-// each place to part words, as much as its gap in the ink holds beyond
-// what the glyphs leave there (see wordGaps); the rest alike after every
+// to their ink, from from to to along the line, gaps the ink's wide gaps
+// between them (see ink.gaps): at each place to part words, as much as its
+// gap in the ink holds beyond what the glyphs leave there (see wordGaps);
+// the rest alike after every
 // glyph, but between CJK characters, as letters are tracked out, up to
 // most pixels a glyph; and what is left at the places and between CJK
 // characters, by spacing's weights, up to an em a weight, or tracked out
 // further where there are none. A line mostly of CJK characters, or with
 // no word of letters to track, has the weights take all of it. It is nil
 // where there is nothing to share or nowhere to share it.
-func (sh shape) spread(i, j int, extra, size, em float64, gaps [][2]float64, most float64) []float64 {
+func (sh shape) spread(i, j int, extra, size, em float64, gaps [][2]float64, from, to, most float64) []float64 {
 	weights, total := sh.spacing(i, j)
 	lo, hi := i, j-1 // the glyphs that draw, from the first to the last
 	for lo < hi && !sh.glyphs[lo].inked {
@@ -2143,7 +2144,7 @@ func (sh shape) spread(i, j int, extra, size, em float64, gaps [][2]float64, mos
 	adds := make([]float64, len(weights))
 	rest := extra
 	if pairs > 0 && !sh.cjk() {
-		for k, e := range sh.wordGaps(i, j, size, em, gaps) {
+		for k, e := range sh.wordGaps(i, j, size, em, gaps, from, to) {
 			e = min(e, rest)
 			adds[k-i] += e
 			rest -= e
@@ -2174,35 +2175,86 @@ func (sh shape) spread(i, j int, extra, size, em float64, gaps [][2]float64, mos
 // wordGaps is how much wider, in pixels, each place to part words at in
 // glyphs i to j (not included) is in their ink than the glyphs, set at
 // size pixels an em of em font units, leave it, by the glyph it follows,
-// gaps the ink's wide gaps between them (see ink.gaps): a place is a
-// space, or where CJK characters meet Latin ones, and the widest gaps, as
-// many as there are places, are theirs, in order along the line. It is
-// nil where the ink has fewer wide gaps than the glyphs have places.
-func (sh shape) wordGaps(i, j int, size, em float64, gaps [][2]float64) map[int]float64 {
+// gaps the ink's wide gaps between them (see ink.gaps), which runs from
+// from to to along the line. A place is a space, or where CJK characters
+// meet Latin ones. The places take the gaps, in order along the line, that
+// part the ink into stretches as wide as the words between them, by the
+// least sum of how far each is from its word's width, on a log scale: not
+// the widest, as a contents page's section number, 1.10, has a gap after
+// its point wider than the space between the words after it. It is nil
+// where the ink has fewer wide gaps than the glyphs have places.
+func (sh shape) wordGaps(i, j int, size, em float64, gaps [][2]float64, from, to float64) map[int]float64 {
 	type place struct {
-		after   int     // the glyph it follows
-		natural float64 // what the glyphs leave there, in pixels
+		after, next int     // the glyph it follows, and the first of the word after it
+		natural     float64 // what the glyphs leave there, in pixels
 	}
 	var places []place
 	for k := i; k+1 < j; k++ {
 		a, b := sh.glyphs[k], sh.glyphs[k+1]
 		switch {
 		case a.inked && b.space && k+2 < j && sh.glyphs[k+2].inked:
-			places = append(places, place{k, float64(a.advance-a.bounds[2]+b.advance+sh.glyphs[k+2].bounds[0]) / em * size})
+			places = append(places, place{k, k + 2, float64(a.advance-a.bounds[2]+b.advance+sh.glyphs[k+2].bounds[0]) / em * size})
 		case a.inked && b.inked && a.wide != b.wide:
-			places = append(places, place{k, float64(a.advance-a.bounds[2]+b.bounds[0]) / em * size})
+			places = append(places, place{k, k + 1, float64(a.advance-a.bounds[2]+b.bounds[0]) / em * size})
 		}
 	}
-	if len(places) == 0 || len(gaps) < len(places) {
+	m, n := len(places), len(gaps)
+	if m == 0 || n < m {
 		return nil
 	}
-	widest := slices.Clone(gaps)
-	slices.SortFunc(widest, func(a, b [2]float64) int { return cmp.Compare(b[1]-b[0], a[1]-a[0]) })
-	widest = widest[:len(places)]
-	slices.SortFunc(widest, func(a, b [2]float64) int { return cmp.Compare(a[0], b[0]) })
+	// How wide each word's glyphs' outlines span, set at their own advances.
+	origin := make([]float64, j-i+1)
+	for k := i; k < j; k++ {
+		origin[k-i+1] = origin[k-i] + float64(sh.glyphs[k].advance)/em*size
+	}
+	span := func(a, b int) float64 {
+		for a < b && !sh.glyphs[a].inked {
+			a++
+		}
+		for b > a && !sh.glyphs[b].inked {
+			b--
+		}
+		return max(1, origin[b-i]+float64(sh.glyphs[b].bounds[2])/em*size-origin[a-i]-float64(sh.glyphs[a].bounds[0])/em*size)
+	}
+	words := make([]float64, m+1)
+	words[0], words[m] = span(i, places[0].after), span(places[m-1].next, j-1)
+	for p := 1; p < m; p++ {
+		words[p] = span(places[p-1].next, places[p].after)
+	}
+	off := func(ink, word float64) float64 { return math.Abs(math.Log(max(1, ink) / word)) }
+	// least[p][g] is the least sum for the words up to place p, set at gap
+	// g, and back[p][g] the gap place p-1 is set at for it.
+	least, back := make([][]float64, m), make([][]int, m)
+	for p := range m {
+		least[p], back[p] = make([]float64, n), make([]int, n)
+		for g := range n {
+			least[p][g] = math.Inf(1)
+			switch {
+			case g < p || n-g < m-p: // no room for the places before or after
+			case p == 0:
+				least[p][g] = off(gaps[g][0]-from, words[0])
+			default:
+				for h := p - 1; h < g; h++ {
+					if c := least[p-1][h] + off(gaps[g][0]-gaps[h][1], words[p]); c < least[p][g] {
+						least[p][g], back[p][g] = c, h
+					}
+				}
+			}
+		}
+	}
+	g, best := -1, math.Inf(1)
+	for h := m - 1; h < n; h++ {
+		if c := least[m-1][h] + off(to-gaps[h][1], words[m]); c < best {
+			g, best = h, c
+		}
+	}
+	if g < 0 {
+		return nil
+	}
 	extra := map[int]float64{}
-	for p, pl := range places {
-		extra[pl.after] = max(widest[p][1]-widest[p][0]-pl.natural, 0)
+	for p := m - 1; p >= 0; p-- {
+		extra[places[p].after] = max(gaps[g][1]-gaps[g][0]-places[p].natural, 0)
+		g = back[p][g]
 	}
 	return extra
 }
@@ -2325,7 +2377,7 @@ func (d *textDoc) place(sh shape, f frame, in ink, size float64) (tl textLine, o
 				tl.x, first = at, false
 			}
 			origins[i] = at - tl.x
-			adds := sh.spread(i, j, seg[1]-seg[0]-float64(right-left)/em*size, size, em, in.gapsIn(seg[0], seg[1]), track)
+			adds := sh.spread(i, j, seg[1]-seg[0]-float64(right-left)/em*size, size, em, in.gapsIn(seg[0], seg[1]), seg[0], seg[1], track)
 			for k := i; k < j; k++ {
 				origins[k+1] = origins[k] + float64(sh.glyphs[k].advance)/em*size
 				if k-i < len(adds) {
@@ -2343,7 +2395,7 @@ func (d *textDoc) place(sh shape, f frame, in ink, size float64) (tl textLine, o
 		gaps := in.gapsIn(in.s0, in.s1)
 		if width > span && !tracked && !sh.cjk() {
 			words := 0.0
-			for _, e := range sh.wordGaps(0, n, size, em, gaps) {
+			for _, e := range sh.wordGaps(0, n, size, em, gaps, in.s0, in.s1) {
 				words += e
 			}
 			tl.scale = min(max((width-words)/span, 1), 1.1)
@@ -2351,7 +2403,7 @@ func (d *textDoc) place(sh shape, f frame, in ink, size float64) (tl textLine, o
 				gaps[k][0], gaps[k][1] = gaps[k][0]/tl.scale, gaps[k][1]/tl.scale
 			}
 		}
-		switch adds := sh.spread(0, n, width/tl.scale-span, size, em, gaps, track); {
+		switch adds := sh.spread(0, n, width/tl.scale-span, size, em, gaps, in.s0/tl.scale, in.s1/tl.scale, track); {
 		case adds != nil:
 			for i, a := range adds {
 				origins[i+1] = origins[i] + float64(sh.glyphs[i].advance)/em*size + a

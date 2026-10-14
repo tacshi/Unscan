@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"image"
 	"math"
+	"slices"
 )
 
 // Line art left on a page once its lines are erased, as a figure's boxes,
@@ -89,6 +90,35 @@ func (p *pixels) trace(r image.Rectangle, dpi float64) []pagePath {
 			pieces[k-1].settle(at(i), inside(i))
 		}
 	}
+	// How much ink the scan shows of each piece, with the paler pixels
+	// along its edges, each within two pixels of it and the nearest piece's
+	// first, as much as it is as dark as the piece.
+	near := slices.Clone(label)
+	for range 2 {
+		next := slices.Clone(near)
+		for i, k := range near {
+			if k != 0 {
+				continue
+			}
+			x, y := i%w, i/w
+			for _, n := range [8][2]int{{-1, 0}, {1, 0}, {0, -1}, {0, 1}, {-1, -1}, {1, -1}, {-1, 1}, {1, 1}} {
+				if nx, ny := x+n[0], y+n[1]; nx >= 0 && ny >= 0 && nx < w && ny < h && near[ny*w+nx] != 0 {
+					next[i] = near[ny*w+nx]
+					break
+				}
+			}
+		}
+		near = next
+	}
+	for i, k := range near {
+		if k == 0 {
+			continue
+		}
+		pc := &pieces[k-1]
+		if m, ok := pc.measured(); ok {
+			pc.held += min(1, float64(diff(at(i), white))/float64(max(1, diff(m, white))))
+		}
+	}
 	loops := outlines(ink, w, h)
 	// A halftone that the scanner broke into specks, as a photo printed
 	// in dots is, would be as many outlines of a few pixels: a part of the
@@ -113,7 +143,7 @@ func (p *pixels) trace(r image.Rectangle, dpi float64) []pagePath {
 	for k := range pieces {
 		pc := &pieces[k]
 		c, ok := pc.color()
-		if !ok {
+		if !ok || !pc.faithful() {
 			continue
 		}
 		pi, seen := byColor[c]
@@ -217,20 +247,30 @@ func grow(mask []bool, w, h, d int) []bool {
 // piece is a piece of ink, its pixels joined edge to edge or corner to
 // corner.
 type piece struct {
+	area   int // how many pixels of ink
 	bounds image.Rectangle
-	// The colors of its pixels inside it (see trace), summed, by how many,
-	// and how far they lie from their mean, summed; the colors of its
-	// darkest pixels, for a piece too thin to have any inside; and how far
-	// from white its darkest pixel is.
+	// The colors of its pixels inside it (see trace), summed, by how many;
+	// how far they lie from their mean, summed, and how many lie further
+	// than odd from it; the colors of its darkest pixels, for a piece too
+	// thin to have any inside; and how far from white its darkest pixel
+	// is.
 	in, dark [3]int
 	nIn, n   int
-	dev      int
+	dev, odd int
 	darkest  int
-	loops    []outline
-	traced   bool
+	// held is how much ink the scan shows of it, in pixels of its color
+	// (see trace).
+	held   float64
+	loops  []outline
+	traced bool
 }
 
+// odd is how far from a piece's color a pixel inside it lies that is of
+// another color, or a shade.
+const odd = 64
+
 func (pc *piece) add(x, y int, c rgb, inside bool) {
+	pc.area++
 	pc.bounds = pc.bounds.Union(image.Rect(x, y, x+1, y+1))
 	pc.darkest = max(pc.darkest, diff(c, white))
 	if inside {
@@ -247,7 +287,11 @@ func (pc *piece) add(x, y int, c rgb, inside bool) {
 func (pc *piece) settle(c rgb, inside bool) {
 	switch {
 	case pc.nIn > 0 && inside:
-		pc.dev += diff(c, mean(pc.in, pc.nIn))
+		d := diff(c, mean(pc.in, pc.nIn))
+		pc.dev += d
+		if d > odd {
+			pc.odd++
+		}
 	case pc.nIn == 0 && diff(c, white) >= pc.darkest-32:
 		for k := range 3 {
 			pc.dark[k] += int(c[k])
@@ -260,27 +304,43 @@ func mean(sum [3]int, n int) rgb {
 	return rgb{uint8(sum[0] / n), uint8(sum[1] / n), uint8(sum[2] / n)}
 }
 
-// color is the color a piece is filled in, black for ink about black, and
-// whether it is of one color: the pixels inside it lie within 40 levels of
-// their mean, on average, as a scan's noise leaves them, and unlike those
-// of ink of two colors, or of shades.
-func (pc *piece) color() (rgb, bool) {
-	var c rgb
+// measured is a piece's color as the scan shows it: its pixels' inside it,
+// or its darkest pixels', by their mean.
+func (pc *piece) measured() (rgb, bool) {
 	switch {
 	case pc.nIn > 0:
-		if pc.dev > 40*pc.nIn {
-			return rgb{}, false
-		}
-		c = mean(pc.in, pc.nIn)
+		return mean(pc.in, pc.nIn), true
 	case pc.n > 0:
-		c = mean(pc.dark, pc.n)
-	default:
+		return mean(pc.dark, pc.n), true
+	}
+	return rgb{}, false
+}
+
+// color is the color a piece is filled in, black for ink about black, and
+// whether it is of one color: the pixels inside it lie within 40 levels of
+// their mean, on average, as a scan's noise leaves them, and but for one
+// in fifty within odd of it, unlike those of ink of two colors, or of
+// shades, even where the other color is a little of it, as a yellow
+// bubble on the edge of a green disc.
+func (pc *piece) color() (rgb, bool) {
+	c, ok := pc.measured()
+	if !ok || pc.dev > 40*pc.nIn || 50*pc.odd > pc.nIn {
 		return rgb{}, false
 	}
 	if chroma(c) < 48 && luma(c) < 96 {
 		return rgb{}, true
 	}
 	return rgb{c[0]&^7 | 4, c[1]&^7 | 4, c[2]&^7 | 4}, true // in steps, as encode keeps tones
+}
+
+// faithful reports whether a piece's outlines, filled, would print about
+// as much ink as the scan shows of it: its pixels of ink are between seven
+// tenths and seven fifths of what it holds. A dot printed soft, as of a
+// dot leader, whose few darkest pixels alone are ink, holds much more, in
+// the paler pixels round them, and stays as the scan shows it.
+func (pc *piece) faithful() bool {
+	a := float64(pc.area)
+	return a >= 0.7*pc.held && a <= 1.4*pc.held
 }
 
 // label8 labels the pieces of ink in mask, from 1, and returns them.

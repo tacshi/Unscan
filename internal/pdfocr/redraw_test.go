@@ -1799,7 +1799,8 @@ func TestSpread(t *testing.T) {
 	em, size := float64(d.fonts[sans].ttf.UnitsPerEm), 40.0
 	// The gap after 1.19, 60 pixels wide, one of 12 as the fonts set it,
 	// and 8 more pixels for the rest.
-	adds := sh.spread(0, len(sh.glyphs), 68, size, em, [][2]float64{{70, 130}, {300, 312}}, 0.05*size)
+	width := float64(sh.right-sh.left)/em*size + 68
+	adds := sh.spread(0, len(sh.glyphs), 68, size, em, [][2]float64{{70, 130}, {300, 312}}, 0, width, 0.05*size)
 	runes := []rune(text)
 	first := slices.Index(runes, ' ')
 	second := first + 1 + slices.Index(runes[first+1:], ' ')
@@ -1810,6 +1811,32 @@ func TestSpread(t *testing.T) {
 		if k != second-1 && k != second && adds[k] > 0.05*size+0.01 {
 			t.Errorf("tracked by %.1f after %q", adds[k], runes[k])
 		}
+	}
+
+	// A contents page's line, its section number's point set apart by a
+	// gap wider than the space between the words after it: the gap after
+	// the number is the number's, not the space's.
+	text = "1.10 The Telephone"
+	sh = d.shape(text, sans)
+	runes = []rune(text)
+	first = slices.Index(runes, ' ')
+	second = first + 1 + slices.Index(runes[first+1:], ' ')
+	k := size / em
+	number := float64(sh.glyphs[first-1].bounds[2]) * k // where the number's outline ends, from its start
+	for _, g := range sh.glyphs[:first-1] {
+		number += float64(g.advance) * k
+	}
+	the := float64(sh.glyphs[first+1].bounds[0]+sh.glyphs[first+1].advance+sh.glyphs[first+2].advance+sh.glyphs[first+3].bounds[2]) * k
+	rest := float64(sh.right-sh.left)*k - number - the
+	// 1.10, 6 pixels wider than set, with 14 after its point; 60 after it;
+	// The; and 11 pixels, about as the fonts set a space, before Telephone.
+	point := [2]float64{0.4 * number, 0.4*number + 14}
+	column := [2]float64{number + 6, number + 66}
+	space := [2]float64{column[1] + the, column[1] + the + 11}
+	width = space[1] + rest - float64(sh.glyphs[second+1].bounds[0])*k
+	adds = sh.spread(0, len(sh.glyphs), width-float64(sh.right-sh.left)*k, size, em, [][2]float64{point, column, space}, 0, width, 0.05*size)
+	if len(adds) != len(sh.glyphs)-1 || adds[first-1]+adds[first] < 40 || adds[second-1]+adds[second] > 10 {
+		t.Errorf("adds %v: want the column's after 1.10, and little before Telephone", adds)
 	}
 }
 

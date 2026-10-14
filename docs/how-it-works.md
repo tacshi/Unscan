@@ -207,11 +207,15 @@ For each scanned page, at the resolution it was read at:
    each other on a page share, as a paragraph's do. Glyphs keep their
    shapes: the line is spaced out to the ink's width as books are set.
    Each place its words part at, a space or where CJK characters meet
-   Latin ones, is as wide as its gap in the ink: the ink's widest gaps, as
-   many as there are places, in order along the line. The rest of a line
-   of Latin is taken by a face a tenth wider at most (`Tz`), as the face
-   it was printed in may be wider than the text fonts, and by tracking
-   its letters out by a twentieth of an em at most; what is left goes
+   Latin ones, is as wide as its gap in the ink: the gaps, as many as
+   there are places, in order along the line, that part the ink into
+   stretches as wide as the words between them, by the least sum of how
+   far each is from its word's width on a log scale. They are not simply
+   the widest, as a contents page's section number, 1.10, has a gap after
+   its point wider than the space between the words after it. The rest of
+   a line of Latin is taken by a face a tenth wider at most (`Tz`), as the
+   face it was printed in may be wider than the text fonts, and by
+   tracking its letters out by a twentieth of an em at most; what is left goes
    between CJK characters, three times as much where they meet Latin
    words, and at spaces, or is tracked out further where there are none.
    A line tracked out, as a title's letters are, whose gaps between its
@@ -294,8 +298,14 @@ For each scanned page, at the resolution it was read at:
    corner to corner, is filled in its color, that of its pixels a pixel
    from its edges, or of its darkest, for a piece too thin to have any;
    black where about black. A piece whose pixels inside vary by more than
-   40 levels, on average, as ink of two colors does, or shades, stays in
-   the image. Its outlines run along its pixels' edges, through the
+   40 levels, on average, or of which more than one in fifty lie more
+   than 64 levels from its color, as ink of two colors does, or shades,
+   even where the other is a little of it, as a yellow bubble on the edge
+   of a green disc, stays in the image; and so does one whose pixels of
+   ink are less than seven tenths, or more than seven fifths, of the ink
+   the scan shows of it, the paler pixels within two of it counted as far
+   as they are as dark as it, as a dot printed soft, whose darkest pixels
+   alone are ink. Its outlines run along its pixels' edges, through the
    middle of each, which takes off the stairs of a slanting line or a
    curve, and through the corners where straight runs of three pixels or
    more meet, as a box's do, or where a thin line ends. They are
@@ -369,7 +379,9 @@ CGO_ENABLED=0 go test ./...
   slanted but for the label. A title tracked out, read as it is or with
   spaces where none are, has each letter set over its own, unstretched;
   a line spaced out where its words part in the ink, a wide gap after a
-  section's number, takes the gap there, not tracking; a line two fifths
+  section's number, takes the gap there, not tracking, even where the
+  number's point is set apart by more than the space between the words
+  after it; a line two fifths
   wider than its glyphs is set a tenth wider at most, and tracked for
   the rest, or tracked alone where its letters lie apart; and an upright
   line in Arial full of y's stays upright. Text sheared as italic is by 0.12 and 0.2
@@ -387,7 +399,8 @@ CGO_ENABLED=0 go test ./...
   blue), is traced, each piece in its color, and renders over its ink to
   within a pixel at every edge, the box's corners sharp outside and in;
   while a photo, a gray panel and a halftone of specks beside it stay
-  images. A line in
+  images, and so do a green disc with a yellow bubble on its edge and
+  dot leaders printed soft. A line in
   traditional Chinese is set in the TC faces, which center its 。, and judged in the
   SC ones, and a line in simplified Chinese in the SC faces; traditional
   Chinese is told from simplified, and from Japanese, whose 説 is left
