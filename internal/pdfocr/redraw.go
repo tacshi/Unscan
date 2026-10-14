@@ -1427,6 +1427,146 @@ func lineColors(inks []rgb, sh shape, bg rgb, black int) []rgb {
 	return colors
 }
 
+// linePart is a part of a line the recognizer read as one: its text and
+// the stretch of its box it lies in.
+type linePart struct {
+	text  string
+	frame frame
+}
+
+// apartGap is how wide a gap in a line's ink must be, over the ink's
+// height, for apart to part the line there, and apartSpace over the size
+// of the label before it: wider than any space at its size. apartSize is
+// how many times the label's size the type after the gap must be, and
+// apartFit how far, on a log scale, each side's characters may be from
+// spanning its ink: they must lie where they were read.
+const apartGap, apartSpace, apartSize, apartFit = 0.5, 0.8, 1.3, 0.3
+
+// apart parts a line where its ink parts, at a gap apartGap of its height
+// or wider, after a label of Latin letters or digits, in type apartSize
+// times smaller than the rest's or more, the rest starting where the line
+// above or below it does, as a label hanging in the margin, as "Chapter
+// 14" before a contents page's chapter title, whose first section's line
+// starts where it does, which the recognizer reads as one line: each part
+// is a line of its own, measured, judged and set as it was printed.
+//
+// Less tells too little. A Latin word in Chinese text, which books space
+// widely, measures from seven tenths of the Chinese's size to nearly twice
+// it, as the two scripts' faces are proportioned unlike the text fonts;
+// another line may start where a word ends, by chance, as on a page of
+// labels, or as a definition's does after its term, larger; and a label's
+// words, read as one line with what it labels, are parted by spaces, not
+// by gaps apartSpace of its size, as wide as a word.
+//
+// The text parts at a space, or where CJK characters meet Latin letters
+// or digits, the one where each side's characters, at the size its ink
+// gives them (see size), span its ink best, on a log scale, as a label
+// "1." does before "phone line"; each side must have two letters or
+// digits or more there to tell its size by, and is measured again for its
+// text's proportions, as a line is, which keeps out the ink of what lies
+// beside it. Others are the frames of the page's lines, the line above or
+// below starting where the rest does within a third of the ink's height,
+// and lying within four times it, as a chapter's line, with no sections,
+// lies two lines below the last section of the chapter before. Of the
+// gaps it might part at, it parts at the one after which the type is the
+// most times larger, the box at the gap's middle. It returns nil where
+// the line stays whole.
+func (d *textDoc) apart(p *pixels, text string, f frame, in ink, others []frame) []linePart {
+	if !in.found || len(in.gaps) == 0 {
+		return nil
+	}
+	sh := d.shape(text, serif)
+	runes := []rune(strings.TrimSpace(text))
+	if len(runes) != len(sh.glyphs) {
+		return nil
+	}
+	em := float64(d.fonts[serif].ttf.UnitsPerEm)
+	high := in.t1 - in.t0
+	// fit is how glyphs i to j (not included) fit ink: the size it gives
+	// them, and how far, on a log scale, their outlines are from spanning
+	// it; ok false where they draw nothing.
+	fit := func(i, j int, in ink) (size, off float64, ok bool) {
+		yMin, yMax, seen := 0, 0, false
+		for _, g := range sh.glyphs[i:j] {
+			switch {
+			case g.inked && !seen:
+				yMin, yMax, seen = g.bounds[1], g.bounds[3], true
+			case g.inked:
+				yMin, yMax = min(yMin, g.bounds[1]), max(yMax, g.bounds[3])
+			}
+		}
+		left, right, inked := sh.inkSpan(i, j)
+		if !in.found || !inked || yMax <= yMin || right <= left {
+			return 0, 0, false
+		}
+		size = min(max((in.t1-in.t0)/(float64(yMax-yMin)/em), 0.2*f.height), 1.5*f.height)
+		return size, math.Abs(math.Log((in.s1 - in.s0) / (float64(right-left) / em * size))), true
+	}
+	// told is how many letters or digits rs has to tell its size by.
+	told := func(rs []rune) int {
+		n := 0
+		for _, r := range rs {
+			if unicode.IsLetter(r) || unicode.IsDigit(r) {
+				n++
+			}
+		}
+		return n
+	}
+	var best []linePart
+	most := apartSize
+	for _, g := range in.gaps {
+		if g[1]-g[0] < apartGap*high || g[0] <= in.s0 || g[1] >= in.s1 {
+			continue
+		}
+		// The line above or below starting where the rest does, its box a
+		// little before its ink, as the rest's is.
+		at := f.point(g[1], 0)
+		if !slices.ContainsFunc(others, func(o frame) bool {
+			along := (o.o.X-at.X)*f.u.X + (o.o.Y-at.Y)*f.u.Y
+			across := math.Abs((o.o.X-at.X)*f.v.X + (o.o.Y-at.Y)*f.v.Y)
+			return o.u.X*f.u.X+o.u.Y*f.u.Y > 0.99 && along > -high/3 && along <= high/6 &&
+				across >= high/2 && across <= 4*high
+		}) {
+			continue
+		}
+		mid := (g[0] + g[1]) / 2
+		left, right := f, f
+		left.length = mid
+		right.o, right.length = f.point(mid, 0), max(f.length, in.s1)-mid
+		li, ri := p.measure(left, 0), p.measure(right, 0)
+		part, off := 0, math.Inf(1)
+		for b := 1; b < len(runes); b++ {
+			if !partsAt(runes, b) {
+				continue
+			}
+			_, oa, ok := fit(0, b, li)
+			_, oc, ok2 := fit(b, len(runes), ri)
+			if ok && ok2 && oa+oc < off {
+				part, off = b, oa+oc
+			}
+		}
+		if part == 0 || told(runes[:part]) < 2 || told(runes[part:]) < 2 ||
+			slices.ContainsFunc(sh.glyphs[:part], func(g glyph) bool { return g.wide }) {
+			continue
+		}
+		before, after := strings.TrimSpace(string(runes[:part])), strings.TrimSpace(string(runes[part:]))
+		a, oa, ok := fit(0, part, p.measure(left, d.shape(before, serif).aspect()))
+		c, oc, ok2 := fit(part, len(runes), p.measure(right, d.shape(after, serif).aspect()))
+		if ok && ok2 && oa <= apartFit && oc <= apartFit && g[1]-g[0] >= apartSpace*a && c/a >= most {
+			best, most = []linePart{{before, left}, {after, right}}, c/a
+		}
+	}
+	return best
+}
+
+// partsAt reports whether a line's text may part before runes[b]: at a
+// space, or where CJK characters meet Latin letters or digits.
+func partsAt(runes []rune, b int) bool {
+	a, c := runes[b-1], runes[b]
+	latin := func(r rune) bool { return r < 0x2E80 && (unicode.IsLetter(r) || unicode.IsDigit(r)) }
+	return unicode.IsSpace(a) || unicode.IsSpace(c) || isHan(a) && latin(c) || latin(a) && isHan(c)
+}
+
 // minScore is the least confidence the recognizer reads a line with for it
 // to be set: lines of text read with less, as a lettered box read as 向 or
 // a picture's scribbles as a word, stay as printed. Lines of text score
@@ -1519,20 +1659,34 @@ func (d *textDoc) redrawPage(img image.Image, lines []ocr.Line, width, height fl
 
 	// Measure every line before erasing any, as boxes may overlap. Lines
 	// are measured, and erased below, in the text fonts, whatever fonts
-	// they are set in (see ref).
+	// they are set in (see ref). A line whose label hangs apart from it,
+	// smaller, is measured and set as two (see apart).
 	ref := d.ref
-	for _, l := range lines {
-		f := lineFrame(l.Box)
-		rules := !strings.ContainsAny(l.Text, "_‾—―─━－﹏")
-		text, in, keep := trimLeaders(l.Text, p.measureRules(f, ref.shape(l.Text, serif).aspect(), rules))
-		text = ref.enDashes(text, f, in)
-		in.tops = nil // for trimLeaders only: kept, a long document's would fill memory
-		m := measuredLine{text: text, frame: f, ink: in, keep: keep,
-			printed: !in.plain || in.framed || l.Score < minScore || ref.squeezed(p, text, f, in)}
-		if !m.printed {
-			m.refs = ref.refs(text, f, in)
+	frames := make([]frame, len(lines))
+	for i, l := range lines {
+		frames[i] = lineFrame(l.Box)
+	}
+	for i, l := range lines {
+		todo := []linePart{{l.Text, frames[i]}}
+		for len(todo) > 0 {
+			text, f := todo[0].text, todo[0].frame
+			todo = todo[1:]
+			rules := !strings.ContainsAny(text, "_‾—―─━－﹏")
+			in := p.measureRules(f, ref.shape(text, serif).aspect(), rules)
+			if parts := ref.apart(p, text, f, in, frames); parts != nil {
+				todo = append(parts, todo...)
+				continue
+			}
+			text, in, keep := trimLeaders(text, in)
+			text = ref.enDashes(text, f, in)
+			in.tops = nil // for trimLeaders only: kept, a long document's would fill memory
+			m := measuredLine{text: text, frame: f, ink: in, keep: keep,
+				printed: !in.plain || in.framed || l.Score < minScore || ref.squeezed(p, text, f, in)}
+			if !m.printed {
+				m.refs = ref.refs(text, f, in)
+			}
+			page.measured = append(page.measured, m)
 		}
-		page.measured = append(page.measured, m)
 	}
 	// Erase the lines to set, set provisionally in the serif face to find
 	// the ink no character is matched to (see place), which stays.

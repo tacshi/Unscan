@@ -1770,6 +1770,136 @@ func TestWordFaces(t *testing.T) {
 	}
 }
 
+// TestApart redraws a contents page's chapter lines, each a label hanging
+// in the margin, set apart, smaller, in an italic serif face, before a
+// chapter title in a sans-serif one, its sections' lines starting where it
+// does, which the recognizer reads as one line, with a space between them
+// or without: each is set as a line of its own, at its size, where it was
+// printed, the label slanted and in the serif face. A section's line, of
+// one size, parted by its column's gap, stays whole; so does a line that
+// starts with a smaller word set apart, as a Latin word in Chinese text
+// may be, where no other line starts where the rest does, and a
+// definition whose term is larger than its text, which the next
+// definition's starts where it does.
+func TestApart(t *testing.T) {
+	d, fonts := testTextDoc(t)
+	faceOf := func(data []byte, size float64) font.Face {
+		sf, err := opentype.Parse(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		face, err := opentype.NewFace(sf, &opentype.FaceOptions{Size: size, DPI: 72, Hinting: font.HintingNone})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return face
+	}
+	body, label, title := faceOf(fonts.Serif.Data, 40), faceOf(fonts.Serif.Data, 28), faceOf(fonts.Sans.Data, 44)
+	small := faceOf(fonts.Sans.Data, 28)
+	defer closeOrFail(t, body)
+	defer closeOrFail(t, label)
+	defer closeOrFail(t, title)
+	defer closeOrFail(t, small)
+	img := image.NewRGBA(image.Rect(0, 0, 1600, 1700))
+	draw.Draw(img, img.Rect, image.White, image.Point{}, draw.Src)
+	// Boxes a tenth of the text's height wider than its ink, as the
+	// recognizer draws them.
+	box := func(x0, x1, base int) ocr.Quad {
+		return ocr.Quad{{X: float64(x0 - 4), Y: float64(base - 52)}, {X: float64(x1 + 4), Y: float64(base - 52)},
+			{X: float64(x1 + 4), Y: float64(base + 14)}, {X: float64(x0 - 4), Y: float64(base + 14)}}
+	}
+	// Body text in the serif face, which the label is judged against.
+	var lines []ocr.Line
+	for k, text := range []string{"Understanding the kernel of a modern system", "requires a careful study of memory",
+		"and how processes are scheduled in turn", "across the processors of a single machine.", "with examples from the source itself."} {
+		dr := font.Drawer{Dst: img, Src: image.Black, Face: body, Dot: fixed.P(60, 80+70*k)}
+		dr.DrawString(text)
+		lines = append(lines, ocr.Line{Score: 1, Text: text, Box: box(60, dr.Dot.X.Ceil(), 80+70*k)})
+	}
+	// section draws a section's line at x, its column's gap after its
+	// number.
+	section := func(x, base int) {
+		dr := font.Drawer{Dst: img, Src: image.Black, Face: title, Dot: fixed.P(x, base)}
+		dr.DrawString("第一节")
+		dr.Dot.X += fixed.I(60)
+		dr.DrawString("非谓语动词的产生……261")
+		lines = append(lines, ocr.Line{Score: 1, Text: "第一节 非谓语动词的产生……261", Box: box(x, dr.Dot.X.Ceil(), base)})
+	}
+	type chapter struct {
+		read          string
+		label, titled string
+		x0, x1        int // where the label's ink starts, and the title's
+	}
+	var chapters []chapter
+	for k, read := range []string{"Chapter 14 第十四章 从复合句回到简单句……259", "Chapter15第十五章 制服控与势利眼……284"} {
+		base := 520 + 300*k
+		labelText, titleText := "Chapter 1"+string(rune('4'+k)), strings.Fields(read[strings.Index(read, "第"):])[0]
+		x1 := drawSheared(img, label, labelText, 60, base, 0.2) + 40
+		dr := font.Drawer{Dst: img, Src: image.Black, Face: title, Dot: fixed.P(x1, base)}
+		dr.DrawString(strings.TrimLeft(read[strings.Index(read, "第"):], " "))
+		lines = append(lines, ocr.Line{Score: 1, Text: read, Box: box(60, dr.Dot.X.Ceil(), base)})
+		section(x1, base+80)
+		chapters = append(chapters, chapter{read, labelText, titleText, 60, x1})
+	}
+	// A Latin word, smaller, set apart from the Chinese after it, where
+	// no line starts.
+	dr := font.Drawer{Dst: img, Src: image.Black, Face: label, Dot: fixed.P(60, 1300)}
+	dr.DrawString("Unix")
+	dr.Face, dr.Dot.X = title, dr.Dot.X+fixed.I(40)
+	dr.DrawString("内核做的工作远不止处理系统调用")
+	lines = append(lines, ocr.Line{Score: 1, Text: "Unix 内核做的工作远不止处理系统调用", Box: box(60, dr.Dot.X.Ceil(), 1300)})
+	// A definition's term, larger than its text, the next definition's
+	// text starting where its does.
+	dr = font.Drawer{Dst: img, Src: image.Black, Face: body, Dot: fixed.P(60, 1450)}
+	dr.DrawString("ss")
+	x2 := dr.Dot.X.Ceil() + 50
+	dr.Face, dr.Dot.X = small, fixed.I(x2)
+	dr.DrawString("栈段寄存器，指向当前程序的栈")
+	lines = append(lines, ocr.Line{Score: 1, Text: "ss 栈段寄存器，指向当前程序的栈", Box: box(60, dr.Dot.X.Ceil(), 1450)})
+	dr = font.Drawer{Dst: img, Src: image.Black, Face: small, Dot: fixed.P(x2, 1520)}
+	dr.DrawString("包含当前程序栈的段")
+	lines = append(lines, ocr.Line{Score: 1, Text: "包含当前程序栈的段", Box: box(x2, dr.Dot.X.Ceil(), 1520)})
+
+	page := d.redraw(img, lines, 1600, 1700)
+	d.setLines()
+	if len(page.lines) != len(lines)+len(chapters) {
+		t.Fatalf("%d lines, want %d", len(page.lines), len(lines)+len(chapters))
+	}
+	set := func(l textLine) (text string, face int) {
+		for _, c := range l.cids {
+			code := d.sets[page.set].codes[c-1]
+			text += string(code.r)
+			face = code.face
+		}
+		return strings.TrimSpace(text), face
+	}
+	for k, c := range chapters {
+		labelLine, titleLine := page.lines[5+3*k], page.lines[6+3*k]
+		text, face := set(labelLine)
+		if strings.ReplaceAll(text, " ", "") != strings.ReplaceAll(c.label, " ", "") || face&^1 != serif || labelLine.slanted == nil {
+			t.Errorf("%q: the label set as %q in %s, slanted %v, want %q in the serif face, slanted", c.read, text, faceNames[face], labelLine.slanted != nil, c.label)
+		}
+		if math.Abs(labelLine.size-28) > 3 || math.Abs(titleLine.size-44) > 4 {
+			t.Errorf("%q: the label set at %.1f px, the title at %.1f, want 28 and 44", c.read, labelLine.size, titleLine.size)
+		}
+		if text, _ := set(titleLine); !strings.HasPrefix(text, c.titled) {
+			t.Errorf("%q: the title set as %q", c.read, text)
+		}
+		if math.Abs(labelLine.x-float64(c.x0)) > 4 || math.Abs(titleLine.x-float64(c.x1)) > 4 {
+			t.Errorf("%q: the label set from %.0f, the title from %.0f, want %d and %d", c.read, labelLine.x, titleLine.x, c.x0, c.x1)
+		}
+		if text, _ := set(page.lines[7+3*k]); text != "第一节 非谓语动词的产生……261" {
+			t.Errorf("the section's line set as %q", text)
+		}
+	}
+	if text, _ := set(page.lines[len(page.lines)-3]); text != "Unix 内核做的工作远不止处理系统调用" {
+		t.Errorf("the line led by a Latin word set as %q", text)
+	}
+	if text, _ := set(page.lines[len(page.lines)-2]); text != "ss 栈段寄存器，指向当前程序的栈" {
+		t.Errorf("the definition set as %q", text)
+	}
+}
+
 // TestUnderline redraws a line with a word underlined, the rule running
 // into its letters' feet, and one with the rule apart from them: both are
 // set at their size, and their rules kept as printed.

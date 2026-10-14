@@ -166,7 +166,24 @@ For each scanned page, at the resolution it was read at:
    of its box's height with a run of ink a fifth longer than the box is
    high, longer than a glyph's stroke. They are kept as printed, and the
    text's ink lies above an underline that runs into its letters' feet,
-   so that an underlined word is not set too large. Each word of Latin
+   so that an underlined word is not set too large. A label hanging in
+   the margin, set apart from what it labels in a smaller face, as
+   "Chapter 14" before a contents page's chapter title, is read as one
+   line with it, and set at one size would come out the title's size:
+   where a gap half the ink's height or wider, and wider than any space
+   at the label's size, parts a label of Latin letters or digits from
+   type 1.3 times its size or more, which starts where the line above or
+   below does, as the chapter's first section's, the line is parted
+   there, each part a line of its own, measured, judged and set alone.
+   The text parts at a space, or where CJK characters meet Latin ones,
+   where each side's characters, at the size its ink gives them, span its
+   ink best, and each side is measured again for its text's proportions,
+   as a line is. Less would part too much: a Latin word in Chinese text,
+   which books space widely, measures from seven tenths of the Chinese's
+   size to nearly twice it, as the two scripts' faces are proportioned
+   unlike the text fonts, and on a page of labels another line starts, by
+   chance, where many a word ends.
+   Each word of Latin
    letters or digits is measured too, where the line is first set: its
    strokes, as the line's, and how far they lean, the mean lean of its
    edges that run near upright, which an upright face's round and
@@ -415,7 +432,14 @@ CGO_ENABLED=0 go test ./...
   section's number, takes the gap there, not tracking, even where the
   number's point is set apart by more than the space between the words
   after it, and a contents line in Chinese takes the gap after its
-  section number at the space read there; a line two fifths
+  section number at the space read there; a chapter's line, its label
+  hanging in the margin, smaller, in an italic serif face, read as one
+  with its title, with a space between or without, is set as two, the
+  label at its size, slanted, in the serif face, and the title at its
+  own, each where it was printed, while a line led by a Latin word as
+  small and as far apart, where no line starts where its Chinese does,
+  stays whole, as does a definition whose term is larger than its text,
+  the next definition's starting where its does; a line two fifths
   wider than its glyphs is set a tenth wider at most, and tracked for
   the rest, or tracked alone where its letters lie apart; and an upright
   line in Arial full of y's stays upright. Text sheared as italic is by 0.12 and 0.2
