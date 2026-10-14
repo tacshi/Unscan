@@ -1,12 +1,91 @@
 # How Unscan works
 
 This document covers what the [README](../README.md) leaves out: how
-Unscan keeps memory flat on long documents, how it makes the retyped PDF,
-and what its tests check.
+Unscan reads a page, turned upright and in reading order, on the GPU
+where it can; how it keeps memory flat on long documents; how it makes
+the retyped PDF; and what its tests check.
 
 The retyped PDF is called the *text PDF* in the code
 (`internal/pdfocr/textpdf.go`, `redraw.go` and `style.go`) and on the
 command line (`-text`), and so it is here.
+
+## How a page is read
+
+`ocr.Engine.Read` takes a page rendered at 300 DPI through four models:
+
+1. **Orientation.** PP-LCNet_x1_0_doc_ori sees the page as PaddleX shows
+   it, its shorter side scaled to 256 pixels (averaged down, as
+   `cv2.INTER_AREA` does, so that strokes of text are not skipped) and
+   its middle 224×224, and tells whether it is turned 0°, 90°, 180° or
+   270° clockwise. On the 316 pages of a picture dictionary, each tried
+   in all four turns, it was right 98 times in 100, in about 3 ms a page,
+   but took about one upright page in a hundred, of pictures or of small
+   type, for turned, at even odds or better. So a page it finds turned
+   with even odds or better is read each way it might be: upright, as
+   it says, and the other way round; and is kept the way its lines
+   across the page read with the most confidence, characters by the
+   recognizer's confidence. Read the wrong way, lines run down the page
+   or read upside down, with little confidence if at all.
+2. **Layout.** PP-DocLayoutV3 finds the page's blocks (paragraphs,
+   titles, pictures, tables, headers, footers, page numbers) and the
+   order they read in, from the page squeezed to 800×800. It takes about
+   half a second on the CPU.
+3. **Detection and recognition**, PP-OCRv6's, find and read the lines.
+4. **Reading order.** Each line goes in the block that covers most of
+   it, or the smallest of those it is all but inside, as a column inside
+   a block the model drew round two; the blocks read in the model's
+   order, and a block's lines in rows, top to bottom. Lines no block
+   covers, which the model missed, go before the first block below them
+   that they lie across from, or else at the end. The text joins lines
+   in a row of a block with spaces, and rows and blocks with newlines.
+
+A page found turned is redrawn upright for the retyped PDF, and its
+`/Rotate` set to show it upright in the searchable PDF, where its scan
+stays as it was and the text layer, drawn in the page's own
+coordinates, turns with it.
+
+### Core ML
+
+On macOS, the detector and the recognizer run on the GPU and the Neural
+Engine through ONNX Runtime's Core ML execution provider, three to four
+times as fast as on the CPU: with the layout model, which keeps the CPU
+busy meanwhile, a page of a picture dictionary takes about 0.7 seconds on
+an M1 Pro, against 1.6 on its CPU and 1.1 before there was a layout model. `onnxruntime_purego` binds the call that adds an execution
+provider but does not export it, so `internal/ocr` calls it through
+purego from ONNX Runtime's `OrtApi`, given the session options' handle,
+which it checks is the first field of `ort.SessionOptions` before
+reading it.
+
+Core ML runs a model on the GPU only at the input size it was compiled
+for: given inputs of any size, it runs them on the CPU, no faster than
+ONNX Runtime. So each size is compiled on its own, with ONNX Runtime's
+free dimensions fixed: pages padded with white to sides that are
+multiples of 128 pixels, of at most four sizes, as a document's pages
+are of a size or two; and lines padded to the narrowest of three widths,
+640, 1920 and 3200 pixels, in batches of 8. Each width holds 1 to 2 GB,
+as the recognizer's output, the odds of each of its 18,710 classes at
+each step, is 48 to 240 MB a batch, and Core ML keeps buffers for it
+and the steps before: seven widths took 12 GB in all, three 8 GB on the
+GPU alone, and 5.6 GB on the GPU and the Neural Engine, which Core ML is
+given, as fast; and the first run of a width after others' is slow, so
+three read a page as fast as seven. A Mac of less than 16 GB reads on
+the CPU. Compiling a size takes seconds,
+so sizes are compiled in the background, one at a time, while ONNX
+Runtime reads on the CPU, and each is run once on zeros, as the GPU's
+first run of a model takes as long as a few. The recognizer's widths
+start compiling as the engine loads; a page's size, as its first page
+comes. The compiled models are kept in the cache directory, by the
+models' contents, ONNX Runtime's version and the size, as ONNX Runtime
+finds a compiled model by its file's name only: a size loads from there
+in about 70 ms, though the Neural Engine compiles it again as each run
+loads it, which takes 15 to 20 seconds in all. The cache takes about
+half a gigabyte. Core ML's sessions run without ONNX Runtime's memory
+arena, which, given the recognizer's output of 24 to 240 MB a batch by
+its width, allocated anew whenever the width changed, taking up to half
+a second. The layout model stays on the CPU: Core ML cannot compile it
+as an ML Program (its MaxPool rounds up with padding to the same size),
+and runs it three times slower as a neural network. It runs while the
+GPU detects and recognizes the page's lines.
 
 ## Long documents
 
@@ -33,7 +112,9 @@ macOS and Linux, and filled in as it grows, rather than grown as a Go
 slice, which is copied each time and leaves the copies to the garbage
 collector. Only the pages along the pipeline are in memory at once, so
 while pages are read, memory does not grow with the document: it is
-mostly what the models need, about 3 GB.
+mostly what the models need, about 3.5 GB on the CPU, of which the
+layout model takes 1.2 GB, and 6 GB with Core ML, whose buffers on the
+GPU take 2 to 3 GB.
 
 Adding the text layer at the end has PDFium load every page once more,
 keeping its scan until the document is closed, in memory that is 2 GB
@@ -205,8 +286,14 @@ of the faces and a map of its own; a shorter document takes one.
 CGO_ENABLED=0 go test ./...
 ```
 
-- `internal/ocr`: the geometry, and OCR of rendered English and Chinese
-  pages.
+- `internal/ocr`: the geometry, turning images and mapping points back,
+  OCR of rendered English and Chinese pages, and the order of a page's
+  lines by its blocks: a title, a subtitle the layout model missed, two
+  columns level with each other inside a block of both, and a page
+  number it missed too. A page of two columns reads down the left one,
+  then the right, upright and turned each of the three ways, which `Read`
+  finds. On macOS, every size Core ML is given compiles, and reads the
+  page as the CPU does, faster.
 - `internal/ttf`: glyphs, advances and bounds agree with
   `golang.org/x/image/font/sfnt`, and a subset keeps the outlines of the
   glyphs used (composites with their parts) and drops the rest. The fonts
@@ -293,9 +380,18 @@ CGO_ENABLED=0 go test ./...
   over the lines it was read from, that pages render pixel for pixel as
   before, that the file grows by kilobytes only, and that a second run
   skips every page. A page turned by its `/Rotate` previews upright, as
-  large as asked.
-- `main_test.go`: the window's flow, run headless with `ui.NewTester`,
-  and the Settings dialog's: a collection's font chosen, then another of
+  large as asked. Pages fed into the scanner sideways and upside down,
+  one turned by its `/Rotate` too, are found turned, read upright, shown
+  upright in the searchable PDF, which reads upright again, and redrawn
+  upright in the text PDF, and the scans are not written again.
+- `main_test.go`: the window's flow, run headless with `ui.NewTester`:
+  among it, the arrows turn the page after the line between the pages
+  compared is dragged, and move the line once Tab reaches it; a page's
+  number typed in place of the page shown's goes there, within the
+  document, on Enter, and nowhere on Escape or a click elsewhere; New leaves
+  a document for the welcome, keeping the history, where a PDF dropped
+  while another is read waits, its progress showing; and the Settings
+  dialog's: a collection's font chosen, then another of
   it, a file that cannot be used, the built-in font again, fonts chosen
   before the models load or while others are read, and the choice saved;
   updates checked for and installed without asking, the latter only with

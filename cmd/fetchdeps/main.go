@@ -1,6 +1,7 @@
 // Fetchdeps downloads what Unscan needs at run time into resources/:
 // the PP-OCRv6 small detection and recognition models with the
-// recognizer's character dictionary, the fonts that text PDFs are set in,
+// recognizer's character dictionary, the page orientation and layout
+// models, the fonts that text PDFs are set in,
 // and the ONNX Runtime library of each platform asked for. Every file is
 // pinned and checked against its SHA-256.
 //
@@ -38,9 +39,11 @@ type remote struct {
 }
 
 const (
-	detRevision = "28fe5895c24fd108c19eb3e8479f4ab385fbfc62"
-	recRevision = "b8f84f0b80c529de40b4fbb3544b84fa7233a513"
-	hf          = "https://huggingface.co/PaddlePaddle/"
+	detRevision    = "28fe5895c24fd108c19eb3e8479f4ab385fbfc62"
+	recRevision    = "b8f84f0b80c529de40b4fbb3544b84fa7233a513"
+	oriRevision    = "7330ab7039123e46af2dc03154b9969aa412c61d"
+	layoutRevision = "46bbdf188bb0a772c08aed74882ce7e51a8f1ea6"
+	hf             = "https://huggingface.co/PaddlePaddle/"
 )
 
 var (
@@ -50,6 +53,12 @@ var (
 		"5435fd747c9e0efe15a96d0b378d5bd157e9492ed8fd80edf08f30d02fa24634"}
 	recConfig = remote{hf + "PP-OCRv6_small_rec_onnx/resolve/" + recRevision + "/inference.yml",
 		"ab078671bb49f06228eadccd34f1bb501e157f7a047095ffb943ba81512c77d1"}
+	// PP-LCNet_x1_0_doc_ori, which tells how a page is turned, and
+	// PP-DocLayoutV3, which finds its blocks and their reading order.
+	oriModel = remote{hf + "PP-LCNet_x1_0_doc_ori_onnx/resolve/" + oriRevision + "/inference.onnx",
+		"af9a0a4f317ff0709ce752067807f819cb15d883f8ecad89f28df1c6ee2d9c92"}
+	layoutModel = remote{hf + "PP-DocLayoutV3_onnx/resolve/" + layoutRevision + "/inference.onnx",
+		"45bf71750b00739a41fc209f132eb104a4d6b5bb29483c9078164d8b87cf28ba"}
 
 	// Noto Serif SC and Noto Sans SC, Regular and Bold, TrueType builds from
 	// Google Fonts, with Noto Serif TC and Noto Sans TC, in traditional
@@ -138,13 +147,15 @@ func main() {
 	flag.Parse()
 
 	models := filepath.Join(*dir, "models")
-	if err := os.MkdirAll(models, 0o755); err != nil {
+	// Readable by all, as the app carries these: from /Applications,
+	// every account of a Mac reads them.
+	if err := os.MkdirAll(models, 0o755); err != nil { // #nosec G301 -- readable by all
 		log.Fatal(err)
 	}
 	for _, f := range []struct {
 		r    remote
 		name string
-	}{{detModel, "det.onnx"}, {recModel, "rec.onnx"}} {
+	}{{detModel, "det.onnx"}, {recModel, "rec.onnx"}, {oriModel, "ori.onnx"}, {layoutModel, "layout.onnx"}} {
 		if err := fetchFile(f.r, filepath.Join(models, f.name)); err != nil {
 			log.Fatal(err)
 		}
@@ -290,7 +301,7 @@ func fromZip(data []byte, member string) ([]byte, error) {
 			if err != nil {
 				return nil, err
 			}
-			defer rc.Close()
+			defer func() { _ = rc.Close() }() // read only
 			return io.ReadAll(rc)
 		}
 	}
@@ -303,7 +314,7 @@ func download(r remote) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }() // read whole, or failed
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("%s: %s", r.url, resp.Status)
 	}
@@ -319,11 +330,11 @@ func download(r remote) ([]byte, error) {
 }
 
 func fileSHA256(name string) (string, error) {
-	f, err := os.Open(name)
+	f, err := os.Open(name) // #nosec G304 -- a file fetchdeps fetched
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }() // read only
 	h := sha256.New()
 	if _, err := io.Copy(h, f); err != nil {
 		return "", err
@@ -332,11 +343,12 @@ func fileSHA256(name string) (string, error) {
 }
 
 func writeFile(name string, data []byte) error {
-	if err := os.MkdirAll(filepath.Dir(name), 0o755); err != nil {
+	// Readable by all, as the models' directory is.
+	if err := os.MkdirAll(filepath.Dir(name), 0o755); err != nil { // #nosec G301 -- readable by all
 		return err
 	}
 	tmp := name + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	if err := os.WriteFile(tmp, data, 0o644); err != nil { // #nosec G306 -- readable by all
 		return err
 	}
 	return os.Rename(tmp, name)

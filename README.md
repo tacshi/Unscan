@@ -30,7 +30,9 @@
 
 Unscan is a desktop app and command-line tool that runs OCR on scanned
 PDFs. It reads each page with PaddleOCR's **PP-OCRv6 small** models,
-run locally through ONNX Runtime, so documents never leave the computer.
+turned upright first and in the order its layout reads in, all run
+locally through ONNX Runtime, on the GPU through Core ML on a Mac, so
+documents never leave the computer.
 It is built for Chinese and English documents, and written in Go without
 cgo.
 
@@ -38,7 +40,7 @@ cgo.
 
 | Output | What you get |
 |---|---|
-| **Searchable PDF** | The original pages, kept as they are (the scans are not encoded again), with an invisible text layer over them, as [OCRmyPDF](https://github.com/ocrmypdf/OCRmyPDF) does. Search, select and copy work in any PDF viewer, and the file grows by kilobytes only. |
+| **Searchable PDF** | The original pages, kept as they are (the scans are not encoded again; pages scanned sideways or upside down are only turned upright), with an invisible text layer over them, as [OCRmyPDF](https://github.com/ocrmypdf/OCRmyPDF) does. Search, select and copy work in any PDF viewer, and the file grows by kilobytes only. |
 | **Retyped PDF** | Each page redrawn on white paper, its text set in real fonts where it was printed, at the size and in the kind and weight it was printed in, so it reads like a document exported from a word processor. |
 | **Text** | The text of every page, as plain text. |
 
@@ -71,11 +73,21 @@ the right, as **Compare with Original** shows them:
 
 ## Features
 
-- **Local and private.** OCR runs on your CPU. Nothing is uploaded: the
+- **Local and private.** OCR runs on your computer, on a Mac's GPU
+  too. Nothing is uploaded: the
   app's only connection is its daily check for updates, which Settings
   turns off.
 - **Leaves digital pages alone.** Pages that already have text, such as
   born-digital ones, are kept as they are, in both PDFs.
+- **Reads columns in order.** A layout model finds each page's blocks,
+  its columns, headings, captions and page numbers, and the order they
+  read in, so the text of a page of two columns reads down one, then
+  the other, as do copying and searching.
+- **Turns pages upright.** Pages scanned sideways or upside down are read
+  upright, shown upright in the searchable PDF and redrawn upright in the
+  retyped one. A classifier tells how each page is turned, and a page it
+  finds turned is read each way it might be and kept the way it reads
+  best, as it takes about one upright page in a hundred for turned.
 - **Matches the typeface.** Each line's kind (serif, sans-serif or Kai)
   and weight are judged from its strokes, and its size and spacing from
   its ink, so retyped lines land where they were printed. Words set bold
@@ -83,9 +95,12 @@ the right, as **Compare with Original** shows them:
   as printed, and underlines are kept.
 - **Your own fonts.** Set the retyped PDF in any embeddable TrueType font
   or collection, such as macOS's Songti SC or Times.
+- **Fast on a Mac.** The text models run on the GPU and the Neural
+  Engine through Core ML: a page of a picture dictionary takes about 0.7
+  seconds on an M1 Pro, against 1.6 on its CPU, once the models are
+  compiled, which takes seconds in the background as the app starts.
 - **Long documents.** Rendering, OCR and redrawing run as a pipeline, and
-  memory does not grow with the document. A page of dense text takes
-  about 2 seconds on an M1 Pro.
+  memory does not grow with the document.
 - **No cgo.** Everything builds with `CGO_ENABLED=0`: ONNX Runtime is
   loaded at run time with purego, and PDFium runs as WebAssembly.
 - **Updates itself.** Signed updates from GitHub releases, in a window
@@ -98,7 +113,9 @@ the right, as **Compare with Original** shows them:
 Download `Unscan-<version>-arm64.dmg` from the
 [latest release](https://github.com/tacshi/Unscan/releases/latest), open
 it and drag Unscan to Applications. It runs on Macs with Apple silicon,
-and needs about 3 GB of memory while pages are read.
+and needs about 6 GB of memory while pages are read, most of it the
+models on the GPU. A Mac of less than 16 GB reads on the CPU, in about
+3.5 GB.
 
 The app is signed with a Developer ID and notarized by Apple, and carries
 its models, fonts and runtime, so it reads PDFs offline from the first
@@ -122,7 +139,10 @@ on to the next, and **Cancel All** stops them all.
 
 **Viewing and saving.** When it is done, browse the document a page at a
 time, as the **Searchable PDF**, the **Retyped PDF** or the **Text**; the
-arrow keys turn the pages. **Save…** (⌘S) saves the one shown.
+buttons at either side of the page, or the arrow keys, turn the pages,
+and a click on the page's number, or **View › Go to Page…** (⌥⌘G), goes
+to the page whose number is typed there. **Save…** (⌘S) saves the one
+shown.
 
 **Comparing.** The button beside **Save…**, or **View › Compare with
 Original**, shows the scanned page beside the retyped page or its text,
@@ -135,13 +155,17 @@ Its searchable and retyped PDFs are kept in `history/` in the app's user
 data folder (`~/Library/Application Support/Unscan` on macOS) until you
 remove them: **Remove from History…** in a row's context menu, or Delete,
 removes one, and **Clear…** removes them all. The scans themselves are
-never touched.
+never touched. **+** beside the sidebar's button, or **File › New** (⌘N),
+leaves the document shown for the welcome, to open another PDF; its row
+in the sidebar shows it again.
 
 | Shortcut | Action |
 |---|---|
+| ⌘N | Go to the welcome, to open another PDF |
 | ⌘O | Open a PDF |
 | ⌘S | Save the form shown |
 | ← → | Turn the pages |
+| ⌥⌘G | Go to a page |
 | ⌥⌘S | Hide or show the sidebar |
 | Delete | Remove the PDF chosen in the sidebar from history |
 | ⌘, | Settings |
@@ -181,6 +205,7 @@ written when asked for.
 | `-resources` | `resources` | The directory of the models, fonts and ONNX Runtime |
 | `-dpi` | `300` | The resolution pages are read at |
 | `-force` | `false` | Read pages that already have text too |
+| `-cpu` | `false` | Run every model on the CPU, not the text models on the GPU through Core ML |
 | `-serif`, `-serif-bold`, `-sans`, `-sans-bold`, `-kai` | built-in fonts | Font files to set the retyped PDF in (see below) |
 
 ### Your own fonts
@@ -229,15 +254,16 @@ Good to know:
   Runtime is also fetched for Linux and Windows (amd64 and arm64) for
   cross-platform builds. Intel Macs are not supported (see
   [Known limitations](#known-limitations-and-roadmap)).
-- About 180 MB of models, fonts and runtime, which `cmd/fetchdeps`
-  downloads, and about 3 GB of memory while pages are read.
+- About 320 MB of models, fonts and runtime, which `cmd/fetchdeps`
+  downloads, and about 6 GB of memory while pages are read (3.5 GB on
+  the CPU).
 
 ### Getting started
 
 ```sh
 git clone https://github.com/tacshi/Unscan.git
 cd Unscan
-go run ./cmd/fetchdeps    # models, fonts and this machine's ONNX Runtime (~180 MB)
+go run ./cmd/fetchdeps    # models, fonts and this machine's ONNX Runtime (~320 MB)
 go tool mygo dev          # run the app, with live reload
 ```
 
@@ -248,6 +274,8 @@ out:
 resources/
 ├── models/det.onnx            PP-OCRv6_small_det (9.9 MB, Apache-2.0)
 ├── models/rec.onnx            PP-OCRv6_small_rec (21 MB, Apache-2.0)
+├── models/ori.onnx            PP-LCNet_x1_0_doc_ori, how a page is turned (6.8 MB, Apache-2.0)
+├── models/layout.onnx         PP-DocLayoutV3, a page's blocks and reading order (131 MB, Apache-2.0)
 ├── models/rec_dict.txt        its 18,708 characters, from inference.yml
 ├── fonts/NotoSerifSC-{Regular,Bold}.ttf  the retyped PDF's serif faces (15 MB each, OFL-1.1)
 ├── fonts/NotoSansSC-{Regular,Bold}.ttf   and its sans-serif ones (11 MB each, OFL-1.1)
@@ -324,20 +352,23 @@ Everything builds with `CGO_ENABLED=0`, as MyGo requires:
 
 | Part | How it runs without cgo |
 |---|---|
-| OCR models | [ONNX Runtime](https://onnxruntime.ai) 1.27.1, loaded at run time with [purego](https://github.com/ebitengine/purego) through [onnxruntime_purego](https://github.com/getcharzp/onnxruntime_purego) |
+| OCR models | [ONNX Runtime](https://onnxruntime.ai) 1.27.1, loaded at run time with [purego](https://github.com/ebitengine/purego) through [onnxruntime_purego](https://github.com/getcharzp/onnxruntime_purego); on macOS, its Core ML execution provider runs the text models on the GPU |
 | PDF rendering and editing | [PDFium](https://pdfium.googlesource.com/pdfium/) compiled to WebAssembly, run by [wazero](https://wazero.io) through [go-pdfium](https://github.com/klippa-app/go-pdfium) |
 | Pre- and post-processing | Go ports of PaddleOCR's text detection (DB) and recognition (CTC) steps |
 | Text layer | A small PDF writer with a "glyphless" font, as Tesseract uses |
 | Retyped PDF | The same writer, a TrueType subsetter (`internal/ttf`) that embeds just the glyphs used, and PDFium to put the pages together |
 
-Pages go through a pipeline: PDFium renders a page while the models read
-the one before, and pages read before that are redrawn for the retyped
-PDF on goroutines of their own. The models run a thread per performance
-core and are kept busy. PDFium reads the scan from its file as it needs
-it, the PDFs made are written to files as they go, and the document is
+Each page is turned upright if it was scanned turned, and its lines are
+found, read and put in the order its blocks read in, which a layout
+model finds on the CPU while the GPU reads the lines. Pages go through a
+pipeline: PDFium renders a page while the models read the one before,
+and pages read before that are redrawn for the retyped PDF on goroutines
+of their own. The models are kept busy, on the CPU with a thread per
+performance core. PDFium reads the scan from its file as it needs it,
+the PDFs made are written to files as they go, and the document is
 opened anew every 32 pages to let go of the scans PDFium keeps. So while
 pages are read, memory does not grow with the document: it stays at
-about 3 GB, mostly the models.
+about 6 GB, mostly the models, or 3.5 GB on the CPU.
 
 To retype a page, Unscan maps the paper's color to white, measures each
 line's ink to a fraction of a pixel, judges its face from its strokes
@@ -368,7 +399,7 @@ fonts.go                 the user's fonts for retyped PDFs: their fields in Sett
 settings.go              the Settings dialog: the fonts, and whether to check for and install updates
 cmd/unscan/              the command line version
 cmd/fetchdeps/           downloads and checks the models and runtimes
-internal/ocr/            PP-OCRv6: detection, cropping, recognition, reading order
+internal/ocr/            PP-OCRv6: detection, cropping, recognition; orientation, layout and reading order; Core ML
 internal/pdfocr/         rendering, the text layer, grafting it onto the PDF, the retyped PDF, and previews
 internal/ttf/            TrueType parsing (fonts and collections) and subsetting, for the retyped PDF
 internal/testscan/       synthetic scans and scanned PDFs for tests
@@ -382,14 +413,21 @@ docs/                    how it works, in depth, the app icon's source (icon.svg
   pages with Apple Vision on macOS instead (for example through
   [`tmc/apple/vision`](https://pkg.go.dev/github.com/tmc/apple/vision),
   which also uses purego).
-- **Reading order** comes from line positions only, so multi-column pages
-  interleave in the text output, though the searchable PDF is unaffected.
-  A layout model (PP-DocLayoutV3, ONNX) would order them.
-- **Orientation:** there is no page or text-line orientation classifier
-  yet, so pages scanned upside down read poorly. PaddleOCR's
-  `PP-LCNet_x1_0_doc_ori` (ONNX, 6.5 MB) fits the same pipeline.
-- **Speed:** OCR runs on the CPU. The CoreML and DirectML execution
-  providers are untried; `onnxruntime_purego` binds neither yet.
+- **Reading order** follows the layout model's blocks, which it misses
+  now and then on pages of pictures and labels; lines no block covers
+  are put in by where they lie. Within a block, lines read in rows, so
+  vertical text reads across rather than down.
+- **Orientation:** a page is turned upright as a whole; a page whose
+  classifier is unsure, under even odds, is read as it is, and one turned
+  by a few degrees is read as scanned. Lines turned on an upright page,
+  such as a spine's title, read as their boxes run.
+- **Speed:** on Linux and Windows, OCR runs on the CPU, where the layout
+  model adds about half a second a page; DirectML is untried. On macOS,
+  Core ML compiles the text models for each size they are given, which
+  takes seconds the first time, in the background, while the CPU reads;
+  the layout model runs on the CPU, as Core ML cannot compile it.
+  `onnxruntime_purego` exports no way to add an execution provider, so
+  `internal/ocr` calls ONNX Runtime for it.
 - **Characters outside the BMP** (such as emoji) are written as two UTF-16
   code units, which some viewers extract as two characters.
 - **Retyped PDF:**
@@ -423,7 +461,7 @@ Unscan builds on these projects, under their own licenses:
 
 | Component | License |
 |---|---|
-| [PP-OCRv6](https://github.com/PaddlePaddle/PaddleOCR) models | Apache-2.0 |
+| [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR) models: PP-OCRv6, PP-LCNet_x1_0_doc_ori, PP-DocLayoutV3 | Apache-2.0 |
 | [ONNX Runtime](https://onnxruntime.ai) | MIT |
 | [PDFium](https://pdfium.googlesource.com/pdfium/) | Apache-2.0 / BSD |
 | [go-pdfium](https://github.com/klippa-app/go-pdfium), [onnxruntime_purego](https://github.com/getcharzp/onnxruntime_purego), [purego](https://github.com/ebitengine/purego) | MIT / Apache-2.0 |

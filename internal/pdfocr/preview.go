@@ -13,11 +13,11 @@ import (
 // fits in size by size pixels, with PDFium's second instance while a
 // conversion runs.
 func (c *Converter) Preview(path string, index, size int) (*image.RGBA, error) {
-	f, err := os.Open(path)
+	f, err := os.Open(path) // #nosec G304 -- a PDF the user opened, or in the history
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }() // read only
 	info, err := f.Stat()
 	if err != nil {
 		return nil, err
@@ -26,12 +26,12 @@ func (c *Converter) Preview(path string, index, size int) (*image.RGBA, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer inst.Close()
+	defer func() { _ = inst.Close() }() // back to the pool
 	doc, err := open(inst, f, info.Size())
 	if err != nil {
 		return nil, err
 	}
-	defer inst.FPDF_CloseDocument(&requests.FPDF_CloseDocument{Document: doc})
+	defer closeDoc(inst, doc)
 	res, err := inst.RenderPageInPixels(&requests.RenderPageInPixels{
 		Page:  requests.Page{ByIndex: &requests.PageByIndex{Document: doc, Index: index}},
 		Width: size, Height: size,
@@ -40,8 +40,9 @@ func (c *Converter) Preview(path string, index, size int) (*image.RGBA, error) {
 		return nil, err
 	}
 	defer res.CleanupFunc()
-	src := res.Result.Image
-	img := image.NewRGBA(image.Rect(0, 0, src.Rect.Dx(), src.Rect.Dy()))
-	draw.Draw(img, img.Rect, src, src.Rect.Min, draw.Src)
+	src := res.Result.RenderedImage
+	b := src.Bounds()
+	img := image.NewRGBA(image.Rect(0, 0, b.Dx(), b.Dy()))
+	draw.Draw(img, img.Rect, src, b.Min, draw.Src)
 	return img, nil
 }

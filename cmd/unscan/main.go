@@ -30,13 +30,14 @@ func main() {
 	resources := flag.String("resources", "resources", "the directory of the models and ONNX Runtime")
 	dpi := flag.Int("dpi", 300, "the resolution pages are read at")
 	force := flag.Bool("force", false, "read pages that already have text too")
+	cpu := flag.Bool("cpu", false, "run every model on the CPU, not the text models on the GPU through Core ML")
 	var fontFiles [len(userFonts)]string
 	for i, f := range userFonts {
 		flag.StringVar(&fontFiles[i], f.flag, "", fmt.Sprintf("a font file to set the text PDF's %s lines in, "+
 			"instead of %s: TrueType (.ttf), or a collection (.ttc), file.ttc#n for its font n from 0", f.lines, f.builtIn))
 	}
 	flag.Usage = func() {
-		fmt.Fprintf(flag.CommandLine.Output(), "usage: unscan [flags] scan.pdf\n")
+		_, _ = fmt.Fprintf(flag.CommandLine.Output(), "usage: unscan [flags] scan.pdf\n")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
@@ -53,7 +54,7 @@ func main() {
 	if err := paths.Check(); err != nil {
 		log.Fatalf("%v\nrun go run ./cmd/fetchdeps first, or point -resources at the files", err)
 	}
-	engine, err := ocr.New(paths, ocr.Options{})
+	engine, err := ocr.New(paths, ocr.Options{CPUOnly: *cpu, CacheDir: ocr.DefaultCacheDir()})
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -62,7 +63,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer conv.Close()
+	defer func() { _ = conv.Close() }()
 	if *textPDF != "" {
 		fonts, err := pdfocr.LoadTextFonts(*resources)
 		if err != nil {
@@ -102,7 +103,7 @@ func main() {
 	log.Printf("%d pages (%d had text already), %d lines in %.1fs → %s",
 		len(pages), skipped, lines, time.Since(start).Seconds(), *out)
 	if *txt != "" {
-		if err := os.WriteFile(*txt, []byte(pdfocr.Text(pages)), 0o644); err != nil {
+		if err := os.WriteFile(*txt, []byte(pdfocr.Text(pages)), 0o644); err != nil { // #nosec G306 -- the user's document
 			log.Fatal(err)
 		}
 	}
@@ -157,11 +158,11 @@ func readUserFonts(files [len(userFonts)]string) (pdfocr.TextFonts, error) {
 // convert converts the PDF at in, writing the searchable PDF to out and,
 // if textPDF is not "", the text PDF there.
 func convert(ctx context.Context, conv *pdfocr.Converter, in, out, textPDF string, opts pdfocr.Options) ([]pdfocr.Page, error) {
-	f, err := os.Open(in)
+	f, err := os.Open(in) // #nosec G304 -- the PDF given
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }() // read only
 	var files []*partial
 	defer func() {
 		for _, p := range files {
@@ -209,7 +210,7 @@ type partial struct {
 
 func create(path string) (*partial, error) {
 	if fi, err := os.Stat(path); err == nil && !fi.Mode().IsRegular() {
-		f, err := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, 0)
+		f, err := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, 0) // #nosec G304 -- where the user writes it
 		if err != nil {
 			return nil, err
 		}
@@ -220,8 +221,8 @@ func create(path string) (*partial, error) {
 		return nil, err
 	}
 	if err := f.Chmod(0o644); err != nil {
-		f.Close()
-		os.Remove(f.Name())
+		_ = f.Close()
+		_ = os.Remove(f.Name())
 		return nil, err
 	}
 	return &partial{File: f, path: path}, nil
@@ -244,9 +245,9 @@ func (p *partial) finish() error {
 // discard removes the file, unless it was finished.
 func (p *partial) discard() {
 	if !p.finished {
-		p.Close()
+		_ = p.Close()
 		if !p.direct {
-			os.Remove(p.Name())
+			_ = os.Remove(p.Name())
 		}
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"math"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -19,10 +20,13 @@ const (
 	footerHeight  = 40
 	pageMargin    = 24 // around a page's preview
 	captionHeight = 28 // of the name over each page compared
+	turnSize      = 48 // of the buttons that turn the page, at its sides
+	turnMargin    = 8  // around them
 )
 
 // Icons, drawn in strokes of the text's color.
 var (
+	newIcon      = icon(`<circle cx="12" cy="12" r="9"/><path d="M8 12h8M12 8v8"/>`)
 	documentIcon = icon(`<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M9 13h6M9 17h4"/>`)
 	previousIcon = icon(`<path d="m15 18-6-6 6-6"/>`)
 	nextIcon     = icon(`<path d="m9 18 6-6-6-6"/>`)
@@ -89,6 +93,13 @@ func (a *app) titleBar(c *ui.Context) {
 		title.Children(func() {
 			if a.listed() {
 				a.sidebarButton(c)
+			}
+			if a.phase == done {
+				key := "⌘N"
+				if runtime.GOOS != "darwin" {
+					key = "Ctrl+N"
+				}
+				iconButton(c, newIcon, "New", key, false).OnClick(a.startNew)
 			}
 			switch a.phase {
 			case working:
@@ -266,13 +277,27 @@ func (a *app) document(c *ui.Context, dragging bool) {
 		w -= sidebarWidth
 	}
 	h -= barHeight + footerHeight
+	turns := len(r.pages) > 1
+	if turns {
+		w -= 2 * (turnSize + 2*turnMargin)
+	}
 	body := ui.Box(c).Grow(1).MinHeight(0).Background(t.Surface).Focusable().FocusRing(false).Bind(&a.pageArea)
 	body.Children(func() {
-		if a.compares() {
-			a.compare(c, page, w, h)
-		} else {
-			a.pane(c, a.form, "", page, w, h)
-		}
+		ui.Row(c).Grow(1).MinHeight(0).AlignItems(ui.Stretch).Children(func() {
+			if turns {
+				turnButton(c, previousIcon, "Previous Page", "←", a.at == 0).OnClick(func() { a.turn(a.at - 1) })
+			}
+			ui.Column(c).Grow(1).MinWidth(0).Children(func() {
+				if a.compares() {
+					a.compare(c, page, w, h)
+				} else {
+					a.pane(c, a.form, "", page, w, h)
+				}
+			})
+			if turns {
+				turnButton(c, nextIcon, "Next Page", "→", a.at == len(r.pages)-1).OnClick(func() { a.turn(a.at + 1) })
+			}
+		})
 		if dragging {
 			ui.Column(c).Absolute().Top(8).Right(8).Bottom(8).Left(8).Center().Radius(12).
 				Border(2, t.Accent).BorderStyle(ui.BorderDashed).Background(t.Background.Alpha(0.9)).
@@ -292,13 +317,79 @@ func (a *app) document(c *ui.Context, dragging bool) {
 	ui.Row(c).Height(footerHeight).Shrink(0).Padding(0, 8, 0, 16).Gap(4).
 		BorderWidth(1, 0, 0, 0).BorderColor(t.Border).Children(func() {
 		ui.Text(c, note).FontSize(12).TextColor(t.TextMuted).SingleLine().Grow(1).MinWidth(0)
-		if len(r.pages) < 2 {
-			return
+		if len(r.pages) > 1 {
+			a.pageNumber(c, len(r.pages))
 		}
-		iconButton(c, previousIcon, "Previous Page", "←", a.at == 0).OnClick(func() { a.turn(a.at - 1) })
-		ui.Textf(c, "%d of %d", a.at+1, len(r.pages)).FontFeatures("tnum").MinWidth(64).TextAlign(ui.Center)
-		iconButton(c, nextIcon, "Next Page", "→", a.at == len(r.pages)-1).OnClick(func() { a.turn(a.at + 1) })
 	})
+}
+
+// pageNumber says which page shows, of how many. Clicked, or with Go to
+// Page, it takes the number of a page to go to: Enter goes there, and
+// Escape, or a click elsewhere, leaves it. Either way the focus goes back
+// to the page, whose arrows turn it.
+func (a *app) pageNumber(c *ui.Context, pages int) {
+	t := c.Theme()
+	if !a.jumping {
+		key := "⌥⌘G"
+		if runtime.GOOS != "darwin" {
+			key = "Ctrl+Alt+G"
+		}
+		b := ui.ButtonBase(c).Label("Go to Page").Tooltip("Go to Page ("+key+")").
+			Padding(t.Space(1), t.Space(2)).Radius(t.Radius).OnClick(a.goToPage)
+		switch {
+		case b.Pressed():
+			b.Background(t.SurfacePressed)
+		case b.Hovered():
+			b.Background(t.SurfaceHover)
+		}
+		b.Children(func() { ui.Textf(c, "%d of %d", a.at+1, pages).FontFeatures("tnum") })
+		return
+	}
+	ui.Row(c).Gap(t.Space(1.5)).Padding(0, t.Space(2)).Children(func() {
+		in := ui.TextInput(c, &a.jumpTo).Width(t.Space(14)).Placeholder(strconv.Itoa(a.at + 1)).
+			Label("Page").FontFeatures("tnum").AutoFocus()
+		leave := func() {
+			a.jumping = false
+			a.pageArea.Focus(c)
+		}
+		switch {
+		case in.Submitted():
+			if n, err := strconv.Atoi(strings.TrimSpace(a.jumpTo)); err == nil {
+				a.turn(n - 1)
+			}
+			leave()
+		case in.Shortcut(0, ui.KeyEscape):
+			leave()
+		case !in.Focused():
+			a.jumping = false // the focus went elsewhere, where it stays
+		}
+		ui.Textf(c, "of %d", pages).FontFeatures("tnum")
+	})
+}
+
+// turnButton is a large round button that turns the page, in a margin of
+// its own beside the room the page shows in, halfway down it: back on the
+// left, on at the right, as the arrows turn it. At the first page or the
+// last, it fades.
+func turnButton(c *ui.Context, icon *ui.SVG, label, key string, disabled bool) ui.Element {
+	t := c.Theme()
+	side := ui.Column(c).Shrink(0).Padding(0, turnMargin).Justify(ui.Center)
+	var b ui.Element
+	side.Children(func() {
+		b = ui.ButtonBase(c).Label(label).Tooltip(label+" ("+key+")").Disabled(disabled).
+			Width(turnSize).Height(turnSize).Center().Radius(turnSize/2).
+			Background(t.Background.Alpha(0.92)).Border(1, t.Border).Shadow(0, 2, 8, 0, ui.RGBA(0, 0, 0, 0.12))
+		switch {
+		case disabled:
+			b.Opacity(0.35)
+		case b.Pressed():
+			b.Background(t.SurfacePressed)
+		case b.Hovered():
+			b.Background(t.SurfaceHover)
+		}
+		b.Children(func() { ui.Icon(c, icon).FontSize(24) })
+	})
+	return b
 }
 
 // iconButton is a button showing an icon, with no face until hovered, as
@@ -326,13 +417,34 @@ func iconButton(c *ui.Context, icon *ui.SVG, label, key string, disabled bool) u
 // compare shows the original page beside the page in the form shown, in w
 // by h, split where the user left it.
 func (a *app) compare(c *ui.Context, page pdfocr.Page, w, h float32) {
-	least := c.Theme().Space(10) // as narrow as the split lets a side be
+	t := c.Theme()
+	least := t.Space(10) // as narrow as the split lets a side be
 	left := min(max(w*cmp.Or(a.split, 0.5), least), w-1-least)
-	ui.Split(c, &left, func() {
-		a.pane(c, searchable, "Original", page, left, h)
-	}, func() {
-		a.pane(c, a.form, forms[a.form], page, w-1-left, h)
-	}).Grow(1).MinHeight(0).OnChange(func() { a.split = left / w })
+	// In a box of their own, which the grip is placed in.
+	ui.Box(c).Grow(1).MinHeight(0).Children(func() {
+		ui.Split(c, &left, func() {
+			a.pane(c, searchable, "Original", page, left, h)
+		}, func() {
+			a.pane(c, a.form, forms[a.form], page, w-1-left, h)
+		}).Grow(1).MinHeight(0).OnChange(func() { a.split = left / w })
+
+		// The split's divider takes the keyboard focus as its grip is
+		// dragged, and the arrows then move it rather than turn the page:
+		// this grip, over the split's, drags it with the focus left where
+		// it was. The divider takes the focus from Tab alone, as the
+		// arrows move it then.
+		grip := t.Space(1.5) // as wide as the split's
+		g := ui.Box(c).Absolute().Top(0).Bottom(0).Left(left - (grip-1)/2).Width(grip).Cursor(ui.CursorResizeEW)
+		dx, _, held := g.Dragged()
+		if held && dx != 0 {
+			a.split = min(max(left+dx, least), w-1-least) / w
+		}
+		if held || g.Hovered() {
+			g.Draw(func(p *ui.Painter, r ui.Rect) {
+				p.Fill(ui.Rect{X: r.X + (grip-1)/2, Y: r.Y, W: 1, H: r.H}, t.Accent, 0)
+			})
+		}
+	})
 }
 
 // pane shows the page in form, in w by h, under name when it is not "".

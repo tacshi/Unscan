@@ -52,7 +52,7 @@ func TestRedraw(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer face.Close()
+	defer closeOrFail(t, face)
 
 	const w, h = 1000, 400
 	// Ink filters the light the paper reflects, so a scan shows it tinted
@@ -154,7 +154,7 @@ func TestRedrawOnColor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer face.Close()
+	defer closeOrFail(t, face)
 	img := image.NewRGBA(image.Rect(0, 0, 800, 300))
 	draw.Draw(img, img.Rect, image.White, image.Point{}, draw.Src)
 	band := image.Rect(0, 60, 800, 200)
@@ -237,7 +237,7 @@ func TestRedrawSqueezed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer face.Close()
+	defer closeOrFail(t, face)
 	img := image.NewRGBA(image.Rect(0, 0, 800, 200))
 	draw.Draw(img, img.Rect, image.White, image.Point{}, draw.Src)
 	dr := font.Drawer{Dst: img, Src: image.Black, Face: face, Dot: fixed.P(100, 130)}
@@ -291,7 +291,7 @@ func TestEdgeMarks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer face.Close()
+	defer closeOrFail(t, face)
 	// An A5 page at 150 DPI.
 	const w, h, dpi = 874, 1240, 150
 	img := image.NewRGBA(image.Rect(0, 0, w, h))
@@ -461,7 +461,7 @@ func TestStyle(t *testing.T) {
 		}
 		for i, got := range d.styles(texts, frames, inks, refs, nil) {
 			l := page.lines[i]
-			if got != l.want && !(l.want&either != 0 && got&^1 == l.want&^either) {
+			if got != l.want && (l.want&either == 0 || got&^1 != l.want&^either) {
 				t.Errorf("%s page at %.0f px: %s [%d] %q set in %s, want %s",
 					page.name, page.size, filepath.Base(l.path), l.index, l.text, names[got], names[l.want&^either])
 			}
@@ -478,7 +478,7 @@ func scanLine(t *testing.T, sf *opentype.Font, text string, size float64) (*imag
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer face.Close()
+	defer closeOrFail(t, face)
 	x0, base := 40, int(1.5*size)
 	dr := font.Drawer{Face: face}
 	adv := dr.MeasureString(text).Ceil()
@@ -488,7 +488,7 @@ func scanLine(t *testing.T, sf *opentype.Font, text string, size float64) (*imag
 	dr = font.Drawer{Dst: sharp, Src: image.Black, Face: face, Dot: fixed.P(x0, base)}
 	dr.DrawString(text)
 	img := image.NewRGBA(sharp.Rect)
-	rng := rand.New(rand.NewPCG(3, 4))
+	rng := rand.New(rand.NewPCG(3, 4)) // #nosec G404 -- a scan's noise, the same each run
 	for y := range h {
 		for x := range w {
 			sum, n := 0, 0
@@ -531,7 +531,7 @@ func TestSize(t *testing.T) {
 			base := int(2 * size)
 			dr := font.Drawer{Dst: img, Src: image.Black, Face: face, Dot: fixed.P(40, base)}
 			dr.DrawString(text)
-			face.Close()
+			closeOrFail(t, face)
 			box := ocr.Quad{{X: 30, Y: float64(base) - 1.2*size}, {X: float64(50 + adv), Y: float64(base) - 1.2*size},
 				{X: float64(50 + adv), Y: float64(base) + 0.4*size}, {X: 30, Y: float64(base) + 0.4*size}}
 			p := newPixels(img)
@@ -559,7 +559,7 @@ func TestLeaders(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer face.Close()
+	defer closeOrFail(t, face)
 	img := image.NewRGBA(image.Rect(0, 0, 1000, 300))
 	draw.Draw(img, img.Rect, image.White, image.Point{}, draw.Src)
 	dot := func(x, y int) { draw.Draw(img, image.Rect(x, y-5, x+5, y), image.Black, image.Point{}, draw.Src) }
@@ -741,8 +741,8 @@ func TestCommaGap(t *testing.T) {
 		return face
 	}
 	cjk, latin := faceOf(cjkFont), faceOf(latinFont)
-	defer cjk.Close()
-	defer latin.Close()
+	defer closeOrFail(t, cjk)
+	defer closeOrFail(t, latin)
 	const text = "Daniel P.Bovet和Marco Cesati携手为我们打造了这本鸿篇巨著，自此我们有了火把"
 	for _, track := range []int{7, 20} {
 		img := image.NewRGBA(image.Rect(0, 0, 2200, 200))
@@ -809,7 +809,7 @@ func TestCommaGap(t *testing.T) {
 // systemFont reads a font of macOS's, or skips the test without it.
 func systemFont(t *testing.T, path string) []byte {
 	t.Helper()
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) // #nosec G304 -- a font of macOS's
 	if err != nil {
 		t.Skipf("%v: a macOS font", err)
 	}
@@ -963,7 +963,7 @@ func TestStrayDots(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer face.Close()
+	defer closeOrFail(t, face)
 	for _, c := range []struct {
 		drawn, read, want   string
 		dotBefore, dotAfter bool
@@ -1043,7 +1043,7 @@ func TestAsPrinted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer face.Close()
+	defer closeOrFail(t, face)
 	for _, c := range []struct {
 		name, drawn, read string
 		score             float32
@@ -1154,7 +1154,7 @@ func TestEnDashes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer face.Close()
+	defer closeOrFail(t, face)
 	for _, c := range []struct{ drawn, read, want string }{
 		{"28–29", "28-29", "28–29"},
 		{"555-1234", "555-1234", "555-1234"},
@@ -1238,7 +1238,7 @@ func TestRedrawColors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer face.Close()
+	defer closeOrFail(t, face)
 	img := image.NewRGBA(image.Rect(0, 0, 800, 150))
 	draw.Draw(img, img.Rect, image.White, image.Point{}, draw.Src)
 	blue := image.NewUniform(color.RGBA{0, 121, 203, 255})
@@ -1343,7 +1343,7 @@ func TestTraditionalFonts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer drawn.Close()
+	defer closeOrFail(t, drawn)
 	for _, c := range []struct {
 		read        string
 		traditional bool
@@ -1419,7 +1419,7 @@ func TestRedrawPanel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer face.Close()
+	defer closeOrFail(t, face)
 	img := image.NewRGBA(image.Rect(0, 0, 1600, 1200))
 	draw.Draw(img, img.Rect, image.White, image.Point{}, draw.Src)
 	panel := image.Rect(100, 50, 700, 350)
@@ -1495,7 +1495,7 @@ func TestSlant(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer face.Close()
+	defer closeOrFail(t, face)
 	for _, k := range []float64{0, 0.12, 0.2} {
 		for _, text := range []string{"Good morning", "Have a nice day", "My name is Tom"} {
 			img := image.NewRGBA(image.Rect(0, 0, 600, 100))
@@ -1564,8 +1564,8 @@ func TestWordFaces(t *testing.T) {
 		return face
 	}
 	regular, bold := faceOf(fonts.Sans.Data), faceOf(fonts.SansBold.Data)
-	defer regular.Close()
-	defer bold.Close()
+	defer closeOrFail(t, regular)
+	defer closeOrFail(t, bold)
 	img := image.NewRGBA(image.Rect(0, 0, 1400, 1000))
 	draw.Draw(img, img.Rect, image.White, image.Point{}, draw.Src)
 	box := func(x0, x1, base int) ocr.Quad {
@@ -1628,7 +1628,7 @@ func TestUnderline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer face.Close()
+	defer closeOrFail(t, face)
 	for _, gap := range []int{0, 3} {
 		img := image.NewRGBA(image.Rect(0, 0, 1000, 600))
 		draw.Draw(img, img.Rect, image.White, image.Point{}, draw.Src)
@@ -1672,7 +1672,7 @@ func TestTracked(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer face.Close()
+	defer closeOrFail(t, face)
 	for _, c := range []struct{ drawn, read string }{
 		{"DICTIONARY", "DICTIONARY"},
 		{"PICTURE", "PIC T U R E"},
@@ -1777,7 +1777,7 @@ func TestUprightY(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer face.Close()
+	defer closeOrFail(t, face)
 	img := image.NewRGBA(image.Rect(0, 0, 1000, 150))
 	draw.Draw(img, img.Rect, image.White, image.Point{}, draw.Src)
 	const text = "Why you say yes, yay"

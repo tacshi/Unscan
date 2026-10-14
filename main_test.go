@@ -32,7 +32,7 @@ type fixture struct {
 func newFixture(t *testing.T, convert func(ctx context.Context, path string, p pdfocr.Progress) (*result, error)) *fixture {
 	dir := t.TempDir()
 	f := &fixture{app: &app{sidebar: true}, dir: dir, scan: filepath.Join(dir, "scan.pdf")}
-	if err := os.WriteFile(f.scan, []byte("%PDF-1.4"), 0o644); err != nil {
+	if err := os.WriteFile(f.scan, []byte("%PDF-1.4"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	var suggested []string
@@ -72,7 +72,7 @@ func newFixture(t *testing.T, convert func(ctx context.Context, path string, p p
 // tempFile writes data to a file of its own, as a conversion does.
 func tempFile(t *testing.T, data string) string {
 	path := filepath.Join(t.TempDir(), "out.pdf")
-	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return path
@@ -163,7 +163,7 @@ func TestConvertFlow(t *testing.T) {
 		click(t, tt, s.form)
 		click(t, tt, "Save…")
 		path := filepath.Join(f.dir, s.file)
-		if got, _ := os.ReadFile(path); string(got) != s.want {
+		if got, _ := os.ReadFile(path); string(got) != s.want { // #nosec G304 -- in the test's directory
 			t.Errorf("saved %q in %s", got, s.file)
 		}
 		wantTexts(t, tt, "Saved “"+s.file+"”")
@@ -419,11 +419,11 @@ func TestHistoryOnDisk(t *testing.T) {
 			dir:   filepath.Join(dir, fmt.Sprintf("read-%d", i)),
 		}
 		r.pdf, r.textPDF = filepath.Join(r.dir, "searchable.pdf"), filepath.Join(r.dir, "text.pdf")
-		if err := os.Mkdir(r.dir, 0o755); err != nil {
+		if err := os.Mkdir(r.dir, 0o700); err != nil {
 			t.Fatal(err)
 		}
 		for _, path := range []string{r.pdf, r.textPDF} {
-			if err := os.WriteFile(path, []byte("%PDF "+file), 0o644); err != nil {
+			if err := os.WriteFile(path, []byte("%PDF "+file), 0o600); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -435,10 +435,10 @@ func TestHistoryOnDisk(t *testing.T) {
 	}
 	unfinished := func(name, file string, age time.Duration) string {
 		path := filepath.Join(dir, name)
-		if err := os.Mkdir(path, 0o755); err != nil {
+		if err := os.Mkdir(path, 0o700); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(path, file), []byte("{"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(path, file), []byte("{"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		if err := os.Chtimes(path, now.Add(-age), now.Add(-age)); err != nil {
@@ -536,6 +536,29 @@ func TestCompare(t *testing.T) {
 	if f.split <= 0.5 || f.split >= 0.75 {
 		t.Errorf("split %v after a drag to the right", f.split)
 	}
+	// The arrows go on turning the page, as the drag leaves the keyboard
+	// focus where it was; from Tab, they move the divider.
+	dragged := f.split
+	tt.Key(0, ui.KeyLeft)
+	tt.Frame()
+	if f.at != 0 || f.split != dragged {
+		t.Errorf("after a drag, Left shows page %d, split %v", f.at+1, f.split)
+	}
+	moved := false
+	for range 20 {
+		tt.Key(0, ui.KeyTab)
+		tt.Frame()
+		tt.Key(0, ui.KeyRight)
+		tt.Frame()
+		if moved = f.split > dragged; moved {
+			break
+		}
+	}
+	if !moved {
+		t.Errorf("Tab and Right never moved the divider: split %v", f.split)
+	}
+	f.turn(1)
+	tt.Frame()
 
 	click(t, tt, "Text")
 	wantCaptions(t, tt, "Original", "Text")
@@ -814,7 +837,7 @@ func TestSavedFonts(t *testing.T) {
 	if !reflect.DeepEqual(got, fonts) {
 		t.Errorf("read %+v, want %+v", got, fonts)
 	}
-	if err := os.WriteFile(path, []byte("{"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte("{"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if got := loadFonts(path); !reflect.DeepEqual(got, fontChoices{}) {
@@ -952,6 +975,112 @@ func TestQueue(t *testing.T) {
 	}
 	if attended != 1 || f.dock[len(f.dock)-1] != -1 {
 		t.Errorf("attended %d times, Dock %v", attended, f.dock)
+	}
+}
+
+// TestStartNew goes from a document to the welcome with New, keeping the
+// history, whose row shows the document again. A PDF dropped there while
+// another is read waits, and the progress shows.
+func TestStartNew(t *testing.T) {
+	f := newFixture(t, readFake(t))
+	later := &spawnLater{}
+	f.fx.spawn = later.spawn
+	a, b := filepath.Join(f.dir, "a.pdf"), filepath.Join(f.dir, "b.pdf")
+	tt := ui.NewTester(f.view, 960, 720)
+	f.add(a)
+	for later.step() {
+	}
+	tt.Frame()
+	if f.phase != done || !f.menus[len(f.menus)-1].startNew {
+		t.Fatalf("phase %v, menu %+v", f.phase, f.menus[len(f.menus)-1])
+	}
+
+	click(t, tt, "New")
+	wantTexts(t, tt, "Drop a scanned PDF here", "a.pdf")
+	if f.phase != idle || f.result != nil || len(f.history) != 1 {
+		t.Errorf("phase %v, showing %+v, history %d long", f.phase, f.result, len(f.history))
+	}
+	if _, ok := tt.Find("New"); ok || f.menus[len(f.menus)-1].startNew {
+		t.Errorf("New can be chosen on the welcome: menu %+v", f.menus[len(f.menus)-1])
+	}
+	click(t, tt, "a.pdf")
+	if f.phase != done || f.result != f.history[0] {
+		t.Errorf("phase %v, showing %+v", f.phase, f.result)
+	}
+
+	f.add(b)
+	tt.Frame()
+	click(t, tt, "a.pdf") // the document again, as b is read
+	click(t, tt, "New")
+	f.drop([]string{f.scan})
+	tt.Frame()
+	if f.phase != working || f.file != b || !slices.Equal(f.queue, []string{f.scan}) {
+		t.Errorf("phase %v, reading %q, queue %q", f.phase, f.file, f.queue)
+	}
+	wantTexts(t, tt, "1 of 2 PDFs")
+}
+
+// TestGoToPage goes to the page whose number is typed in place of the
+// page shown's: Enter goes there, within the document, and leaves the
+// arrows turning the page; Escape, or a click elsewhere, goes nowhere.
+func TestGoToPage(t *testing.T) {
+	pages := make([]pdfocr.Page, 5)
+	for i := range pages {
+		pages[i] = pdfocr.Page{Text: fmt.Sprint("Page ", i+1), Lines: 1}
+	}
+	f := newFixture(t, func(ctx context.Context, path string, p pdfocr.Progress) (*result, error) {
+		return &result{pages: pages, pdf: tempFile(t, "%PDF"), textPDF: tempFile(t, "%PDF text")}, nil
+	})
+	tt := ui.NewTester(f.view, 960, 720)
+	click(t, tt, "Choose PDF…")
+	if !f.menus[len(f.menus)-1].goTo {
+		t.Errorf("Go to Page can't be chosen: menu %+v", f.menus[len(f.menus)-1])
+	}
+	jump := func(typed string, key ui.Key) {
+		t.Helper()
+		click(t, tt, "Go to Page")
+		if _, ok := tt.Find("Page"); !ok || !f.jumping {
+			t.Fatalf("no field for the page's number in %q", tt.Texts())
+		}
+		tt.Type(typed)
+		tt.Frame()
+		if key != 0 {
+			tt.Key(0, key)
+			tt.Frame()
+		}
+	}
+
+	jump("4", ui.KeyEnter)
+	wantTexts(t, tt, "4 of 5")
+	if f.jumping || f.at != 3 {
+		t.Errorf("jumping %v, at page %d", f.jumping, f.at+1)
+	}
+	tt.Key(0, ui.KeyRight)
+	tt.Frame()
+	if f.at != 4 {
+		t.Errorf("Right after the jump shows page %d", f.at+1)
+	}
+
+	jump("99", ui.KeyEnter)
+	if f.at != 4 {
+		t.Errorf("page 99 of 5 shows page %d", f.at+1)
+	}
+	jump("2", 0)
+	tt.Key(0, ui.KeyLeft) // in the field, the arrows move the caret
+	tt.Frame()
+	if f.at != 4 {
+		t.Errorf("Left in the field shows page %d", f.at+1)
+	}
+	tt.Key(0, ui.KeyEscape)
+	tt.Frame()
+	if f.jumping || f.at != 4 {
+		t.Errorf("after Escape, jumping %v, at page %d", f.jumping, f.at+1)
+	}
+
+	jump("1", 0)
+	click(t, tt, "Retyped PDF")
+	if f.jumping || f.at != 4 {
+		t.Errorf("after a click elsewhere, jumping %v, at page %d", f.jumping, f.at+1)
 	}
 }
 

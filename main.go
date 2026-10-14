@@ -92,6 +92,8 @@ type app struct {
 	form      int       // searchable, retyped or plainText
 	at        int       // the page shown
 	pageArea  ui.Handle // where the page shows, whose arrows turn it
+	jumping   bool      // the page's number takes the number of a page to go to
+	jumpTo    string    // typed there
 	previews  map[preview]rendered
 	rendering bool // a preview is being rendered
 
@@ -130,9 +132,10 @@ type rendered struct {
 // menuState is what the menu bar shows: the items that can be chosen now,
 // and the state of those that show one.
 type menuState struct {
-	open, save           bool
+	startNew, open, save bool
 	sidebar, haveHistory bool // the sidebar is to show; there is history to show in it
 	compare, canCompare  bool
+	goTo                 bool
 }
 
 // result is what reading a PDF made: its pages' text, and the PDFs, which
@@ -151,7 +154,7 @@ type result struct {
 // remove removes the result's files.
 func (r *result) remove() {
 	if r != nil && r.dir != "" {
-		os.RemoveAll(r.dir)
+		_ = os.RemoveAll(r.dir) // what is left goes with the history's next cleanup
 	}
 }
 
@@ -221,6 +224,10 @@ func (a *app) add(paths ...string) {
 		default:
 			a.queue = append(a.queue, path)
 		}
+	}
+	// From the welcome, the progress shows, with them waiting.
+	if a.phase == idle {
+		a.watch()
 	}
 }
 
@@ -342,6 +349,16 @@ func (a *app) read() {
 	})
 }
 
+// startNew shows the welcome, to open another PDF. The document shown
+// stays in the sidebar, which shows it again, as it does the progress of
+// the one being read.
+func (a *app) startNew() {
+	if a.phase == done {
+		a.setResult(nil)
+		a.phase = idle
+	}
+}
+
 // show shows r, from its first page, in the form shown; nil shows the
 // progress of the PDF being read, or asks for one.
 func (a *app) show(r *result) {
@@ -352,7 +369,7 @@ func (a *app) show(r *result) {
 // setResult makes r the document shown, from its first page, in the form
 // shown, once the document is.
 func (a *app) setResult(r *result) {
-	a.result, a.at = r, 0
+	a.result, a.at, a.jumping = r, 0, false
 	a.previews, a.rendering = map[preview]rendered{}, false
 }
 
@@ -389,6 +406,14 @@ func (a *app) back() {
 // turn shows page i, within the document.
 func (a *app) turn(i int) {
 	a.at = min(max(i, 0), len(a.result.pages)-1)
+}
+
+// goToPage asks for the number of a page to go to, where the page shown's
+// is (see pageNumber).
+func (a *app) goToPage() {
+	if a.phase == done && len(a.result.pages) > 1 {
+		a.jumping, a.jumpTo = true, ""
+	}
 }
 
 // compares reports whether the original shows beside the form shown: the
@@ -471,7 +496,7 @@ func (a *app) save() {
 		a.saveFile(base+" (retyped).pdf", func(path string) error { return copyFile(path, r.textPDF) })
 	default:
 		a.saveFile(base+".txt", func(path string) error {
-			return os.WriteFile(path, []byte(pdfocr.Text(r.pages)), 0o644)
+			return os.WriteFile(path, []byte(pdfocr.Text(r.pages)), 0o644) // #nosec G306 -- the user's document
 		})
 	}
 }
@@ -498,9 +523,10 @@ func (a *app) saveFile(name string, write func(path string) error) {
 // what the window shows.
 func (a *app) syncMenu() {
 	m := menuState{
-		open: a.canOpen(), save: a.phase == done,
+		startNew: a.phase == done, open: a.canOpen(), save: a.phase == done,
 		sidebar: a.sidebar, haveHistory: a.listed(),
 		compare: a.comparing, canCompare: a.phase == done && a.form != searchable,
+		goTo: a.phase == done && len(a.result.pages) > 1,
 	}
 	if m != a.menu {
 		a.menu = m
@@ -510,18 +536,17 @@ func (a *app) syncMenu() {
 
 // copyFile copies the file at src to dst.
 func copyFile(dst, src string) error {
-	in, err := os.Open(src)
+	in, err := os.Open(src) // #nosec G304 -- a PDF in the history
 	if err != nil {
 		return err
 	}
-	defer in.Close()
-	out, err := os.Create(dst)
+	defer func() { _ = in.Close() }() // read only
+	out, err := os.Create(dst)        // #nosec G304 -- where the user saves it
 	if err != nil {
 		return err
 	}
 	if _, err := io.Copy(out, in); err != nil {
-		out.Close()
-		return err
+		return errors.Join(err, out.Close())
 	}
 	return out.Close()
 }
@@ -531,11 +556,11 @@ func copyFile(dst, src string) error {
 // ""), with what makes it part of the history last. The directory is
 // removed if it fails.
 func convertFile(ctx context.Context, conv *pdfocr.Converter, history, path string, progress pdfocr.Progress) (_ *result, err error) {
-	in, err := os.Open(path)
+	in, err := os.Open(path) // #nosec G304 -- the PDF the user opened
 	if err != nil {
 		return nil, err
 	}
-	defer in.Close()
+	defer func() { _ = in.Close() }() // read only
 	dir, err := os.MkdirTemp(history, "read-")
 	if err != nil {
 		return nil, err
@@ -550,12 +575,13 @@ func convertFile(ctx context.Context, conv *pdfocr.Converter, history, path stri
 	if err != nil {
 		return nil, err
 	}
-	defer pdf.Close()
+	// Closed below, and here too if it fails before, when the files go.
+	defer func() { _ = pdf.Close() }()
 	textPDF, err := os.Create(r.textPDF)
 	if err != nil {
 		return nil, err
 	}
-	defer textPDF.Close()
+	defer func() { _ = textPDF.Close() }()
 	if r.pages, err = conv.Convert(ctx, in, pdfocr.Output{PDF: pdf, TextPDF: textPDF}, pdfocr.Options{}, progress); err != nil {
 		return nil, err
 	}
@@ -582,17 +608,21 @@ func loadEngine() (*pdfocr.Converter, error) {
 	}
 	paths := ocr.PathsIn(res)
 	if err := paths.Check(); err != nil {
-		return nil, fmt.Errorf("%w. Run `go run ./cmd/fetchdeps` in the project first.", err)
+		return nil, fmt.Errorf("%w. Run `go run ./cmd/fetchdeps` in the project first", err)
 	}
-	engine, err := ocr.New(paths, ocr.Options{})
+	// Compiled code is kept for later runs: the models' for Core ML, and
+	// PDFium's.
+	var opts ocr.Options
+	wazero := ""
+	if dir, err := mygo.App.Path(mygo.PathCache); err == nil {
+		opts.CacheDir = filepath.Join(dir, "coreml")
+		wazero = filepath.Join(dir, "wazero")
+	}
+	engine, err := ocr.New(paths, opts)
 	if err != nil {
 		return nil, err
 	}
-	cache := ""
-	if dir, err := mygo.App.Path(mygo.PathCache); err == nil {
-		cache = filepath.Join(dir, "wazero")
-	}
-	conv, err := pdfocr.New(engine, cache)
+	conv, err := pdfocr.New(engine, wazero)
 	if err != nil {
 		engine.Close()
 		return nil, err
@@ -602,9 +632,9 @@ func loadEngine() (*pdfocr.Converter, error) {
 		err = conv.SetTextFonts(fonts)
 	}
 	if err != nil {
-		conv.Close()
+		_ = conv.Close()
 		engine.Close()
-		return nil, fmt.Errorf("%w. Run `go run ./cmd/fetchdeps` in the project first.", err)
+		return nil, fmt.Errorf("%w. Run `go run ./cmd/fetchdeps` in the project first", err)
 	}
 	return conv, nil
 }
@@ -649,6 +679,7 @@ func main() {
 				{Role: mygo.RoleQuit},
 			}},
 			{Label: "File", Submenu: []*mygo.MenuItem{
+				{ID: "new", Label: "New", Accelerator: "CmdOrCtrl+N", Disabled: true, Click: do(a.startNew)},
 				{ID: "open", Label: "Open…", Accelerator: "CmdOrCtrl+O", Click: do(a.choose)},
 				{ID: "save", Label: "Save…", Accelerator: "CmdOrCtrl+S", Disabled: true, Click: do(a.save)},
 				mygo.Separator(),
@@ -661,6 +692,7 @@ func main() {
 			{Label: "View", Submenu: []*mygo.MenuItem{
 				{ID: "sidebar", Label: "Hide Sidebar", Accelerator: "CmdOrCtrl+Alt+S", Disabled: true, Click: do(a.toggleSidebar)},
 				{ID: "compare", Label: "Compare with Original", Type: mygo.MenuItemCheckbox, Disabled: true, Click: do(a.toggleCompare)},
+				{ID: "goto", Label: "Go to Page…", Accelerator: "CmdOrCtrl+Alt+G", Disabled: true, Click: do(a.goToPage)},
 				mygo.Separator(),
 				{Role: mygo.RoleToggleFullScreen},
 			}},
@@ -673,7 +705,7 @@ func main() {
 		if dir, err := mygo.App.Path(mygo.PathUserData); err == nil {
 			fontsPath = filepath.Join(dir, "fonts.json")
 			a.fonts = loadFonts(fontsPath)
-			if history := filepath.Join(dir, "history"); os.MkdirAll(history, 0o755) == nil {
+			if history := filepath.Join(dir, "history"); os.MkdirAll(history, 0o700) == nil {
 				historyDir = history
 			}
 		}
@@ -688,6 +720,7 @@ func main() {
 			},
 			reveal: mygo.Shell.ShowItemInFolder,
 			menu: func(m menuState) {
+				menu.ItemByID("new").SetEnabled(m.startNew)
 				menu.ItemByID("open").SetEnabled(m.open)
 				menu.ItemByID("save").SetEnabled(m.save)
 				sidebar := menu.ItemByID("sidebar")
@@ -696,6 +729,7 @@ func main() {
 				compare := menu.ItemByID("compare")
 				compare.SetEnabled(m.canCompare)
 				compare.SetChecked(m.compare)
+				menu.ItemByID("goto").SetEnabled(m.goTo)
 			},
 			dock: func(progress float64) { win.SetProgressBar(mygo.ProgressBar{Value: max(progress, 0)}) },
 			attend: func() {

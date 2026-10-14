@@ -151,7 +151,7 @@ func insideConvex(q Quad, p Point) bool {
 		pos = pos || c > 0
 		neg = neg || c < 0
 	}
-	return !(pos && neg)
+	return !pos || !neg
 }
 
 // homography maps the unit rectangle (0,0) (w,0) (w,h) (0,h) onto q.

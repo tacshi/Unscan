@@ -267,7 +267,7 @@ func (p *pixels) measureRules(f frame, aspect float64, rules bool) ink {
 					hist[k][c[k]]++
 				}
 				border++
-				if diff(c, white) > 40 && !(chroma(c) < 48 && luma(c) < 160) {
+				if diff(c, white) > 40 && (chroma(c) >= 48 || luma(c) >= 160) {
 					colored++
 				}
 			}
@@ -760,7 +760,7 @@ func trimLeaders(text string, in ink) (string, ink, [][2]float64) {
 			switch next := rs[n]; {
 			case n == 0 && !unicode.IsLetter(next) && !unicode.IsDigit(next):
 				need = math.Inf(1) // the ink of the text's last character, as a comma's
-			case n == 0, cjkRune(next) && !(n == 1 && rs[0] == '。'), !last && unicode.IsDigit(next):
+			case n == 0, cjkRune(next) && (n != 1 || rs[0] != '。'), !last && unicode.IsDigit(next):
 				need = 0.1 * h
 			}
 			if gap >= need {
@@ -1105,11 +1105,7 @@ func (p *pixels) encode(r image.Rectangle, dpi float64) pageImage {
 				}
 			}
 		}
-		var buf bytes.Buffer
-		zw := zlib.NewWriter(&buf)
-		zw.Write(raw)
-		zw.Close()
-		lossless = buf.Bytes()
+		lossless = deflate(raw, zlib.DefaultCompression)
 	}
 
 	if dpi > pictureDPI {
@@ -1125,8 +1121,15 @@ func (p *pixels) encode(r image.Rectangle, dpi float64) pageImage {
 		src, img.pw, img.ph = dst, w, h
 	}
 	var buf bytes.Buffer
-	jpeg.Encode(&buf, src, &jpeg.Options{Quality: 85})
-	if lossless != nil && len(lossless) <= 3*buf.Len()/2 {
+	if err := jpeg.Encode(&buf, src, &jpeg.Options{Quality: 85}); err != nil {
+		// Of sides over 65,535 pixels, a JPEG's most: at pictureDPI, a
+		// picture over 18 feet long, which is dropped.
+		if lossless == nil {
+			return pageImage{}
+		}
+		buf.Reset()
+	}
+	if lossless != nil && (buf.Len() == 0 || len(lossless) <= 3*buf.Len()/2) {
 		img.pw, img.ph = r.Dx(), r.Dy()
 		img.data, img.filter = lossless, "FlateDecode"
 		return img
@@ -1579,6 +1582,9 @@ func (d *textDoc) redrawPage(img image.Image, lines []ocr.Line, width, height fl
 			continue
 		}
 		img := p.encode(r, dpi)
+		if img.data == nil {
+			continue
+		}
 		img.x, img.y = float64(r.Min.X)*page.sx, height-float64(r.Max.Y)*page.sy
 		img.w, img.h = float64(r.Dx())*page.sx, float64(r.Dy())*page.sy
 		page.images = append(page.images, img)
@@ -2107,7 +2113,7 @@ func (sh shape) spread(i, j int, extra, size, em float64, gaps [][2]float64, mos
 	pairs, tracked := 0, 0               // letters next to each other, and tracks
 	for k := range weights {
 		a, b := sh.glyphs[i+k], sh.glyphs[i+k+1]
-		if tracks[k] = i+k >= lo && i+k+1 <= hi && !(a.wide && b.wide); tracks[k] {
+		if tracks[k] = i+k >= lo && i+k+1 <= hi && (!a.wide || !b.wide); tracks[k] {
 			tracked++
 		}
 		if a.inked && b.inked && !a.space && !b.space && !a.wide && !b.wide {

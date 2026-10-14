@@ -38,12 +38,12 @@ func (r *result) save() error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(r.dir, resultFile), data, 0o644)
+	return os.WriteFile(filepath.Join(r.dir, resultFile), data, 0o600)
 }
 
 // loadResult reads the result kept in the folder dir.
 func loadResult(dir string) (*result, error) {
-	data, err := os.ReadFile(filepath.Join(dir, resultFile))
+	data, err := os.ReadFile(filepath.Join(dir, resultFile)) // #nosec G304 -- the history's own
 	if err != nil {
 		return nil, err
 	}
@@ -79,7 +79,7 @@ func loadHistory(dir string, now time.Time) []*result {
 		r, err := loadResult(path)
 		if err != nil {
 			if info, err := e.Info(); err == nil && now.Sub(info.ModTime()) > 24*time.Hour {
-				os.RemoveAll(path)
+				_ = os.RemoveAll(path) // tried again next time
 			}
 			continue
 		}
@@ -92,7 +92,7 @@ func loadHistory(dir string, now time.Time) []*result {
 // dirSize is the size of the files in dir, in bytes.
 func dirSize(dir string) int64 {
 	var size int64
-	filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+	_ = filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 		if err == nil && d.Type().IsRegular() {
 			if info, err := d.Info(); err == nil {
 				size += info.Size()
@@ -180,8 +180,8 @@ func (a *app) historySidebar(c *ui.Context) {
 			a.askRemove(a.history[a.chosen])
 		}
 	}
-	l.Handle.OnShortcut(c, 0, ui.KeyBackspace, removeChosen)
-	l.Handle.OnShortcut(c, 0, ui.KeyDelete, removeChosen)
+	l.OnShortcut(c, 0, ui.KeyBackspace, removeChosen)
+	l.OnShortcut(c, 0, ui.KeyDelete, removeChosen)
 	side := ui.Column(c).Width(sidebarWidth).Shrink(0).Background(t.Surface).BorderWidth(0, 1, 0, 0).BorderColor(t.Border)
 	side.Children(func() {
 		if a.file != "" {

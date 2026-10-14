@@ -110,7 +110,7 @@ func PickFont(names []string, bold bool) int {
 // the user may choose another. Its errors are for the user who chose the
 // file.
 func ReadFont(path string, i int, bold bool) (Font, []string, error) {
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) // #nosec G304 -- the font the user chose
 	if err != nil {
 		return Font{}, nil, err
 	}
@@ -155,14 +155,14 @@ func LoadTextFonts(resources string) (TextFonts, error) {
 	var data, tc [faces][]byte
 	for i := range faces {
 		if name := textFontFiles[i]; name != "" {
-			b, err := os.ReadFile(filepath.Join(resources, "fonts", name))
+			b, err := os.ReadFile(filepath.Join(resources, "fonts", name)) // #nosec G304 -- the app's resources
 			if err != nil {
 				return TextFonts{}, err
 			}
 			data[i] = b
 		}
 		if name := traditionalFontFiles[i]; name != "" {
-			b, err := os.ReadFile(filepath.Join(resources, "fonts", name))
+			b, err := os.ReadFile(filepath.Join(resources, "fonts", name)) // #nosec G304 -- the app's resources
 			if err != nil && !errors.Is(err, fs.ErrNotExist) {
 				return TextFonts{}, err
 			}

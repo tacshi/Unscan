@@ -99,7 +99,9 @@ func write(tables map[string][]byte) []byte {
 	var out bytes.Buffer
 	be := func(vs ...any) {
 		for _, v := range vs {
-			binary.Write(&out, binary.BigEndian, v)
+			if err := binary.Write(&out, binary.BigEndian, v); err != nil {
+				panic(err) // a value of no fixed size
+			}
 		}
 	}
 	be(uint32(0x00010000), uint16(n), uint16(16*search), uint16(selector), uint16(16*(n-search)))

@@ -17,33 +17,51 @@ const (
 	detMinLimitSide = 64
 )
 
+// On Core ML, the detector's input is padded to a size whose sides are
+// multiples of detStep, of at most maxDetSizes sizes, which take a session
+// each: a document's pages are of a size or two, and pages of other sizes
+// are read on the CPU.
+const (
+	detStep     = 128
+	maxDetSizes = 4
+)
+
 // detect finds the boxes of text lines in img, in its pixels.
 func (e *Engine) detect(img *rgbImage) ([]Quad, error) {
 	inW, inH := detInputSize(img.w, img.h, e.opts.DetMaxSide)
-	input := make([]float32, 3*inW*inH)
+	s, w, h := e.det, inW, inH
+	if e.coreml != nil {
+		pw, ph := roundUp(inW, detStep), roundUp(inH, detStep)
+		if cs := e.coreml.session(modelShape{detModel, pw, ph}); cs != nil {
+			s, w, h = cs, pw, ph
+		}
+	}
+	input := make([]float32, 3*w*h)
 	// BGR, normalized with ImageNet's mean and deviation as the model was
 	// trained (PaddleOCR applies the RGB statistics to BGR channels).
-	img.resizeInto(input, inW, inH, true, [3]float32{0.485, 0.456, 0.406}, [3]float32{0.229, 0.224, 0.225})
+	img.resizeInto(input, inW, inH, 0, 0, w, h, true, [3]float32{0.485, 0.456, 0.406}, [3]float32{0.229, 0.224, 0.225})
 
-	tensor, err := ort.NewTensor([]int64{1, 3, int64(inH), int64(inW)}, input)
+	tensor, err := ort.NewTensor([]int64{1, 3, int64(h), int64(w)}, input)
 	if err != nil {
 		return nil, err
 	}
 	defer tensor.Destroy()
-	outs, err := e.det.Run(map[string]*ort.Value{e.det.Inputs[0].Name: tensor})
+	outs, err := s.Run(map[string]*ort.Value{s.Inputs[0].Name: tensor})
 	if err != nil {
 		return nil, fmt.Errorf("detection: %w", err)
 	}
 	defer destroyAll(outs)
-	pred, err := ort.GetTensorData[float32](outs[e.det.Outputs[0].Name])
+	pred, err := ort.GetTensorData[float32](outs[s.Outputs[0].Name])
 	if err != nil {
 		return nil, err
 	}
-	if len(pred) != inW*inH {
-		return nil, fmt.Errorf("detection: %d outputs for a %d×%d input", len(pred), inW, inH)
+	if len(pred) != w*h {
+		return nil, fmt.Errorf("detection: %d outputs for a %d×%d input", len(pred), w, h)
 	}
-	return boxesFromMap(pred, inW, inH, img.w, img.h), nil
+	return boxesFromMap(pred, w, h, float64(img.w)/float64(inW), float64(img.h)/float64(inH), img.w, img.h), nil
 }
+
+func roundUp(v, step int) int { return (v + step - 1) / step * step }
 
 // detInputSize scales an image for the detector as PaddleOCR does with
 // limit_type "min" (sides of at least 64 pixels, at most 4000), and also
@@ -68,9 +86,9 @@ func detInputSize(w, h, maxSide int) (int, int) {
 // boxesFromMap turns the detector's probability map into boxes, as
 // PaddleOCR's DBPostProcess does: each connected region above detThresh
 // becomes the smallest rectangle around it, scored by the mean probability
-// inside, grown by detUnclipRatio and scaled to the image's size.
-func boxesFromMap(pred []float32, w, h, dstW, dstH int) []Quad {
-	sx, sy := float64(dstW)/float64(w), float64(dstH)/float64(h)
+// inside, grown by detUnclipRatio and scaled by sx and sy to the image's
+// pixels, within its dstW×dstH.
+func boxesFromMap(pred []float32, w, h int, sx, sy float64, dstW, dstH int) []Quad {
 	labels := make([]int32, w*h)
 	var stack []int32
 	var pixels []int32
