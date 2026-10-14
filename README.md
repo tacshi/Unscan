@@ -48,7 +48,9 @@ The retyped PDF sets text in Noto Serif SC or Noto Sans SC, regular or
 bold, or Noto Serif TC and Noto Sans TC for a document in traditional
 Chinese, whose punctuation they center as it is printed, or in LXGW
 WenKai for Kai (楷体), the brush-written face of Chinese prefaces and
-running heads, or in [fonts of your own](#your-own-fonts).
+running heads, or in Zhuque Fangsong for FangSong (仿宋), the even,
+slanting face of prefaces and quotations, or in
+[fonts of your own](#your-own-fonts).
 Line art, such as a figure's boxes, arrows and rules, is traced into
 outlines that stay as sharp as the type at any zoom; photos and shading
 are kept as images under the text. Text printed on color or over a
@@ -92,11 +94,11 @@ the right, as **Compare with Original** shows them:
   retyped one. A classifier tells how each page is turned, and a page it
   finds turned is read each way it might be and kept the way it reads
   best, as it takes about one upright page in a hundred for turned.
-- **Matches the typeface.** Each line's kind (serif, sans-serif or Kai)
-  and weight are judged from its strokes, and its size and spacing from
-  its ink, so retyped lines land where they were printed. Words set bold
-  or italic within a line are set so too, titles tracked out are tracked
-  as printed, and underlines are kept.
+- **Matches the typeface.** Each line's kind (serif, sans-serif, Kai or
+  FangSong) and weight are judged from its strokes, and its size and
+  spacing from its ink, so retyped lines land where they were printed.
+  Words set bold or italic within a line are set so too, titles tracked
+  out are tracked as printed, and underlines are kept.
 - **Your own fonts.** Set the retyped PDF in any embeddable TrueType font
   or collection, such as macOS's Songti SC or Times.
 - **Fast on a Mac.** The text models run on the GPU and the Neural
@@ -210,7 +212,7 @@ written when asked for.
 | `-dpi` | `300` | The resolution pages are read at |
 | `-force` | `false` | Read pages that already have text too |
 | `-cpu` | `false` | Run every model on the CPU, not the text models on the GPU through Core ML |
-| `-serif`, `-serif-bold`, `-sans`, `-sans-bold`, `-kai` | built-in fonts | Font files to set the retyped PDF in (see below) |
+| `-serif`, `-serif-bold`, `-sans`, `-sans-bold`, `-kai`, `-fangsong` | built-in fonts | Font files to set the retyped PDF in (see below) |
 
 ### Your own fonts
 
@@ -219,8 +221,8 @@ built-in ones: a `.ttf` file, or one font of a `.ttc` collection, of any
 units per em.
 
 - **In the app,** **Unscan › Settings…** (⌘,) chooses a font file for
-  each face: serif and sans-serif, regular and bold, and Kai (on Linux and
-  Windows, **File › Settings…**). For a collection, the font named Regular
+  each face: serif and sans-serif, regular and bold, Kai and FangSong (on
+  Linux and Windows, **File › Settings…**). For a collection, the font named Regular
   or Bold, to match the face, is picked, and a menu picks another. The
   choice is kept in `fonts.json` in the app's user data folder, and
   applies to the PDFs read from then on.
@@ -286,6 +288,7 @@ resources/
 ├── fonts/NotoSerifTC-{Regular,Bold}.ttf  in traditional Chinese's forms (10 MB each, OFL-1.1)
 ├── fonts/NotoSansTC-{Regular,Bold}.ttf   (7.1 MB each, OFL-1.1)
 ├── fonts/LXGWWenKai-Regular.ttf          and its Kai face, v1.522 (26 MB, OFL-1.1)
+├── fonts/ZhuqueFangsong-Regular.ttf      and its FangSong face, v0.212 (8.8 MB, OFL-1.1)
 ├── fonts/*-OFL.txt                       their licenses
 └── darwin-arm64/libonnxruntime.dylib  (or linux-*/libonnxruntime.so, windows-*/onnxruntime.dll)
 ```
@@ -442,12 +445,15 @@ docs/                    how it works, in depth, the app icon's source (icon.svg
     comes out as its line is. Italics are the upright face slanted, as
     the fonts have no italic.
   - Medium weights come out bold, and display faces, such as a title's
-    condensed one, are squeezed into the nearest of the five. Labels in
+    condensed one, are squeezed into the nearest of the six. Labels in
     a condensed bold face, as a book's figures have them, often come out
     in the serif face, regular, as their strokes' contrast reads as a
-    serif face's. FangSong comes out Kai, and bold Kai, which LXGW WenKai
-    has no face for, regular. Calligraphic lettering on covers, such as
-    a publisher's name, often comes out Kai.
+    serif face's. Kai and FangSong are told apart by how far their strokes
+    slant, so a paragraph of either a few lines long may come out in the
+    other, more often in a pale or blurred scan. Bold Kai and FangSong,
+    which LXGW WenKai and Zhuque Fangsong have no faces for, come out
+    regular. Calligraphic lettering on covers, such as a publisher's name,
+    often comes out Kai.
   - A face used only for bold lines in a document, with none of its lines
     regular, comes out regular, as there is no body text of its kind to
     judge them against.
@@ -477,11 +483,12 @@ Unscan builds on these projects, under their own licenses:
 | [ONNX Runtime](https://onnxruntime.ai) | MIT |
 | [PDFium](https://pdfium.googlesource.com/pdfium/) | Apache-2.0 / BSD |
 | [go-pdfium](https://github.com/klippa-app/go-pdfium), [onnxruntime_purego](https://github.com/getcharzp/onnxruntime_purego), [purego](https://github.com/ebitengine/purego) | MIT / Apache-2.0 |
-| [Noto Serif SC](https://fonts.google.com/noto/specimen/Noto+Serif+SC), [Noto Sans SC](https://fonts.google.com/noto/specimen/Noto+Sans+SC), [Noto Serif TC](https://fonts.google.com/noto/specimen/Noto+Serif+TC), [Noto Sans TC](https://fonts.google.com/noto/specimen/Noto+Sans+TC), [LXGW WenKai](https://github.com/lxgw/LxgwWenKai) | SIL Open Font License 1.1 |
+| [Noto Serif SC](https://fonts.google.com/noto/specimen/Noto+Serif+SC), [Noto Sans SC](https://fonts.google.com/noto/specimen/Noto+Sans+SC), [Noto Serif TC](https://fonts.google.com/noto/specimen/Noto+Serif+TC), [Noto Sans TC](https://fonts.google.com/noto/specimen/Noto+Sans+TC), [LXGW WenKai](https://github.com/lxgw/LxgwWenKai), [Zhuque Fangsong](https://github.com/TrionesType/zhuque) | SIL Open Font License 1.1 |
 
 The app carries the fonts' licenses in `fonts/NotoSerifSC-OFL.txt`,
 `fonts/NotoSansSC-OFL.txt`, `fonts/NotoSerifTC-OFL.txt`,
-`fonts/NotoSansTC-OFL.txt` and `fonts/LXGWWenKai-OFL.txt`, and embeds
+`fonts/NotoSansTC-OFL.txt`, `fonts/LXGWWenKai-OFL.txt` and
+`fonts/ZhuqueFangsong-OFL.txt`, and embeds
 subsets of the fonts in retyped PDFs, as the license allows. Subsets of
 your own fonts are embedded under those fonts' licenses, which are yours
 to comply with; fonts that forbid embedding are refused. Check the

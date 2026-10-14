@@ -1913,8 +1913,9 @@ func (d *textDoc) shapeIn(text string, face int, faces []int) shape {
 // for what it takes from another (see latin), what it sets narrower than
 // CJK characters or lacks, and, for a font of the user's, the text font
 // behind it (see fallbacks) for what it lacks, as Chinese characters in a
-// Latin font. A Kai font of the user's takes the Chinese characters it
-// lacks from the text fonts' Kai face, and the rest from the serif face.
+// Latin font. A Kai or FangSong font of the user's takes the Chinese
+// characters it lacks from the text fonts' face of its kind, and the rest
+// from the serif face.
 func (d *textDoc) glyphFace(face int, r rune) int {
 	if from := latin(face); from != face {
 		for _, fi := range []int{face, fallback + face} {

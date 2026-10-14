@@ -436,7 +436,15 @@ func TestStyle(t *testing.T) {
 		}
 		pages = append(pages, page{"Kai", kaiPage, 36}, page{"Kai", kaiPage, 64})
 	}
-	names := [faces]string{"serif", "serif bold", "sans", "sans bold", "Kai", "Kai bold"}
+	// And one in FangSong: Apple's STFangsong, likewise.
+	if stfangso, _ := filepath.Glob("/System/Library/AssetsV2/com_apple_MobileAsset_Font8/*/AssetData/STFANGSO.ttf"); len(stfangso) > 0 {
+		fangsongPage := []line{{hiragino, 2, "译者序", sans | either}}
+		for _, text := range cjkBody {
+			fangsongPage = append(fangsongPage, line{stfangso[0], 0, text, fangsong})
+		}
+		pages = append(pages, page{"FangSong", fangsongPage, 36}, page{"FangSong", fangsongPage, 64})
+	}
+	names := [faces]string{"serif", "serif bold", "sans", "sans bold", "Kai", "Kai bold", "FangSong", "FangSong bold"}
 	fonts := map[string]*opentype.Collection{}
 	for _, page := range pages {
 		var texts []string
@@ -640,8 +648,58 @@ func TestKinds(t *testing.T) {
 		line(1, 842, true, -0.20), line(1, 896, true, 0.09),
 	}
 	want := []int{serif, serif, serif, serif, serif, sans, serif, serif, serif, sans, sans, sans, sans, sans}
-	if got, _ := kinds(lines, true); !slices.Equal(got, want) {
+	if got, _ := kinds(lines, true, false); !slices.Equal(got, want) {
 		t.Errorf("kinds %v, want %v", got, want)
+	}
+}
+
+// TestKindsBrushed tells Kai and FangSong paragraphs by how far their
+// edges run aslant: FangSong's even strokes, blurred in a pale scan, a
+// little less than Kai's from Song's, and a paragraph a little short of it
+// where the paragraphs about it are; Song's, as far, not.
+func TestKindsBrushed(t *testing.T) {
+	para := func(page int, top, brush, lean float64) []lineGeom {
+		var lines []lineGeom
+		for k := range 4 {
+			lines = append(lines, lineGeom{ok: true, judged: true, page: page, top: top + 54*float64(k),
+				bottom: top + 54*float64(k) + 34, height: 34, cjk: true, han: true, letters: 20,
+				lean: lean, brush: brush})
+		}
+		return lines
+	}
+	for _, c := range []struct {
+		name  string
+		paras [][]lineGeom
+		want  []int
+	}{
+		{"Kai", [][]lineGeom{para(0, 1000, 0.15, 0)}, []int{kai}},
+		{"FangSong", [][]lineGeom{para(0, 1000, 0.10, 0.05)}, []int{fangsong}},
+		{"even FangSong", [][]lineGeom{para(0, 1000, 0.085, -0.2)}, []int{fangsong}},
+		{"Song", [][]lineGeom{para(0, 1000, 0.085, 0.1)}, []int{serif}},
+		{"FangSong near FangSong", [][]lineGeom{para(0, 1000, 0.095, -0.2), para(0, 2000, 0.075, 0.05)},
+			[]int{fangsong, fangsong}},
+		{"FangSong alone", [][]lineGeom{para(0, 2000, 0.075, 0.05)}, []int{serif}},
+	} {
+		var lines []lineGeom
+		var want []int
+		for k, p := range c.paras {
+			lines = append(lines, p...)
+			for range p {
+				want = append(want, c.want[k])
+			}
+		}
+		if got, _ := kinds(lines, true, true); !slices.Equal(got, want) {
+			t.Errorf("%s: kinds %v, want %v", c.name, got, want)
+		}
+		// Without a FangSong face, Kai stands in for it.
+		for k := range want {
+			if want[k] == fangsong {
+				want[k] = kai
+			}
+		}
+		if got, _ := kinds(lines, true, false); !slices.Equal(got, want) {
+			t.Errorf("%s, without FangSong: kinds %v, want %v", c.name, got, want)
+		}
 	}
 }
 
@@ -704,10 +762,10 @@ func TestKai(t *testing.T) {
 		heading, line(1, 200, 0.06), line(1, 254, 0.08), line(1, 308, 0.05),
 	}
 	want := []int{kai, kai, kai, kai, kai, kai, kai, kai, serif, serif, serif, serif}
-	if got, _ := kinds(lines, true); !slices.Equal(got, want) {
+	if got, _ := kinds(lines, true, false); !slices.Equal(got, want) {
 		t.Errorf("kinds %v, want %v", got, want)
 	}
-	if got, _ := kinds(lines, false); slices.Contains(got, kai) {
+	if got, _ := kinds(lines, false, false); slices.Contains(got, kai) {
 		t.Errorf("kinds without a Kai face %v", got)
 	}
 }
@@ -1182,7 +1240,7 @@ func TestKindsShort(t *testing.T) {
 		{"sans-serif", -0.15, 0.08, []int{sans, sans, sans, sans, sans, sans, sans, sans}},
 		{"serif", 0.3, -0.08, []int{sans, serif, serif, serif, serif, serif, serif, serif}},
 	} {
-		if got, _ := kinds(doc(c.body, c.heading), false); !slices.Equal(got, c.want) {
+		if got, _ := kinds(doc(c.body, c.heading), false, false); !slices.Equal(got, c.want) {
 			t.Errorf("%s document: kinds %v, want %v", c.name, got, c.want)
 		}
 	}

@@ -187,8 +187,13 @@ For each scanned page, at the resolution it was read at:
    median of its lines; a line alone, as a heading, must slant further,
    unless the lines of its size on its page are Kai, as a preface's first
    line is, and a line mostly of Latin, as an English title quoted in
-   Chinese, follows them. FangSong, which slants as Kai does, is set in
-   Kai too. A line is bold where its strokes are 15%
+   Chinese, follows them. FangSong slants as Kai does, a little less: a
+   paragraph slanting less than a Kai paragraph's least is FangSong.
+   FangSong's even strokes also lean to sans-serif, as Song's never do,
+   so a paragraph of them is Kai or FangSong by a little less slant, as a
+   pale scan's blur straightens its edges; and a paragraph a little short
+   of that is where the lines of its size on its page are, as one a good
+   part Latin is. A line is bold where its strokes are 15%
    thicker than those of its kind's lines on its page (or in the
    document, for a kind few of the page's lines are), as headings set in
    medium or bold faces are. Both are voted by paragraph (lines that
@@ -260,9 +265,11 @@ For each scanned page, at the resolution it was read at:
    does, measured between the ink's gaps nearest where the word is set. The spacing goes into the
    characters' advances, with a CID for each character and advance, so
    characters abut and text extraction finds no spaces that were not
-   read. A line in Kai takes its Latin letters, digits and narrow
-   punctuation from the serif face, as books set them in Times beside
-   Kai, since LXGW WenKai's own are a casual hand. A document in
+   read. A line in Kai or FangSong takes its Latin letters, digits and
+   narrow punctuation from the serif face, as books set them in Times
+   beside Kai, since LXGW WenKai's own are a casual hand. Without the
+   FangSong face, as with resources fetched before it was added,
+   FangSong is set in Kai. A document in
    traditional Chinese, which more characters of its alone than of
    simplified's tell, is set in Noto Serif TC and Noto Sans TC, which
    center its punctuation in the em and draw its characters as it
@@ -441,11 +448,16 @@ CGO_ENABLED=0 go test ./...
   was drawn at 40 pixels an em, and extract from PDFium as they read.
   Lines measure within 1.5% of their size, from 24 to 64 pixels an em.
   Pages of lines in faces of other families (Songti SC, Hiragino Sans GB,
-  Times New Roman, Arial, and Kaiti SC where macOS has downloaded it),
+  Times New Roman, Arial, and Kaiti SC and STFangsong where macOS has
+  downloaded them),
   blurred and noisy as scans are, are set in the text face of their kind
   and weight. A Kai paragraph's last line of one character, a preface's
   first line alone and a line mostly of English among Kai ones are Kai
-  too, and a bold Song heading as slanted as Kai's least is not. In a
+  too, and a bold Song heading as slanted as Kai's least is not. A
+  paragraph of FangSong, slanting a little less than Kai, is FangSong,
+  as is one of even strokes a pale scan straightened, or one a little
+  short of either among FangSong ones; one of Song, as slanted, is not.
+  In a
   sans-serif document, a heading leaning a little to serif, a page number
   and a line whose ink was not found are sans-serif; in a serif one, a
   heading leaning a little to sans-serif stays so. A paragraph mostly

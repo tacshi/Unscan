@@ -359,17 +359,18 @@ func (d *textDoc) styles(texts []string, frames []frame, inks []ink, lines []lin
 		geoms[i].lean = nearest[1] - nearest[0]
 		geoms[i].brush = in.strokes.oblique - l.refs[serif].oblique
 	}
-	// Kai is told only where there is a Kai face to set it in.
-	kindOf, paras := kinds(geoms, d.fonts[kai] != d.fonts[serif])
+	// Kai is told only where there is a Kai face to set it in, and
+	// FangSong from it where there is a FangSong one.
+	kindOf, paras := kinds(geoms, d.fonts[kai] != d.fonts[serif], d.fonts[fangsong] != d.fonts[kai])
 	for i, kind := range kindOf {
 		out[i] = kind
-		if kind == kai && lines[i].ok {
-			// Kai's strokes, which only its lines are weighed against.
-			sh := d.shape(texts[i], kai)
+		if (kind == kai || kind == fangsong) && lines[i].ok {
+			// The face's strokes, which only its lines are weighed against.
+			sh := d.shape(texts[i], kind)
 			if st := d.strokes(sh, d.size(sh, frames[i], inks[i]), false); st.across > 0 && st.down > 0 {
-				lines[i].refs[kai], lines[i].refs[kaiBold] = st, st
+				lines[i].refs[kind], lines[i].refs[kind+1] = st, st
 			} else {
-				lines[i].refs[kai], lines[i].refs[kaiBold] = lines[i].refs[serif], lines[i].refs[serifBold]
+				lines[i].refs[kind], lines[i].refs[kind+1] = lines[i].refs[serif], lines[i].refs[serifBold]
 			}
 		}
 	}
@@ -416,7 +417,7 @@ func (d *textDoc) styles(texts []string, frames []frame, inks []ink, lines []lin
 		// are more heavy than not.
 		own := byPage[key{page(i), out[i]}]
 		most := true
-		for _, k := range []int{serif, sans, kai} {
+		for _, k := range []int{serif, sans, kai, fangsong} {
 			most = most && len(own) >= len(byPage[key{page(i), k}])
 		}
 		b, ok := 0.0, false
@@ -449,7 +450,7 @@ func (d *textDoc) styles(texts []string, frames []frame, inks []ink, lines []lin
 			w := &l.words[k]
 			w.face = out[i]
 			label := k == 0 && w.letters == 1 && w.to-w.from > 1 // as "A:", not "A"
-			if !l.ok || kind == kai || w.letters < 2 && !label || w.refs[kind/2].across == 0 || w.refs[kind/2].down == 0 {
+			if !l.ok || kind == kai || kind == fangsong || w.letters < 2 && !label || w.refs[kind/2].across == 0 || w.refs[kind/2].down == 0 {
 				continue
 			}
 			bold := 1.2
@@ -495,7 +496,7 @@ func paragraphWeights(paras [][]int, out []int, heavier []float64) {
 			count[out[i]]++
 		}
 		kind := serif
-		for _, k := range []int{sans, kai} {
+		for _, k := range []int{sans, kai, fangsong} {
 			if count[k]+count[k+1] > count[kind]+count[kind+1] {
 				kind = k
 			}
@@ -542,12 +543,33 @@ const sure = 0.15
 // of its size on its page are, by their median, as a preface's first line.
 const brushy, brushyAlone = 0.09, 0.12
 
-// kinds picks each line's kind, serif, sans-serif or Kai, by its
+// brushyEven is how much more of a CJK paragraph's edges must run aslant
+// than the serif face's for it to be Kai or FangSong where its strokes
+// lean to sans-serif, as FangSong's even ones do, and Song's never: a pale
+// scan's blur straightens them, as it does a book's FangSong preface's to
+// 0.084 to 0.10 by paragraph, its Song chapters' to 0.07 or less. And
+// brushyNear is how much a paragraph's must for it to be either where the
+// CJK lines of its size on its page are.
+const brushyEven, brushyNear = 0.08, 0.07
+
+// kaiBrush is how much more of a paragraph's edges run aslant than the
+// serif face's, by their median, for it to be Kai rather than FangSong,
+// where it is either: a brush's strokes slant and curve more than
+// FangSong's, whose level strokes rise straight. In scans of 36 to 64
+// pixels an em, lines of Kai (Kaiti SC, FZKai) run 0.134 to 0.168 more,
+// 0.15 by their mean, and lines of FangSong (STFangsong, Zhuque Fangsong)
+// 0.091 to 0.137, 0.11; at 24 pixels, where blur straightens them, 0.112
+// to 0.145 and 0.096 to 0.140, which a paragraph's median tells apart
+// better than a line alone.
+const kaiBrush = 0.13
+
+// kinds picks each line's kind, serif, sans-serif, Kai or FangSong, by its
 // paragraph: the lines that follow each other down a page, about as high
 // as each other and no further apart than lines of text are, in the same
 // script. A paragraph with Chinese in it is Kai where its lines' edges run
 // aslant by brushy or more, by their median, if withKai, and a line alone
-// or a paragraph mostly of Latin as isKai says. Else each line's strokes
+// or a paragraph mostly of Latin as isKai says; FangSong rather, if
+// withFangSong, where they run aslant less than kaiBrush. Else each line's strokes
 // lean to serif or sans-serif, a few far enough to be wrong: lowercase
 // Latin, small and blurred, leans to sans-serif more than its face does.
 // The paragraph's kind is where its lines lean, by their median, of those
@@ -561,7 +583,7 @@ const brushy, brushyAlone = 0.09, 0.12
 // cannot judge take their paragraph's kind, and lines it knows nothing of,
 // whose ink was not found, the document's. It returns the paragraphs too,
 // as lists of lines.
-func kinds(lines []lineGeom, withKai bool) ([]int, [][]int) {
+func kinds(lines []lineGeom, withKai, withFangSong bool) ([]int, [][]int) {
 	order := make([]int, 0, len(lines))
 	for i, l := range lines {
 		if l.ok {
@@ -607,28 +629,42 @@ each:
 	// as an English title quoted in Chinese, whose Latin slants no more than
 	// the serif face's, never does: they are Kai where the CJK lines of
 	// their size on their page are.
-	isKai := func(para []int, brushes []float64) bool {
+	// It returns how far, by the median, the edges it was told by run
+	// aslant, which tells Kai from FangSong (see kaiBrush).
+	// A paragraph whose strokes lean to sans-serif, as FangSong's even ones
+	// do, Song's never, is so from brushyEven; and one a little short of
+	// either, as one whose lines are a good part Latin, whose letters slant
+	// less, where the CJK lines of its size on its page are.
+	brushed := func(brushes, leans []float64) bool {
+		b := median(slices.Clone(brushes))
+		return b >= brushy || b >= brushyEven && median(slices.Clone(leans)) < 0
+	}
+	isKai := func(para []int, brushes, leans []float64) (bool, float64) {
 		if !withKai || !slices.ContainsFunc(para, func(i int) bool { return lines[i].judged && lines[i].han }) {
-			return false
+			return false, 0
 		}
 		l := lines[para[0]]
 		if l.cjk {
-			switch b := median(brushes); {
-			case b < brushy:
-				return false
-			case len(brushes) >= 2 || b >= brushyAlone:
-				return true
+			b, many := median(slices.Clone(brushes)), len(brushes) >= 2
+			switch {
+			case many && brushed(brushes, leans), !many && b >= brushyAlone:
+				return true, b
+			case b < brushy && !(many && b >= brushyNear):
+				return false, 0
 			}
 		}
-		var around []float64 // the CJK lines of its size on its page
+		var around, aroundLeans []float64 // the CJK lines of its size on its page
 		for _, j := range byPage[l.page] {
 			m := lines[j]
 			if !slices.Contains(para, j) && m.judged && m.cjk && m.letters >= 4 &&
 				math.Abs(m.height-l.height) <= 0.15*max(m.height, l.height) {
-				around = append(around, m.brush)
+				around, aroundLeans = append(around, m.brush), append(aroundLeans, m.lean)
 			}
 		}
-		return len(around) >= 2 && median(around) >= brushy
+		if len(around) < 2 {
+			return false, 0
+		}
+		return brushed(around, aroundLeans), median(around)
 	}
 	// The kind most of the document's lines of a script lean to, by their
 	// median, of those with a few letters to judge by, or of all its lines
@@ -677,9 +713,13 @@ each:
 			}
 			continue
 		}
-		if isKai(para, brushes) {
+		if ok, brush := isKai(para, brushes, leans); ok {
+			kind := kai
+			if withFangSong && brush < kaiBrush {
+				kind = fangsong
+			}
 			for _, i := range para {
-				out[i] = kai
+				out[i] = kind
 			}
 			continue
 		}

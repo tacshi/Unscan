@@ -17,11 +17,12 @@ import (
 	"unscan/internal/ttf"
 )
 
-// The text PDF's faces: a serif one, a sans-serif one and a Kai one, the
-// brush-written face of Chinese prefaces and quotations, each regular and
-// bold, which lines are set in as they were printed (see style). A face
-// and its bold are next to each other, the regular first; a kind is its
-// regular face.
+// The text PDF's faces: a serif one, a sans-serif one, a Kai one, the
+// brush-written face of Chinese prefaces and quotations, and a FangSong
+// one (仿宋), the thin, slanting face of Chinese documents and of books
+// set in it, each regular and bold, which lines are set in as they were
+// printed (see style). A face and its bold are next to each other, the
+// regular first; a kind is its regular face.
 const (
 	serif = iota
 	serifBold
@@ -29,6 +30,8 @@ const (
 	sansBold
 	kai
 	kaiBold
+	fangsong
+	fangsongBold
 	faces
 	// Fallback+fi is the text font behind face fi where that is one of
 	// the user's, which sets the characters it lacks (see textDoc.font).
@@ -45,12 +48,13 @@ type Font struct {
 }
 
 // TextFonts are the fonts that text PDFs are set in: a serif face and a
-// sans-serif one, each regular and bold, and a Kai face, such as Noto
-// Serif SC, Noto Sans SC and LXGW WenKai. Lines set in Kai take their
-// Latin letters, digits and narrow punctuation from the serif face, as
-// books set them. A face left out has no Data.
+// sans-serif one, each regular and bold, a Kai face and a FangSong one,
+// such as Noto Serif SC, Noto Sans SC, LXGW WenKai and Zhuque Fangsong.
+// Lines set in Kai or FangSong take their Latin letters, digits and narrow
+// punctuation from the serif face, as books set them. A face left out has
+// no Data.
 type TextFonts struct {
-	Serif, SerifBold, Sans, SansBold, Kai Font
+	Serif, SerifBold, Sans, SansBold, Kai, FangSong Font
 	// The serif and sans-serif faces in traditional Chinese's forms, as
 	// Noto Serif TC and Noto Sans TC, which a document in it is set in
 	// instead (see isTraditional), where they are given.
@@ -59,12 +63,12 @@ type TextFonts struct {
 
 // fonts lists the fonts by face.
 func (f TextFonts) fonts() [faces]Font {
-	return [faces]Font{f.Serif, f.SerifBold, f.Sans, f.SansBold, f.Kai, {}}
+	return [faces]Font{f.Serif, f.SerifBold, f.Sans, f.SansBold, f.Kai, {}, f.FangSong, {}}
 }
 
 // traditionalFonts lists the fonts in traditional Chinese's forms by face.
 func (f TextFonts) traditionalFonts() [faces]Font {
-	return [faces]Font{f.SerifTC, f.SerifBoldTC, f.SansTC, f.SansBoldTC, {}, {}}
+	return [faces]Font{f.SerifTC, f.SerifBoldTC, f.SansTC, f.SansBoldTC, {}, {}, {}, {}}
 }
 
 // FontNames names the fonts in a font file by their full names, as "Songti
@@ -140,23 +144,23 @@ func ReadFont(path string, i int, bold bool) (Font, []string, error) {
 var (
 	textFontFiles = [faces]string{
 		"NotoSerifSC-Regular.ttf", "NotoSerifSC-Bold.ttf", "NotoSansSC-Regular.ttf", "NotoSansSC-Bold.ttf",
-		"LXGWWenKai-Regular.ttf", "",
+		"LXGWWenKai-Regular.ttf", "", "ZhuqueFangsong-Regular.ttf", "",
 	}
 	traditionalFontFiles = [faces]string{
-		"NotoSerifTC-Regular.ttf", "NotoSerifTC-Bold.ttf", "NotoSansTC-Regular.ttf", "NotoSansTC-Bold.ttf", "", "",
+		"NotoSerifTC-Regular.ttf", "NotoSerifTC-Bold.ttf", "NotoSansTC-Regular.ttf", "NotoSansTC-Bold.ttf", "", "", "", "",
 	}
 )
 
 // LoadTextFonts reads the text fonts from where cmd/fetchdeps puts them in
-// an app's resources directory. Those in traditional Chinese's forms are
-// left out where they are missing, as from resources fetched before
-// cmd/fetchdeps fetched them.
+// an app's resources directory. Those in traditional Chinese's forms, and
+// the FangSong one, are left out where they are missing, as from resources
+// fetched before cmd/fetchdeps fetched them: FangSong is set in Kai then.
 func LoadTextFonts(resources string) (TextFonts, error) {
 	var data, tc [faces][]byte
 	for i := range faces {
 		if name := textFontFiles[i]; name != "" {
 			b, err := os.ReadFile(filepath.Join(resources, "fonts", name)) // #nosec G304 -- the app's resources
-			if err != nil {
+			if err != nil && (i != fangsong || !errors.Is(err, fs.ErrNotExist)) {
 				return TextFonts{}, err
 			}
 			data[i] = b
@@ -169,17 +173,20 @@ func LoadTextFonts(resources string) (TextFonts, error) {
 			tc[i] = b
 		}
 	}
-	return TextFonts{Font{Data: data[serif]}, Font{Data: data[serifBold]}, Font{Data: data[sans]},
-		Font{Data: data[sansBold]}, Font{Data: data[kai]},
-		Font{Data: tc[serif]}, Font{Data: tc[serifBold]}, Font{Data: tc[sans]}, Font{Data: tc[sansBold]}}, nil
+	return TextFonts{Serif: Font{Data: data[serif]}, SerifBold: Font{Data: data[serifBold]},
+		Sans: Font{Data: data[sans]}, SansBold: Font{Data: data[sansBold]},
+		Kai: Font{Data: data[kai]}, FangSong: Font{Data: data[fangsong]},
+		SerifTC: Font{Data: tc[serif]}, SerifBoldTC: Font{Data: tc[serifBold]},
+		SansTC: Font{Data: tc[sans]}, SansBoldTC: Font{Data: tc[sansBold]}}, nil
 }
 
 // latin is the face that a line set in fi takes its Latin letters, digits
-// and narrow punctuation from: the serif face of its weight for Kai,
-// whose own are a casual hand, and fi itself for the others.
+// and narrow punctuation from: the serif face of its weight for Kai, whose
+// own are a casual hand, and for FangSong, as books set them in Times
+// beside it, and fi itself for the others.
 func latin(fi int) int {
-	if fi == kai || fi == kaiBold {
-		return fi - kai + serif
+	if fi >= kai && fi <= fangsongBold {
+		return serif + fi%2
 	}
 	return fi
 }
@@ -246,9 +253,9 @@ func parseFaces(f TextFonts) ([faces]*face, error) {
 		return out, errors.New("text fonts: no serif face")
 	}
 	// A face left out is set in the one nearest it: the other weight of
-	// its kind, or the serif one of its weight.
+	// its kind, or the serif one of its weight, or Kai for FangSong.
 	for _, fill := range [][2]int{{serifBold, serif}, {sans, serif}, {sansBold, sans}, {sansBold, serifBold},
-		{kai, serif}, {kaiBold, kai}} {
+		{kai, serif}, {kaiBold, kai}, {fangsong, kai}, {fangsongBold, fangsong}} {
 		if out[fill[0]] == nil && out[fill[1]] != nil {
 			out[fill[0]] = out[fill[1]]
 		}
@@ -257,7 +264,7 @@ func parseFaces(f TextFonts) ([faces]*face, error) {
 }
 
 // faceNames name the faces in errors.
-var faceNames = [faces]string{"serif", "serif bold", "sans-serif", "sans-serif bold", "Kai", "Kai bold"}
+var faceNames = [faces]string{"serif", "serif bold", "sans-serif", "sans-serif bold", "Kai", "Kai bold", "FangSong", "FangSong bold"}
 
 // errNotEmbeddable is the error for a font whose license does not let text
 // PDFs embed it.
