@@ -1205,6 +1205,7 @@ func TestTextColor(t *testing.T) {
 		{gray, 60, rgb{}},
 		{gray, 255, rgb{}},
 		{rgb{90, 92, 90}, 60, rgb{}},
+		{rgb{145, 145, 145}, 105, rgb{}}, // a pale scan's
 		{blue, 8, blue},
 		{rgb{230, 230, 230}, 8, white},
 	} {
@@ -1296,6 +1297,21 @@ func TestLineColors(t *testing.T) {
 	one := d.shape("放下鉛筆。", sans)
 	if got := lineColors([]rgb{blue, blue, blue, blue, {50, 152, 196}}, one, white, 4); got != nil {
 		t.Errorf("a line in blue set in %v", got)
+	}
+	// On a scan whose black is a dark gray, the thin strokes of 一 and 三
+	// measure a light gray, and are set black as the rest; but a
+	// character in red keeps its red, and digits in a light gray their
+	// gray.
+	dark, pale := rgb{70, 70, 70}, rgb{150, 150, 150}
+	thin := d.shape("第一节 第三节", sans)
+	if got := lineColors([]rgb{dark, pale, dark, dark, dark, pale, {75, 75, 75}}, thin, white, 60); got != nil {
+		t.Errorf("a line in black, its thin characters measured gray, set in %v", got)
+	}
+	red := rgb{200, 30, 30}
+	mixed := d.shape("第一节 12", sans)
+	got := lineColors([]rgb{dark, red, dark, dark, pale, pale}, mixed, white, 60)
+	if want := []rgb{{}, red, {}, {}, pale, pale}; !slices.Equal(got, want) {
+		t.Errorf("a red character and gray digits set in\n%v, want\n%v", got, want)
 	}
 }
 
@@ -1600,19 +1616,24 @@ func TestItalics(t *testing.T) {
 		words []wordInk
 		n     int
 		want  string // + for a slanted glyph
+		space func(g int) bool
 	}{
 		{"an italic line after a label", []wordInk{word(0, 2, 1, -0.01), word(3, 7, 4, 0.13), word(8, 16, 7, 0.07)}, 16,
-			"   +++++++++++++"},
+			"   +++++++++++++", nil},
 		{"an example after a word upright", []wordInk{word(0, 7, 6, -0.03), word(8, 12, 4, 0.19), word(13, 15, 2, 0.21)}, 15,
-			"        +++++++"},
+			"        +++++++", nil},
 		{"a reply quoted in an instruction", []wordInk{word(0, 2, 0, 0.02), word(3, 7, 3, 0.24), word(8, 16, 6, 0)}, 16,
-			"   ++++         "},
+			"   ++++         ", nil},
 		{"an upright line", []wordInk{word(0, 4, 0, 0.2), word(5, 7, 2, 0.02), word(8, 9, 0, 0.35), word(10, 13, 3, 0.18), word(14, 18, 4, -0.01)}, 18,
-			""},
+			"", nil},
 		{"a title in an upright line", []wordInk{word(0, 3, 3, 0.01), word(4, 9, 5, 0.17), word(10, 13, 3, -0.02), word(14, 18, 4, 0)}, 18,
-			"    +++++         "},
+			"    +++++         ", nil},
+		// "Chapter 14 第十四章……259": the Chinese between the italic words
+		// is not slanted with them.
+		{"a Chinese title between italic words", []wordInk{word(0, 7, 7, 0.2), word(8, 10, 2, 0.2), word(17, 20, 3, 0.1)}, 20,
+			"++++++++++       +++", func(g int) bool { return g == 7 || g == 10 }},
 	} {
-		slanted, lean := italics(c.words, c.n)
+		slanted, lean := italics(c.words, c.n, c.space)
 		var got string
 		for _, s := range slanted {
 			got += map[bool]string{true: "+", false: " "}[s]
@@ -1800,7 +1821,7 @@ func TestSpread(t *testing.T) {
 	// The gap after 1.19, 60 pixels wide, one of 12 as the fonts set it,
 	// and 8 more pixels for the rest.
 	width := float64(sh.right-sh.left)/em*size + 68
-	adds := sh.spread(0, len(sh.glyphs), 68, size, em, [][2]float64{{70, 130}, {300, 312}}, 0, width, 0.05*size)
+	adds := sh.spread(0, len(sh.glyphs), 68, size, em, [][2]float64{{70, 130}, {300, 312}}, 0, width, size, 0.05*size)
 	runes := []rune(text)
 	first := slices.Index(runes, ' ')
 	second := first + 1 + slices.Index(runes[first+1:], ' ')
@@ -1811,6 +1832,33 @@ func TestSpread(t *testing.T) {
 		if k != second-1 && k != second && adds[k] > 0.05*size+0.01 {
 			t.Errorf("tracked by %.1f after %q", adds[k], runes[k])
 		}
+	}
+
+	// A contents page's line in Chinese, read with a space before its
+	// title, which the column after the section number is, and the leaders
+	// set apart from the page number.
+	text = "第一节 否定转移……284"
+	sh = d.shape(text, sans)
+	runes = []rune(text)
+	first = slices.Index(runes, ' ')
+	k0 := size / em
+	edge := func(g int, right bool) float64 { // where glyph g's outline starts, or ends, set at its advances
+		at := 0.0
+		for _, h := range sh.glyphs[:g] {
+			at += float64(h.advance) * k0
+		}
+		if right {
+			return at + float64(sh.glyphs[g].bounds[2])*k0
+		}
+		return at + float64(sh.glyphs[g].bounds[0])*k0
+	}
+	digits := slices.Index(runes, '2')
+	col := [2]float64{edge(first-1, true), edge(first-1, true) + 65}
+	leaders := [2]float64{edge(digits-1, true) + 65, edge(digits, false) + 65}
+	width = float64(sh.right-sh.left)*k0 + 65
+	adds = sh.spread(0, len(sh.glyphs), 65, size, em, [][2]float64{col, leaders}, 0, width, size, 0.05*size)
+	if len(adds) != len(sh.glyphs)-1 || adds[first-1]+adds[first] < 40 {
+		t.Errorf("adds %v: want the column's after 第一节", adds)
 	}
 
 	// A contents page's line, its section number's point set apart by a
@@ -1834,7 +1882,7 @@ func TestSpread(t *testing.T) {
 	column := [2]float64{number + 6, number + 66}
 	space := [2]float64{column[1] + the, column[1] + the + 11}
 	width = space[1] + rest - float64(sh.glyphs[second+1].bounds[0])*k
-	adds = sh.spread(0, len(sh.glyphs), width-float64(sh.right-sh.left)*k, size, em, [][2]float64{point, column, space}, 0, width, 0.05*size)
+	adds = sh.spread(0, len(sh.glyphs), width-float64(sh.right-sh.left)*k, size, em, [][2]float64{point, column, space}, 0, width, size, 0.05*size)
 	if len(adds) != len(sh.glyphs)-1 || adds[first-1]+adds[first] < 40 || adds[second-1]+adds[second] > 10 {
 		t.Errorf("adds %v: want the column's after 1.10, and little before Telephone", adds)
 	}

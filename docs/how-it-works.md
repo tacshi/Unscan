@@ -215,25 +215,32 @@ For each scanned page, at the resolution it was read at:
    each other on a page share, as a paragraph's do. Glyphs keep their
    shapes: the line is spaced out to the ink's width as books are set.
    Each place its words part at, a space or where CJK characters meet
-   Latin ones, is as wide as its gap in the ink: the gaps, as many as
-   there are places, in order along the line, that part the ink into
+   Latin ones, is as wide as its gap in the ink, where it takes one: the
+   places take the gaps, in order along the line, that part the ink into
    stretches as wide as the words between them, by the least sum of how
-   far each is from its word's width on a log scale. They are not simply
+   far each is from its word's width on a log scale, less a tenth for
+   each place that takes a gap, and a half more for each gap wider than
+   six tenths of the ink's height that none takes. They are not simply
    the widest, as a contents page's section number, 1.10, has a gap after
-   its point wider than the space between the words after it. The rest of
-   a line of Latin is taken by a face a tenth wider at most (`Tz`), as the
-   face it was printed in may be wider than the text fonts, and by
-   tracking its letters out by a twentieth of an em at most; what is left goes
-   between CJK characters, three times as much where they meet Latin
-   words, and at spaces, or is tracked out further where there are none.
+   its point wider than the space between the words after it; and a
+   place may take none, as where CJK characters meet the leaders after
+   them, close. A gap so wide that a place takes, as the column after a
+   section number, parts the ink, and each side is set on its own, as
+   below. The rest of a line of Latin is taken by a face a tenth wider
+   at most (`Tz`), as the face it was printed in may be wider than the
+   text fonts, and by tracking its letters out by a twentieth of an em at
+   most; what is left goes between CJK characters, three times as much
+   where they meet Latin words, and at spaces that took no gap, or is
+   tracked out further where there are none.
    A line tracked out, as a title's letters are, whose gaps between its
    pieces of ink are a fifth of its height or wider, by their median, is
    tracked out instead, unstretched; and where its pieces lie a third of
    its height apart, one for each letter, each letter is set on its own
    piece, whatever spaces were read, as in a title read "PIC T U R E".
-   Where gaps wider than the
-   ink is high, by a quarter, part the ink, as a label from what it
-   labels, the characters are matched to each stretch by how far their
+   Where gaps wider than the ink is high, by a quarter, part the ink, as
+   a label from what it labels, or as high as it, in a line mostly of CJK
+   characters, as the column after a contents page's section number,
+   which the recognizer seldom reads a space in, the characters are matched to each stretch by how far their
    outlines span, parting where the text itself leaves a gap, as after a
    comma, but not within a word where the text has a space close by, and
    set on it, and ink no character is matched to, such as a bullet, is
@@ -246,7 +253,9 @@ For each scanned page, at the resolution it was read at:
    as the document's italic lines lean, by their median, but for its
    label, as "A:", and a word that leans little, as a reply quoted in an
    instruction; a long word in an upright line that leans that far is set
-   slanted alone. A word's lean is its edges', by their median, less what
+   slanted alone. An italic word's slant carries on over the spaces to an
+   italic word after it, but not over CJK characters between them, as a
+   Chinese title between "Chapter 14" and a page number. A word's lean is its edges', by their median, less what
    its letters lean set upright in the text font, as a y's long stroke
    does, measured between the ink's gaps nearest where the word is set. The spacing goes into the
    characters' advances, with a CID for each character and advance, so
@@ -265,9 +274,15 @@ For each scanned page, at the resolution it was read at:
    in the color of its ink, as a heading in black with its translation in
    blue is, measured across its advance where it is first set, and a word
    of Latin letters or digits in the color most of its characters are,
-   as one ink prints a word. Ink that is about black prints black, but
-   for gray on a page printed black, as a contents page's section numbers
-   are, which stays gray.
+   as one ink prints a word. Ink that is about black prints black: ink
+   without color darker than two fifths of the way from the page's black,
+   the darkest of its lines' ink, to white. So gray on a page printed
+   black, as a contents page's section numbers are, stays gray, and a
+   page printed faint, as a pale scan shows it, its black as faint, is
+   black. A CJK character of thin strokes, as 一 or 三, measures lighter
+   than those beside it on a pale scan: in a run of CJK characters in
+   gray or black, one lighter than most of the run is set as dark as
+   they are, while a character in a color keeps it.
 5. Lines on plain paper are erased, but for those that type would not
    match, which stay as printed under invisible text, as text on color,
    a pale tint's too, does: a line whose ink is framed, as a letter in a
@@ -381,21 +396,26 @@ CGO_ENABLED=0 go test ./...
   space between them. A heading in black with its translation in blue is
   set in both, with a color for each run; a word is set in the color most
   of its letters were measured in, a gray section number in gray, and a
-  line in one color, its thin 。 measured lighter, in it alone. A
-  caption whose verb is bold among lines set regular sets the verb bold
+  line in one color, its thin 。 measured lighter, in it alone. On a scan
+  whose black is a dark gray, Chinese characters of thin strokes measured
+  a lighter gray are set black as the rest, while a character in red
+  keeps its red, and digits in a light gray their gray; and ink a little
+  lighter than a pale page's black prints black. A caption whose verb is bold among lines set regular sets the verb bold
   and the rest regular, and an example set italic after a bold label is
   slanted but for the label. A title tracked out, read as it is or with
   spaces where none are, has each letter set over its own, unstretched;
   a line spaced out where its words part in the ink, a wide gap after a
   section's number, takes the gap there, not tracking, even where the
   number's point is set apart by more than the space between the words
-  after it; a line two fifths
+  after it, and a contents line in Chinese takes the gap after its
+  section number at the space read there; a line two fifths
   wider than its glyphs is set a tenth wider at most, and tracked for
   the rest, or tracked alone where its letters lie apart; and an upright
   line in Arial full of y's stays upright. Text sheared as italic is by 0.12 and 0.2
   measures within 0.04 of that, and upright text about upright; a line
   whose words lean is italic but for its label and a word leaning left,
-  and in an upright line only a long word leaning far is. A word
+  and in an upright line only a long word leaning far is; the Chinese
+  between two italic words is not slanted with them. A word
   underlined, the rule running into its letters or apart from them, is
   set at its size, and the rule kept. Dot
   leaders at 300 DPI, too far apart to join, are kept, while

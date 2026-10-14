@@ -1346,8 +1346,10 @@ func lean(w, h int, cover func(x, y int) float64, from, to int) float64 {
 // Latin letters, digits or punctuation is in the color most of its glyphs
 // are: one ink prints a word, and a narrow glyph's ink, measured where the
 // line is set a little off its ink, may be its neighbor's. A CJK character
-// is wide enough to tell its own. It is nil where the line is in one
-// color.
+// is wide enough to tell its own color, but not its shade of gray: one of
+// thin strokes, as 一 or 三, measures lighter than those beside it on a
+// pale scan, and is set as dark as most of its run of CJK characters are,
+// where they are gray or black. It is nil where the line is in one color.
 func lineColors(inks []rgb, sh shape, bg rgb, black int) []rgb {
 	if inks == nil {
 		return nil
@@ -1355,6 +1357,37 @@ func lineColors(inks []rgb, sh shape, bg rgb, black int) []rgb {
 	colors := make([]rgb, len(inks))
 	for i, c := range inks {
 		colors[i] = textColor(c, bg, true, black)
+	}
+	// most is the color most of colors are within 48 levels of, the
+	// darkest of those that are.
+	most := func(colors []rgb) rgb {
+		best, count := colors[0], 0
+		for _, c := range colors {
+			n := len(slices.DeleteFunc(slices.Clone(colors), func(d rgb) bool { return diff(c, d) > 48 }))
+			if n > count || n == count && luma(c) < luma(best) {
+				best, count = c, n
+			}
+		}
+		return best
+	}
+	cjk := func(g glyph) bool { return g.wide && !g.space }
+	for i := 0; i < len(colors); {
+		if !cjk(sh.glyphs[i]) {
+			i++
+			continue
+		}
+		j := i + 1
+		for j < len(colors) && cjk(sh.glyphs[j]) {
+			j++
+		}
+		if m := most(colors[i:j]); chroma(m) < 48 {
+			for k := i; k < j; k++ {
+				if chroma(colors[k]) < 48 && luma(colors[k]) > luma(m) {
+					colors[k] = m
+				}
+			}
+		}
+		i = j
 	}
 	word := func(g glyph) bool { return !g.wide && !g.space }
 	for i := 0; i < len(colors); {
@@ -1364,14 +1397,9 @@ func lineColors(inks []rgb, sh shape, bg rgb, black int) []rgb {
 				j++
 			}
 		}
-		most, count := colors[i], 0
-		for _, c := range colors[i:j] {
-			if n := len(slices.DeleteFunc(slices.Clone(colors[i:j]), func(d rgb) bool { return diff(c, d) > 48 })); n > count {
-				most, count = c, n
-			}
-		}
+		m := most(colors[i:j])
 		for k := i; k < j; k++ {
-			colors[k] = most
+			colors[k] = m
 		}
 		i = j
 	}
@@ -1636,7 +1664,7 @@ func (d *textDoc) setLines() {
 	// of its lines', as one face printed it all.
 	var leans []float64
 	for _, m := range all {
-		if _, k := italics(m.refs.words, len([]rune(strings.TrimSpace(m.text)))); k > 0 && !m.printed {
+		if _, k := italics(m.refs.words, len([]rune(strings.TrimSpace(m.text))), nil); k > 0 && !m.printed {
 			leans = append(leans, k)
 		}
 	}
@@ -1691,7 +1719,7 @@ func (d *textDoc) setLines() {
 			tl.cids = d.number(d.sets[page.set], sh, origins, sizes[i])
 			tl.hidden = m.printed
 			if !m.printed {
-				if tl.slanted, _ = italics(m.refs.words, len(sh.glyphs)); tl.slanted != nil {
+				if tl.slanted, _ = italics(m.refs.words, len(sh.glyphs), func(g int) bool { return sh.glyphs[g].space }); tl.slanted != nil {
 					tl.slant = slant
 					// Where each glyph starts along the line, in points, and
 					// how far to set the slanted ones back, which the slant
@@ -1750,8 +1778,12 @@ func glyphFaces(m measuredLine) []int {
 // less, upright, has a word of four letters or more italic where it leans
 // by 0.15 or more, as a short word's few strokes may lean by chance. The
 // few letters of punctuation, digits or a one-letter word lean as their
-// glyphs do, as / and 7 do: they are set as the words beside them.
-func italics(words []wordInk, n int) ([]bool, float64) {
+// glyphs do, as / and 7 do: they are set as the words beside them. An
+// italic word is set slanted on to the next, italic too, where spaces
+// alone part them, as space reports glyphs to be, nil for all: not over
+// CJK characters between them, as "Chapter 14" and a page number italic
+// have a Chinese title between them.
+func italics(words []wordInk, n int, space func(g int) bool) ([]bool, float64) {
 	var sum float64
 	var counted []float64
 	for _, w := range words {
@@ -1787,9 +1819,17 @@ func italics(words []wordInk, n int) ([]bool, float64) {
 	}
 	slanted := make([]bool, n)
 	var lean []float64
+	spaces := func(from, to int) bool {
+		for g := from; g < to; g++ {
+			if space != nil && !space(g) {
+				return false
+			}
+		}
+		return true
+	}
 	for k, w := range words {
-		end := w.to // and on to the next word, italic too, past the space
-		if k+1 < len(words) && italic[k+1] {
+		end := w.to // and on to the next word, italic too, past the spaces
+		if k+1 < len(words) && italic[k+1] && spaces(w.to, words[k+1].from) {
 			end = words[k+1].from
 		}
 		for g := w.from; g < end && italic[k]; g++ {
@@ -2108,17 +2148,19 @@ func evenSizes(sizes []float64) []float64 {
 
 // spread shares extra pixels out after glyphs i to j (not included) but
 // the last, set at size pixels an em of em font units, to space them out
-// to their ink, from from to to along the line, gaps the ink's wide gaps
-// between them (see ink.gaps): at each place to part words, as much as its
-// gap in the ink holds beyond what the glyphs leave there (see wordGaps);
-// the rest alike after every
-// glyph, but between CJK characters, as letters are tracked out, up to
-// most pixels a glyph; and what is left at the places and between CJK
-// characters, by spacing's weights, up to an em a weight, or tracked out
-// further where there are none. A line mostly of CJK characters, or with
-// no word of letters to track, has the weights take all of it. It is nil
-// where there is nothing to share or nowhere to share it.
-func (sh shape) spread(i, j int, extra, size, em float64, gaps [][2]float64, from, to, most float64) []float64 {
+// to their ink, from from to to along the line and high pixels high, gaps
+// the ink's wide gaps between them (see ink.gaps): at each place to part
+// words, as much as its
+// gap in the ink holds beyond what the glyphs leave there (see wordGaps),
+// as the column after a contents page's section number; the rest alike
+// after every glyph, but between CJK characters, as letters are tracked
+// out, up to most pixels a glyph; and what is left at the places and
+// between CJK characters, by spacing's weights, up to an em a weight, or
+// tracked out further where there are none. A line mostly of CJK
+// characters, or with no word of letters to track, is not tracked: the
+// weights take what its places leave. It is nil where there is nothing to
+// share or nowhere to share it.
+func (sh shape) spread(i, j int, extra, size, em float64, gaps [][2]float64, from, to, high, most float64) []float64 {
 	weights, total := sh.spacing(i, j)
 	lo, hi := i, j-1 // the glyphs that draw, from the first to the last
 	for lo < hi && !sh.glyphs[lo].inked {
@@ -2143,12 +2185,16 @@ func (sh shape) spread(i, j int, extra, size, em float64, gaps [][2]float64, fro
 	}
 	adds := make([]float64, len(weights))
 	rest := extra
-	if pairs > 0 && !sh.cjk() {
-		for k, e := range sh.wordGaps(i, j, size, em, gaps, from, to) {
-			e = min(e, rest)
-			adds[k-i] += e
-			rest -= e
+	for k, e := range sh.wordGaps(i, j, size, em, gaps, from, to, high) {
+		e = min(e, rest)
+		adds[k-i] += e
+		rest -= e
+		if sh.cjk() { // its gap is all a place of a CJK line takes
+			total -= weights[k-i]
+			weights[k-i] = 0
 		}
+	}
+	if pairs > 0 && !sh.cjk() {
 		track := min(rest/float64(tracked), most)
 		for k, t := range tracks {
 			if t {
@@ -2175,34 +2221,71 @@ func (sh shape) spread(i, j int, extra, size, em float64, gaps [][2]float64, fro
 // wordGaps is how much wider, in pixels, each place to part words at in
 // glyphs i to j (not included) is in their ink than the glyphs, set at
 // size pixels an em of em font units, leave it, by the glyph it follows,
-// gaps the ink's wide gaps between them (see ink.gaps), which runs from
-// from to to along the line. A place is a space, or where CJK characters
-// meet Latin ones. The places take the gaps, in order along the line, that
-// part the ink into stretches as wide as the words between them, by the
-// least sum of how far each is from its word's width, on a log scale: not
-// the widest, as a contents page's section number, 1.10, has a gap after
-// its point wider than the space between the words after it. It is nil
-// where the ink has fewer wide gaps than the glyphs have places.
-func (sh shape) wordGaps(i, j int, size, em float64, gaps [][2]float64, from, to float64) map[int]float64 {
-	type place struct {
-		after, next int     // the glyph it follows, and the first of the word after it
-		natural     float64 // what the glyphs leave there, in pixels
+// for each place that takes one of gaps, the ink's wide gaps between them,
+// which runs from from to to along the line and is high pixels high (see
+// wordPlaces).
+func (sh shape) wordGaps(i, j int, size, em float64, gaps [][2]float64, from, to, high float64) map[int]float64 {
+	places, took := sh.wordPlaces(i, j, size, em, gaps, from, to, high)
+	extra := map[int]float64{}
+	for p, g := range took {
+		if g >= 0 {
+			extra[places[p].after] = max(gaps[g][1]-gaps[g][0]-places[p].natural, 0)
+		}
 	}
-	var places []place
+	return extra
+}
+
+// wordPlace is a place to part words at: a space, or where CJK characters
+// meet Latin ones.
+type wordPlace struct {
+	after, next int     // the glyph it follows, and the first of the word after it
+	natural     float64 // what the glyphs leave there, in pixels
+}
+
+// Weighing places against gaps (see wordPlaces): what a gap as wide as the
+// ink is high costs that no place takes, as a column's, wider than the
+// blank a CJK punctuation mark leaves in its em, and what a place taking a
+// gap is worth.
+const (
+	gapUnused = 0.5
+	gapTaken  = 0.1
+)
+
+// wideGap is how wide a gap in a line's ink is, over the ink's height,
+// that is wider than a space: a place to part words at, as the column
+// after a contents page's section number is, rather than a gap within a
+// word.
+const wideGap = 0.6
+
+// wordPlaces finds the places to part words at in glyphs i to j (not
+// included), set at size pixels an em of em font units, and which of gaps,
+// the ink's wide gaps between them, in order along the line, each takes,
+// or -1 for none, which leaves the glyphs' own space there. The ink runs
+// from from to to, and is high pixels high. The places take the gaps that
+// part the ink into stretches as wide as the glyphs between them, by the
+// least sum of how far each is from its glyphs' width, on a log scale,
+// less gapTaken for each place that takes one, and gapUnused for each gap
+// as wide as the ink is high that none takes: not simply the widest gaps,
+// as a contents page's section number, 1.10, has a gap after its point
+// wider than the space between the words after it; and a place may take
+// none, as where CJK characters meet the leaders after them, close, but a
+// gap as wide as a column is a place's.
+func (sh shape) wordPlaces(i, j int, size, em float64, gaps [][2]float64, from, to, high float64) ([]wordPlace, []int) {
+	var places []wordPlace
 	for k := i; k+1 < j; k++ {
 		a, b := sh.glyphs[k], sh.glyphs[k+1]
 		switch {
 		case a.inked && b.space && k+2 < j && sh.glyphs[k+2].inked:
-			places = append(places, place{k, k + 2, float64(a.advance-a.bounds[2]+b.advance+sh.glyphs[k+2].bounds[0]) / em * size})
+			places = append(places, wordPlace{k, k + 2, float64(a.advance-a.bounds[2]+b.advance+sh.glyphs[k+2].bounds[0]) / em * size})
 		case a.inked && b.inked && a.wide != b.wide:
-			places = append(places, place{k, k + 1, float64(a.advance-a.bounds[2]+b.bounds[0]) / em * size})
+			places = append(places, wordPlace{k, k + 1, float64(a.advance-a.bounds[2]+b.bounds[0]) / em * size})
 		}
 	}
 	m, n := len(places), len(gaps)
-	if m == 0 || n < m {
-		return nil
+	if m == 0 || n == 0 {
+		return places, nil
 	}
-	// How wide each word's glyphs' outlines span, set at their own advances.
+	// How wide glyphs a to b, inclusive, span, set at their own advances.
 	origin := make([]float64, j-i+1)
 	for k := i; k < j; k++ {
 		origin[k-i+1] = origin[k-i] + float64(sh.glyphs[k].advance)/em*size
@@ -2216,47 +2299,77 @@ func (sh shape) wordGaps(i, j int, size, em float64, gaps [][2]float64, from, to
 		}
 		return max(1, origin[b-i]+float64(sh.glyphs[b].bounds[2])/em*size-origin[a-i]-float64(sh.glyphs[a].bounds[0])/em*size)
 	}
-	words := make([]float64, m+1)
-	words[0], words[m] = span(i, places[0].after), span(places[m-1].next, j-1)
-	for p := 1; p < m; p++ {
-		words[p] = span(places[p-1].next, places[p].after)
+	off := func(a, b int, s0, s1 float64) float64 { return math.Abs(math.Log(max(1, s1-s0) / span(a, b))) }
+	// wide[g] is how many of the gaps before gap g are as wide as the ink
+	// is high.
+	wide := make([]int, n+1)
+	for g, gap := range gaps {
+		wide[g+1] = wide[g]
+		if gap[1]-gap[0] >= high {
+			wide[g+1]++
+		}
 	}
-	off := func(ink, word float64) float64 { return math.Abs(math.Log(max(1, ink) / word)) }
-	// least[p][g] is the least sum for the words up to place p, set at gap
-	// g, and back[p][g] the gap place p-1 is set at for it.
-	least, back := make([][]float64, m), make([][]int, m)
-	for p := range m {
-		least[p], back[p] = make([]float64, n), make([]int, n)
+	// least[p][g] is the least sum for the glyphs up to place p, which
+	// takes gap g, and back[p][g] the place and gap before, -1 for none.
+	least, back := make([][]float64, m), make([][][2]int, m)
+	for p, pl := range places {
+		least[p], back[p] = make([]float64, n), make([][2]int, n)
 		for g := range n {
-			least[p][g] = math.Inf(1)
-			switch {
-			case g < p || n-g < m-p: // no room for the places before or after
-			case p == 0:
-				least[p][g] = off(gaps[g][0]-from, words[0])
-			default:
-				for h := p - 1; h < g; h++ {
-					if c := least[p-1][h] + off(gaps[g][0]-gaps[h][1], words[p]); c < least[p][g] {
-						least[p][g], back[p][g] = c, h
+			least[p][g] = off(i, pl.after, from, gaps[g][0]) + gapUnused*float64(wide[g]) - gapTaken
+			back[p][g] = [2]int{-1, -1}
+			for q := max(0, p-8); q < p; q++ {
+				for h := range g {
+					if c := least[q][h] + off(places[q].next, pl.after, gaps[h][1], gaps[g][0]) +
+						gapUnused*float64(wide[g]-wide[h+1]) - gapTaken; c < least[p][g] {
+						least[p][g], back[p][g] = c, [2]int{q, h}
 					}
 				}
 			}
 		}
 	}
-	g, best := -1, math.Inf(1)
-	for h := m - 1; h < n; h++ {
-		if c := least[m-1][h] + off(to-gaps[h][1], words[m]); c < best {
-			g, best = h, c
+	took := make([]int, m)
+	for p := range took {
+		took[p] = -1
+	}
+	best, at := off(i, j-1, from, to)+gapUnused*float64(wide[n]), [2]int{-1, -1}
+	for p, pl := range places {
+		for g := range n {
+			if c := least[p][g] + off(pl.next, j-1, gaps[g][1], to) + gapUnused*float64(wide[n]-wide[g+1]); c < best {
+				best, at = c, [2]int{p, g}
+			}
 		}
 	}
-	if g < 0 {
-		return nil
+	for at[0] >= 0 {
+		took[at[0]] = at[1]
+		at = back[at[0]][at[1]]
 	}
-	extra := map[int]float64{}
-	for p := m - 1; p >= 0; p-- {
-		extra[places[p].after] = max(gaps[g][1]-gaps[g][0]-places[p].natural, 0)
-		g = back[p][g]
+	return places, took
+}
+
+// wordStretches parts a line's ink, set as sh sets it at size pixels an em
+// of em font units, where its words part by a gap wider than wideGap (see
+// wordPlaces), as the column after a contents page's section number does,
+// which a stretch of each side sets apart from the other, each on its own
+// ink, as gaps wider still part it (see ink.segs). It returns the
+// stretches and where each one's glyphs start, and len(glyphs) last, or
+// nil where none part it so.
+func (sh shape) wordStretches(in ink, size, em float64) ([][2]float64, []int) {
+	high := in.t1 - in.t0
+	gaps := in.gapsIn(in.s0, in.s1)
+	places, took := sh.wordPlaces(0, len(sh.glyphs), size, em, gaps, in.s0, in.s1, high)
+	segs, starts := [][2]float64{{in.s0, in.s1}}, []int{0}
+	for p, g := range took {
+		if g < 0 || gaps[g][1]-gaps[g][0] < wideGap*high {
+			continue
+		}
+		segs[len(segs)-1][1] = gaps[g][0]
+		segs = append(segs, [2]float64{gaps[g][1], in.s1})
+		starts = append(starts, places[p].next)
 	}
-	return extra
+	if len(segs) == 1 {
+		return nil, nil
+	}
+	return segs, append(starts, len(sh.glyphs))
 }
 
 // words is where the ink of a word set from s0 to s1 along its line lies:
@@ -2282,6 +2395,19 @@ func (in ink) words(s0, s1, near float64) (float64, float64) {
 		return s0, s1
 	}
 	return from, to
+}
+
+// parted is the ink's stretches from s0 to s1, parted at its gaps as wide
+// as wide or wider.
+func (in ink) parted(wide float64) [][2]float64 {
+	segs := [][2]float64{{in.s0, in.s1}}
+	for _, g := range in.gaps {
+		if g[1]-g[0] >= wide && g[0] > in.s0 && g[1] < in.s1 {
+			segs[len(segs)-1][1] = g[0]
+			segs = append(segs, [2]float64{g[1], in.s1})
+		}
+	}
+	return segs
 }
 
 // gapsIn is the ink's wide gaps that lie from s0 to s1.
@@ -2333,6 +2459,26 @@ func (d *textDoc) place(sh shape, f frame, in ink, size float64) (tl textLine, o
 	if tracked {
 		track = math.Inf(1)
 	}
+	// The stretches of ink the line is set on, each its own: where gaps
+	// wider than words part part it, and else where its words part widely.
+	// A line of CJK characters parts at gaps as wide as it is high, too, as
+	// the column after a contents page's section number, which a space the
+	// recognizer read seldom tells: they part characters, not words.
+	// A line tracked out has each glyph set on its own piece of ink.
+	pieced := in.pieces != nil && inked == len(in.pieces) && !sh.cjk()
+	segs, starts := in.segs, []int(nil)
+	if len(segs) == 1 && sh.cjk() && !tracked {
+		segs = in.parted(in.t1 - in.t0)
+	}
+	switch {
+	case len(segs) > 1:
+		starts = sh.split(segs, size, em)
+	case in.found && !tracked && !pieced:
+		if s, st := sh.wordStretches(in, size, em); s != nil {
+			segs, starts = s, st
+		}
+	}
+	high := in.t1 - in.t0
 	switch {
 	case !in.found:
 		// No ink stands out: fill the box, centered.
@@ -2340,7 +2486,7 @@ func (d *textDoc) place(sh shape, f frame, in ink, size float64) (tl textLine, o
 		tl.scale = min(max(0.95*f.length/(float64(sh.advance)/em*size), 0.5), 2)
 		tl.x = 0.025 * f.length
 		tl.y = f.height/2 - float64(sh.yMin+sh.yMax)/2/em*size
-	case in.pieces != nil && inked == len(in.pieces) && !sh.cjk():
+	case pieced:
 		k := 0
 		for i, g := range sh.glyphs {
 			switch {
@@ -2357,10 +2503,9 @@ func (d *textDoc) place(sh shape, f frame, in ink, size float64) (tl textLine, o
 			origins[i] -= tl.x
 		}
 		tl.y = in.t0 - float64(sh.yMin)/em*size
-	case len(in.segs) > 1:
-		starts := sh.split(in.segs, size, em)
+	case len(segs) > 1:
 		first := true
-		for c, seg := range in.segs {
+		for c, seg := range segs {
 			i, j := starts[c], starts[c+1]
 			if i == j {
 				bare = append(bare, seg)
@@ -2377,7 +2522,7 @@ func (d *textDoc) place(sh shape, f frame, in ink, size float64) (tl textLine, o
 				tl.x, first = at, false
 			}
 			origins[i] = at - tl.x
-			adds := sh.spread(i, j, seg[1]-seg[0]-float64(right-left)/em*size, size, em, in.gapsIn(seg[0], seg[1]), seg[0], seg[1], track)
+			adds := sh.spread(i, j, seg[1]-seg[0]-float64(right-left)/em*size, size, em, in.gapsIn(seg[0], seg[1]), seg[0], seg[1], high, track)
 			for k := i; k < j; k++ {
 				origins[k+1] = origins[k] + float64(sh.glyphs[k].advance)/em*size
 				if k-i < len(adds) {
@@ -2395,7 +2540,7 @@ func (d *textDoc) place(sh shape, f frame, in ink, size float64) (tl textLine, o
 		gaps := in.gapsIn(in.s0, in.s1)
 		if width > span && !tracked && !sh.cjk() {
 			words := 0.0
-			for _, e := range sh.wordGaps(0, n, size, em, gaps, in.s0, in.s1) {
+			for _, e := range sh.wordGaps(0, n, size, em, gaps, in.s0, in.s1, high) {
 				words += e
 			}
 			tl.scale = min(max((width-words)/span, 1), 1.1)
@@ -2403,7 +2548,7 @@ func (d *textDoc) place(sh shape, f frame, in ink, size float64) (tl textLine, o
 				gaps[k][0], gaps[k][1] = gaps[k][0]/tl.scale, gaps[k][1]/tl.scale
 			}
 		}
-		switch adds := sh.spread(0, n, width/tl.scale-span, size, em, gaps, in.s0/tl.scale, in.s1/tl.scale, track); {
+		switch adds := sh.spread(0, n, width/tl.scale-span, size, em, gaps, in.s0/tl.scale, in.s1/tl.scale, high/tl.scale, track); {
 		case adds != nil:
 			for i, a := range adds {
 				origins[i+1] = origins[i] + float64(sh.glyphs[i].advance)/em*size + a
@@ -2450,10 +2595,11 @@ func (d *textDoc) number(s *cidSet, sh shape, origins []float64, size float64) [
 
 // textColor is the color a line is set in: black or white for ink that is
 // about so, as a typeset page's would be, and the ink's own color else.
-// Ink without color is about black that is darker than gray halfway to
-// white, or two fifths of the way from the page's black, the luma of its
-// darkest such ink, where that is darker: a page printed black keeps its
-// gray, as of a contents page's section numbers.
+// Ink without color is about black that is darker than two fifths of the
+// way from the page's black, the luma of its darkest such ink, to white: a
+// page printed black keeps its gray, as of a contents page's section
+// numbers, and a page printed faint, as a pale scan shows it, its black
+// as faint, prints its text black.
 func textColor(fg, bg rgb, found bool, black int) rgb {
 	switch {
 	case !found:
@@ -2461,7 +2607,7 @@ func textColor(fg, bg rgb, found bool, black int) rgb {
 			return white
 		}
 		return rgb{}
-	case chroma(fg) < 48 && luma(fg) < min(128, black+(255-black)*2/5):
+	case chroma(fg) < 48 && luma(fg) < black+(255-black)*2/5:
 		return rgb{}
 	case chroma(fg) < 48 && luma(fg) > 200:
 		return white
