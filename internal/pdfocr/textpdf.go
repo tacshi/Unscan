@@ -367,8 +367,11 @@ type measuredLine struct {
 	// stacked is whether the line is a column of characters set upright,
 	// one under the other (see stacked).
 	stacked bool
-	refs    lineRefs // what styles judges it against, unless printed
-	face    int      // the face it was printed in, once styles has judged it
+	// source is which of its page's lines the recognizer read it in, as
+	// part of it where it was set apart (see apart).
+	source int
+	refs   lineRefs // what styles judges it against, unless printed
+	face   int      // the face it was printed in, once styles has judged it
 }
 
 // pageImage is an image drawn at x, y, w points by h.

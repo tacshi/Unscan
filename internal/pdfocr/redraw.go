@@ -1580,27 +1580,34 @@ type linePart struct {
 
 // apartGap is how wide a gap in a line's ink must be, over the ink's
 // height, for apart to part the line there, and apartSpace over the size
-// of the label before it: wider than any space at its size. apartSize is
-// how many times the label's size the type after the gap must be, and
-// apartFit how far, on a log scale, each side's characters may be from
-// spanning its ink: they must lie where they were read.
-const apartGap, apartSpace, apartSize, apartFit = 0.5, 0.8, 1.3, 0.3
+// of the label before it: wider than a space at its size, as a word
+// letter-spaced is set apart from the next by more. apartSize is how many
+// times the label's size the type after the gap must be, and apartFit how
+// far, on a log scale, each side's characters may be from spanning its
+// ink: they must lie where they were read.
+const apartGap, apartSpace, apartSize, apartFit = 0.5, 0.6, 1.3, 0.3
 
-// apart parts a line where its ink parts, at a gap apartGap of its height
-// or wider, after a label of Latin letters or digits, in type apartSize
-// times smaller than the rest's or more, the rest starting where the line
-// above or below it does, as a label hanging in the margin, as "Chapter
-// 14" before a contents page's chapter title, whose first section's line
-// starts where it does, which the recognizer reads as one line: each part
-// is a line of its own, measured, judged and set as it was printed.
+// apart parts a line on plain paper where its ink parts, at a gap
+// apartGap of its height or wider, after a label of Latin letters or
+// digits, in type apartSize times smaller than the rest's or more, which
+// the recognizer reads as one line: each part is a line of its own,
+// measured, judged and set as it was printed, at its size, and tracked
+// out where its letters are, as "Chapter", small and letter-spaced, before
+// a chapter's number, "02", large and bold. In a line with Chinese in it,
+// the rest must start where the line above or below it does, as a label
+// hangs in the margin, as "Chapter 14" before a contents page's chapter
+// title, whose first section's line starts where it does.
 //
 // Less tells too little. A Latin word in Chinese text, which books space
 // widely, measures from seven tenths of the Chinese's size to nearly twice
-// it, as the two scripts' faces are proportioned unlike the text fonts;
-// another line may start where a word ends, by chance, as on a page of
-// labels, or as a definition's does after its term, larger; and a label's
-// words, read as one line with what it labels, are parted by spaces, not
-// by gaps apartSpace of its size, as wide as a word.
+// it, as the two scripts' faces are proportioned unlike the text fonts,
+// while Latin beside Latin measures within a sixth of it, but where it
+// is set smaller; another line may start where a word ends, by chance, as
+// on a page of labels, or as a definition's does after its term, larger;
+// a label's words, read as one line with what it labels, are parted by
+// spaces, not by gaps apartSpace of its size; and a line on color, which
+// stays as printed, as a card's number in a photograph, set back in
+// perspective, is not set apart.
 //
 // The text parts at a space, or where CJK characters meet Latin letters
 // or digits, the one where each side's characters, at the size its ink
@@ -1616,7 +1623,7 @@ const apartGap, apartSpace, apartSize, apartFit = 0.5, 0.8, 1.3, 0.3
 // most times larger, the box at the gap's middle. It returns nil where
 // the line stays whole.
 func (d *textDoc) apart(p *pixels, text string, f frame, in ink, others []frame) []linePart {
-	if !in.found || len(in.gaps) == 0 {
+	if !in.found || !in.plain || len(in.gaps) == 0 {
 		return nil
 	}
 	sh := d.shape(text, serif)
@@ -1663,9 +1670,9 @@ func (d *textDoc) apart(p *pixels, text string, f frame, in ink, others []frame)
 			continue
 		}
 		// The line above or below starting where the rest does, its box a
-		// little before its ink, as the rest's is.
+		// little before its ink, as the rest's is, in a line with Chinese.
 		at := f.point(g[1], 0)
-		if !slices.ContainsFunc(others, func(o frame) bool {
+		if slices.ContainsFunc(sh.glyphs, func(g glyph) bool { return g.wide }) && !slices.ContainsFunc(others, func(o frame) bool {
 			along := (o.o.X-at.X)*f.u.X + (o.o.Y-at.Y)*f.u.Y
 			across := math.Abs((o.o.X-at.X)*f.v.X + (o.o.Y-at.Y)*f.v.Y)
 			return o.u.X*f.u.X+o.u.Y*f.u.Y > 0.99 && along > -high/3 && along <= high/6 &&
@@ -1885,7 +1892,7 @@ func (d *textDoc) redrawPage(img image.Image, lines []ocr.Line, width, height fl
 				in, keep = stackedIn, append(keep, stray...)
 				in.strokes.across, in.strokes.down = in.strokes.down, in.strokes.across
 			}
-			m := measuredLine{text: text, frame: f, ink: in, keep: keep, stacked: stacked,
+			m := measuredLine{text: text, frame: f, ink: in, keep: keep, stacked: stacked, source: i,
 				printed: !in.plain || in.framed || l.Score < minScore || !stacked && ref.squeezed(p, text, f, in) ||
 					ref.drawn(text, f, in)}
 			if !m.printed {
@@ -2050,6 +2057,24 @@ func (d *textDoc) setLines() {
 	}
 	for i, fi := range d.ref.styles(texts, frames, inks, refs, pages) {
 		all[i].face = fi
+	}
+	// A part of a line set apart (see apart) with too few letters to be
+	// judged by, as a chapter's number, "02", after "Chapter", is in the
+	// face the line's other part was judged printed in, as one face set
+	// the line.
+	for _, page := range d.pages {
+		for i := range page.measured {
+			m := &page.measured[i]
+			if m.refs.ok || m.printed {
+				continue
+			}
+			for _, o := range page.measured {
+				if o.source == m.source && o.refs.ok {
+					m.face = o.face
+					break
+				}
+			}
+		}
 	}
 
 	for _, page := range d.pages {

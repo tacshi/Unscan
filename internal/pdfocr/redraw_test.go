@@ -1900,6 +1900,92 @@ func TestApart(t *testing.T) {
 	}
 }
 
+// TestApartLatin redraws a chapter opener's heading, "Chapter", small and
+// letter-spaced, before the chapter's number, "02", large and bold, which
+// the recognizer reads as one line: each is set at its size, "Chapter"
+// tracked out over its ink and the number bold, as the face "Chapter" is
+// judged printed in, since two digits are too few to judge by; while a
+// line of one size, its words as far apart, stays whole.
+func TestApartLatin(t *testing.T) {
+	d, fonts := testTextDoc(t)
+	faceOf := func(data []byte, size float64) font.Face {
+		sf, err := opentype.Parse(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		face, err := opentype.NewFace(sf, &opentype.FaceOptions{Size: size, DPI: 72, Hinting: font.HintingNone})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return face
+	}
+	small, number, body := faceOf(fonts.SansBold.Data, 30), faceOf(fonts.SansBold.Data, 48), faceOf(fonts.Serif.Data, 40)
+	defer closeOrFail(t, small)
+	defer closeOrFail(t, number)
+	defer closeOrFail(t, body)
+	img := image.NewRGBA(image.Rect(0, 0, 1200, 700))
+	draw.Draw(img, img.Rect, image.White, image.Point{}, draw.Src)
+	box := func(x0, x1, base int) ocr.Quad {
+		return ocr.Quad{{X: float64(x0 - 4), Y: float64(base - 56)}, {X: float64(x1 + 4), Y: float64(base - 56)},
+			{X: float64(x1 + 4), Y: float64(base + 14)}, {X: float64(x0 - 4), Y: float64(base + 14)}}
+	}
+	var lines []ocr.Line
+	// Body text, for the faces to be judged against.
+	for k, text := range []string{"Understanding the kernel of a modern system", "requires a careful study of memory",
+		"and how processes are scheduled in turn", "across the processors of a single machine.", "with examples from the source itself."} {
+		dr := font.Drawer{Dst: img, Src: image.Black, Face: body, Dot: fixed.P(60, 300+70*k)}
+		dr.DrawString(text)
+		lines = append(lines, ocr.Line{Score: 1, Text: text, Box: box(60, dr.Dot.X.Ceil(), 300+70*k)})
+	}
+	// The heading, each letter of "Chapter" 5 pixels apart, a sixth of an
+	// em, as the book spaces it.
+	dr := font.Drawer{Dst: img, Src: image.Black, Face: small, Dot: fixed.P(60, 150)}
+	for _, r := range "Chapter" {
+		dr.DrawString(string(r))
+		dr.Dot.X += fixed.I(5)
+	}
+	inkEnd := dr.Dot.X.Ceil() - 5 - 2
+	dr.Face, dr.Dot.X = number, dr.Dot.X+fixed.I(22)
+	dr.DrawString("02")
+	lines = append(lines, ocr.Line{Score: 1, Text: "Chapter 02", Box: box(60, dr.Dot.X.Ceil(), 150)})
+	// A caption of one size, its number as far apart.
+	dr = font.Drawer{Dst: img, Src: image.Black, Face: body, Dot: fixed.P(60, 660)}
+	dr.DrawString("Figure 3.1")
+	dr.Dot.X += fixed.I(30)
+	dr.DrawString("Process states")
+	lines = append(lines, ocr.Line{Score: 1, Text: "Figure 3.1 Process states", Box: box(60, dr.Dot.X.Ceil(), 660)})
+	page := d.redraw(img, lines, 1200, 700)
+	d.setLines()
+	if len(page.lines) != len(lines)+1 {
+		t.Fatalf("%d lines, want the heading set as two, and the caption whole", len(page.lines))
+	}
+	chapter, two := page.lines[5], page.lines[6]
+	if math.Abs(chapter.size-30) > 3 || math.Abs(two.size-48) > 4 {
+		t.Errorf("set at %.1f and %.1f px, want 30 and 48", chapter.size, two.size)
+	}
+	// "Chapter" over its ink: its characters' advances, but the last,
+	// and the last's outline.
+	set := d.sets[page.set]
+	em := float64(d.fonts[sans].ttf.UnitsPerEm)
+	width := 0.0
+	for k, c := range chapter.cids {
+		code := set.codes[c-1]
+		if k < len(chapter.cids)-1 {
+			width += float64(code.width) / em * chapter.size
+		} else {
+			f := d.font(code.face).ttf
+			b, _ := f.Bounds(f.Glyph(code.r))
+			width += float64(b[2]) / em * chapter.size
+		}
+	}
+	if span := float64(inkEnd) - chapter.x; math.Abs(width-span) > 0.05*span {
+		t.Errorf("\"Chapter\" set %.0f px long, printed %.0f", width, span)
+	}
+	if f := set.codes[two.cids[0]-1].face; f != sansBold {
+		t.Errorf("\"02\" set in %s, want sans-serif bold", faceNames[f])
+	}
+}
+
 // TestNeighborInk redraws a cover's title characters, each a line of its
 // own, set large and close: 思, whose box takes in the end of the line
 // beside it, and 维 under it, whose box its box overlaps. Each is measured

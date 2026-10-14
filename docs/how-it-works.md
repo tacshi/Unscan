@@ -179,23 +179,27 @@ For each scanned page, at the resolution it was read at:
    of its box's height with a run of ink a fifth longer than the box is
    high, longer than a glyph's stroke. They are kept as printed, and the
    text's ink lies above an underline that runs into its letters' feet,
-   so that an underlined word is not set too large. A label hanging in
-   the margin, set apart from what it labels in a smaller face, as
-   "Chapter 14" before a contents page's chapter title, is read as one
-   line with it, and set at one size would come out the title's size:
-   where a gap half the ink's height or wider, and wider than any space
-   at the label's size, parts a label of Latin letters or digits from
-   type 1.3 times its size or more, which starts where the line above or
-   below does, as the chapter's first section's, the line is parted
-   there, each part a line of its own, measured, judged and set alone.
-   The text parts at a space, or where CJK characters meet Latin ones,
-   where each side's characters, at the size its ink gives them, span its
-   ink best, and each side is measured again for its text's proportions,
-   as a line is. Less would part too much: a Latin word in Chinese text,
-   which books space widely, measures from seven tenths of the Chinese's
-   size to nearly twice it, as the two scripts' faces are proportioned
-   unlike the text fonts, and on a page of labels another line starts, by
-   chance, where many a word ends.
+   so that an underlined word is not set too large. A label set apart
+   from what it labels in a smaller face is read as one line with it, and
+   set at one size would come out the larger's size: as "Chapter 14",
+   hanging in the margin before a contents page's chapter title, and
+   "Chapter", small and letter-spaced, before a chapter opener's "02",
+   large and bold. Where a gap half the ink's height or wider, and six
+   tenths of the label's size, parts a label of Latin letters or digits
+   from type 1.3 times its size or more, on plain paper, the line is
+   parted there, each part a line of its own, measured, judged and set
+   alone, at its size and tracked out as its letters are; a part with too
+   few letters to judge, as "02", is in the face the other part is judged
+   printed in. In a line with Chinese in it, the rest must also start
+   where the line above or below does, as the chapter's first section's,
+   for Latin beside Chinese, which books space widely, measures from seven
+   tenths of the Chinese's size to nearly twice it, as the two scripts'
+   faces are proportioned unlike the text fonts, while Latin beside Latin
+   measures within a sixth of it but where it is set smaller. The text
+   parts at a space, or where CJK characters meet Latin ones, where each
+   side's characters, at the size its ink gives them, span its ink best,
+   within a third on a log scale, and each side is measured again for its
+   text's proportions, as a line is.
    Each word of Latin
    letters or digits is measured too, where the line is first set: its
    strokes, as the line's, and how far they lean, the mean lean of its
@@ -487,7 +491,11 @@ CGO_ENABLED=0 go test ./...
   own, each where it was printed, while a line led by a Latin word as
   small and as far apart, where no line starts where its Chinese does,
   stays whole, as does a definition whose term is larger than its text,
-  the next definition's starting where its does; a line two fifths
+  the next definition's starting where its does; a chapter opener's
+  "Chapter", small and letter-spaced, read as one line with its "02",
+  large and bold, is set as two, "Chapter" at its size, tracked out over
+  its ink, and "02" in the bold face "Chapter" is judged printed in, while
+  a caption of one size, its number as far apart, stays whole; a line two fifths
   wider than its glyphs is set a tenth wider at most, and tracked for
   the rest, or tracked alone where its letters lie apart; and an upright
   line in Arial full of y's stays upright. Text sheared as italic is by 0.12 and 0.2
