@@ -307,6 +307,33 @@ For each scanned page, at the resolution it was read at:
    than those beside it on a pale scan: in a run of CJK characters in
    gray or black, one lighter than most of the run is set as dark as
    they are, while a character in a color keeps it.
+
+   The recognizer reads a tall box turned a quarter, which holds either
+   a column, its characters stacked upright, as a Chinese cover sets
+   them, or a line printed sideways, its characters lying on their
+   sides. Which, its ink tells: a line mostly of CJK characters is set
+   both ways in each regular face, upright in its column, each
+   character's em box centered on the ink's axis and spaced down its
+   length, and lying along it, stretched over the ink, and both are
+   blurred as type is matched to squeezed lines. A column of print
+   matches upright by 0.85 or more and on its side by less than half
+   that; it is set upright where it matches so by 0.6 or more, and
+   better. Ink at an end of the column that runs on past its box, as an
+   exclamation mark the recognizer read nothing of, is left out, and
+   kept as printed, where the characters match the rest better, cut
+   where few of the rows across it are inked, and the rest as long as
+   they are. A column whose characters part at a gap a quarter of its
+   width or wider, into Chinese characters of sizes 1.3 times each
+   other's or more, as an author's name and the 著 under it, is parted
+   there, each part a column of its own, its size as the width of its
+   ink gives it. A column's strokes upright on the page run along its
+   box, so its strokes across and down are swapped for its face to be
+   judged. It is set in the fonts' vertical writing mode, as one run of
+   text down its axis: each character advances down it by an em and its
+   share of the column's spacing, its em box centered across it, and
+   punctuation, brackets and arrows take their vertical forms, a comma
+   in the em's upper right and an arrow pointing on down the column,
+   while they copy out as they were read.
 5. Lines on plain paper are erased, but for those that type would not
    match, which stay as printed under invisible text, as text on color,
    a pale tint's too, does: a line whose ink is framed, as a letter in a
@@ -377,7 +404,12 @@ out as it was read, whatever face it is set in. A character spaced out
 in several ways takes a CID for each: a Chinese book takes some 45,000
 in 600 pages, and more as it goes on, past the 65,534 that two bytes
 number. So pages are numbered in sets, a page in one, each with subsets
-of the faces and a map of its own; a shorter document takes one.
+of the faces and a map of its own; a shorter document takes one. A face
+set upright in columns is embedded once, under two fonts: one in the
+horizontal writing mode (`Identity-H`) and one in the vertical
+(`Identity-V`), whose CIDs' `W2` widths advance each character down the
+column and center its em box on it; those CIDs map to the characters'
+vertical forms' glyphs, and back to the characters read.
 
 ## What the tests check
 
@@ -448,7 +480,14 @@ CGO_ENABLED=0 go test ./...
   and in an upright line only a long word leaning far is; the Chinese
   between two italic words is not slanted with them. A word
   underlined, the rule running into its letters or apart from them, is
-  set at its size, and the rule kept. Dot
+  set at its size, and the rule kept. A cover's columns, read in tall
+  boxes, are set upright, one character under the other, each within 5
+  pixels of where it was drawn: an arrow among them in its vertical form,
+  pointing down, and copying out as the arrow read, an exclamation mark
+  the recognizer read nothing of, which runs into the box, kept as
+  printed, and an author's name and the 著 under it, smaller, as columns
+  of their own at their sizes; a line printed sideways is set along its
+  box, lying as it was printed. Dot
   leaders at 300 DPI, too far apart to join, are kept, while
   a speck of dust and three specks in a row are not. A line printed on a
   panel of a pale tint, scanned clean, stays as printed on it, and the

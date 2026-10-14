@@ -326,11 +326,13 @@ var maxCIDs = 0xFFFE
 
 // code is a character as a line sets it: its glyph in a face, advanced by
 // width font units, which is the glyph's own advance or more, to space the
-// line out.
+// line out; or, set upright down a column, vertical, drawn in its
+// vertical form (see verticalGlyph) and advanced by width down it.
 type code struct {
-	face  int
-	r     rune
-	width int
+	face     int
+	r        rune
+	width    int
+	vertical bool
 }
 
 // textPage is a redrawn page, width×height points with its origin at the
@@ -362,6 +364,9 @@ type measuredLine struct {
 	// it is on color, its ink is framed, or squeezed, or the recognizer
 	// was unsure of it (see redrawPage).
 	printed bool
+	// stacked is whether the line is a column of characters set upright,
+	// one under the other (see stacked).
+	stacked bool
 	refs    lineRefs // what styles judges it against, unless printed
 	face    int      // the face it was printed in, once styles has judged it
 }
@@ -392,6 +397,11 @@ type textLine struct {
 	slanted     []bool
 	slant, back float64
 	offsets     []float64
+	// Vertical says the line is a column set upright in the fonts'
+	// vertical writing mode, its characters one under the other: x, y is
+	// where its first em box's top lies on its axis, and dx, dy the
+	// direction across it, to the right of its characters.
+	vertical bool
 }
 
 // newTextDoc starts a document set in the text fonts, but for the faces the
@@ -457,15 +467,24 @@ func (d *textDoc) font(i int) *face {
 // were not read. SetLines starts a new set for a page whose characters
 // might not fit in the last.
 func (d *textDoc) cid(s *cidSet, f int, r rune, width int) uint16 {
-	k := code{f, r, width}
+	return d.cidIn(s, code{face: f, r: r, width: width})
+}
+
+// cidIn numbers k as cid numbers a character.
+func (d *textDoc) cidIn(s *cidSet, k code) uint16 {
 	if c, ok := s.cids[k]; ok {
 		return c
 	}
 	if len(s.codes) >= maxCIDs {
 		// Out of CIDs, on a page of more characters than a set numbers: the
 		// character at its own advance, if it has one.
-		font := d.font(f).ttf
-		if c, ok := s.cids[code{f, r, font.Advance(font.Glyph(r))}]; ok {
+		font := d.font(k.face).ttf
+		own := k
+		own.width = font.Advance(font.Glyph(k.r))
+		if k.vertical {
+			own.width = font.UnitsPerEm
+		}
+		if c, ok := s.cids[own]; ok {
 			return c
 		}
 		return 0
@@ -491,8 +510,9 @@ func (d *textDoc) build() []byte {
 		sets = []*cidSet{{}} // no text, but a ToUnicode map all the same
 	}
 	// The faces each set's pages set text in, by what the pages call them:
-	// F1 to F12 in the first set, F13 to F24 in the next, and so on, the
-	// fallbacks after the faces.
+	// F1 to F16 in the first set, F17 to F32 in the next, and so on, the
+	// fallbacks after the faces; and V1 to V16 and on, those set upright in
+	// columns, in the vertical writing mode.
 	fontNames := make([]string, len(sets))
 	for si, s := range sets {
 		tu := toUnicode
@@ -516,7 +536,11 @@ func (d *textDoc) build() []byte {
 			if len(cids) == 0 {
 				continue
 			}
-			fmt.Fprintf(&names, " /F%d %d 0 R", si*allFaces+fi+1, d.writeFont(w, s, fi, cids, tu))
+			h, v := d.writeFont(w, s, fi, cids, tu)
+			fmt.Fprintf(&names, " /F%d %d 0 R", si*allFaces+fi+1, h)
+			if v != 0 {
+				fmt.Fprintf(&names, " /V%d %d 0 R", si*allFaces+fi+1, v)
+			}
 		}
 		fontNames[si] = names.String()
 	}
@@ -548,8 +572,11 @@ func (d *textDoc) build() []byte {
 }
 
 // writeFont writes face fi, subset to the glyphs of cids in set s, as a
-// Type 0 font and returns its object's ID.
-func (d *textDoc) writeFont(w *pdfWriter, s *cidSet, fi int, cids []int, toUnicode int) int {
+// Type 0 font and returns its object's ID, and, where some of cids are
+// set upright down columns, the ID of another, in the vertical writing
+// mode, of the same glyphs, else 0. A column's characters advance down it
+// by their codes' widths, their em boxes centered across it (see emTop).
+func (d *textDoc) writeFont(w *pdfWriter, s *cidSet, fi int, cids []int, toUnicode int) (font, vertical int) {
 	fc := d.font(fi)
 	f := fc.ttf
 	font, cidFont, descriptor, fontFile, cidToGID := w.nextID, w.nextID+1, w.nextID+2, w.nextID+3, w.nextID+4
@@ -559,11 +586,25 @@ func (d *textDoc) writeFont(w *pdfWriter, s *cidSet, fi int, cids []int, toUnico
 
 	glyphs := make([]uint16, 0, len(cids))
 	gidMap := make([]byte, 2*(len(s.codes)+1))
-	// Widths in runs of consecutive CIDs: c [w w ...].
-	var widths strings.Builder
+	// Widths in runs of consecutive CIDs: c [w w ...], and those of the
+	// characters set upright: c [w1y v1x v1y ...].
+	var widths, heights strings.Builder
 	for k, cid := range cids {
 		c := s.codes[cid-1]
-		g := f.Glyph(c.r)
+		g, width := f.Glyph(c.r), c.width
+		if c.vertical {
+			g = verticalGlyph(f, c.r)
+			width = f.Advance(g)
+			if heights.Len() > 0 && cid >= 2 && s.codes[cid-2].vertical && s.codes[cid-2].face == fi {
+				heights.WriteByte(' ')
+			} else {
+				if heights.Len() > 0 {
+					heights.WriteString("] ")
+				}
+				fmt.Fprintf(&heights, "%d [", cid)
+			}
+			fmt.Fprintf(&heights, "%s %s %s", scale(-c.width), scale(width/2), num(emTop(f)*1000/em))
+		}
 		glyphs = append(glyphs, g)
 		gidMap[2*cid], gidMap[2*cid+1] = byte(g>>8), byte(g)
 		if k == 0 || cids[k-1] != cid-1 {
@@ -574,9 +615,16 @@ func (d *textDoc) writeFont(w *pdfWriter, s *cidSet, fi int, cids []int, toUnico
 		} else {
 			widths.WriteByte(' ')
 		}
-		widths.WriteString(scale(c.width))
+		widths.WriteString(scale(width))
 	}
 	widths.WriteString("]")
+	w2 := ""
+	if heights.Len() > 0 {
+		heights.WriteString("]")
+		vertical = w.nextID
+		w.nextID++
+		w2 = " /W2 [" + heights.String() + "]"
+	}
 	// A subset's name starts with a tag of six capitals, unique to it.
 	sum := sha256.Sum256(append([]byte(f.PostScriptName), gidMap...))
 	tag := make([]byte, 6)
@@ -587,10 +635,14 @@ func (d *textDoc) writeFont(w *pdfWriter, s *cidSet, fi int, cids []int, toUnico
 
 	w.object(font, fmt.Sprintf("<< /Type /Font /Subtype /Type0 /BaseFont /%s /Encoding /Identity-H "+
 		"/DescendantFonts [%d 0 R] /ToUnicode %d 0 R >>", name, cidFont, toUnicode))
+	if vertical != 0 {
+		w.object(vertical, fmt.Sprintf("<< /Type /Font /Subtype /Type0 /BaseFont /%s /Encoding /Identity-V "+
+			"/DescendantFonts [%d 0 R] /ToUnicode %d 0 R >>", name, cidFont, toUnicode))
+	}
 	w.object(cidFont, fmt.Sprintf("<< /Type /Font /Subtype /CIDFontType2 /BaseFont /%s "+
 		"/CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> "+
-		"/FontDescriptor %d 0 R /CIDToGIDMap %d 0 R /DW 1000 /W [%s] >>",
-		name, descriptor, cidToGID, widths.String()))
+		"/FontDescriptor %d 0 R /CIDToGIDMap %d 0 R /DW 1000 /W [%s]%s >>",
+		name, descriptor, cidToGID, widths.String(), w2))
 	// Flags: symbolic, as fonts beyond the standard Latin characters are,
 	// and serif (2) for the serif faces.
 	flags, stem := 4, 80
@@ -607,7 +659,7 @@ func (d *textDoc) writeFont(w *pdfWriter, s *cidSet, fi int, cids []int, toUnico
 	sub := f.Subset(glyphs)
 	w.stream(fontFile, fmt.Sprintf("/Length1 %d", len(sub)), sub)
 	w.stream(cidToGID, "", gidMap)
-	return font
+	return font, vertical
 }
 
 // content draws the page's pictures and its line art, then its lines over
@@ -679,7 +731,11 @@ func (p *textPage) content(s *cidSet) []byte {
 					fmt.Fprintf(&b, "%s rg\n", rg(color))
 				}
 				if f != in {
-					fmt.Fprintf(&b, "/F%d %s Tf\n", p.set*allFaces+f+1, num(l.size))
+					prefix := "F"
+					if l.vertical {
+						prefix = "V"
+					}
+					fmt.Fprintf(&b, "/%s%d %s Tf\n", prefix, p.set*allFaces+f+1, num(l.size))
 					in = f
 				}
 				b.WriteString("<")

@@ -99,6 +99,10 @@ the right, as **Compare with Original** shows them:
   spacing from its ink, so retyped lines land where they were printed.
   Words set bold or italic within a line are set so too, titles tracked
   out are tracked as printed, and underlines are kept.
+- **Sets vertical text upright.** Columns of Chinese characters, as a
+  cover sets them, are set one character under the other, upright, in
+  the fonts' vertical writing mode, their punctuation and arrows in their
+  vertical forms, and copy out in reading order.
 - **Your own fonts.** Set the retyped PDF in any embeddable TrueType font
   or collection, such as macOS's Songti SC or Times.
 - **Fast on a Mac.** The text models run on the GPU and the Neural
@@ -464,8 +468,10 @@ docs/                    how it works, in depth, the app icon's source (icon.svg
   - OCR mistakes show, where the searchable PDF hides them under the
     scan, and characters the recognizer misses (such as some dashes) are
     erased with their line.
-  - Vertical text is set rotated, not stacked. Covers and other designed
-    pages come out mostly as images, since their text is on color.
+  - Columns of Latin text, as a spine's title, are set along the column,
+    lying as they were printed; only columns mostly of Chinese are set
+    upright. Covers and other designed pages come out mostly as images,
+    since their text is on color.
 - **Your own fonts:** fonts of PostScript outlines (CFF) cannot be used,
   as `internal/ttf` subsets TrueType outlines only; a CFF subsetter, with
   `FontFile3`, would take them. Fonts chosen apply to the PDFs read

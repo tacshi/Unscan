@@ -159,10 +159,12 @@ func (p *pixels) whiten() {
 
 // frame is a line's box as the recognizer reads it: from origin o, the
 // text runs along u for length pixels, and its glyphs stand up along v for
-// height pixels.
+// height pixels. Turned says the recognizer read a tall box turned a
+// quarter, as a column of text or a line printed sideways.
 type frame struct {
 	o, u, v        ocr.Point
 	length, height float64
+	turned         bool
 }
 
 func lineFrame(q ocr.Quad) frame {
@@ -170,10 +172,11 @@ func lineFrame(q ocr.Quad) frame {
 	// The recognizer reads tall boxes turned a quarter counterclockwise,
 	// from the top-left corner down (see ocr's crop).
 	w, h := max(int(q.Width()), 1), max(int(q.Height()), 1)
-	if float64(h)/float64(w) >= 1.5 {
+	turned := float64(h)/float64(w) >= 1.5
+	if turned {
 		o, end, top = q[0], q[3], q[1]
 	}
-	f := frame{o: o, length: math.Hypot(end.X-o.X, end.Y-o.Y), height: math.Hypot(top.X-o.X, top.Y-o.Y)}
+	f := frame{o: o, length: math.Hypot(end.X-o.X, end.Y-o.Y), height: math.Hypot(top.X-o.X, top.Y-o.Y), turned: turned}
 	if f.length > 0 && f.height > 0 {
 		f.u = ocr.Point{X: (end.X - o.X) / f.length, Y: (end.Y - o.Y) / f.length}
 		f.v = ocr.Point{X: (top.X - o.X) / f.height, Y: (top.Y - o.Y) / f.height}
@@ -1680,8 +1683,20 @@ func (d *textDoc) redrawPage(img image.Image, lines []ocr.Line, width, height fl
 			text, in, keep := trimLeaders(text, in)
 			text = ref.enDashes(text, f, in)
 			in.tops = nil // for trimLeaders only: kept, a long document's would fill memory
-			m := measuredLine{text: text, frame: f, ink: in, keep: keep,
-				printed: !in.plain || in.framed || l.Score < minScore || ref.squeezed(p, text, f, in)}
+			// A column's characters stand upright, across the frame: its
+			// strokes upright on the page run along the frame, which its
+			// strokes are measured across as a line's level ones are.
+			if parts := ref.apartStacked(p, text, f, in); parts != nil {
+				todo = append(parts, todo...)
+				continue
+			}
+			stackedIn, stray, stacked := ref.stacked(p, text, f, in)
+			if stacked {
+				in, keep = stackedIn, append(keep, stray...)
+				in.strokes.across, in.strokes.down = in.strokes.down, in.strokes.across
+			}
+			m := measuredLine{text: text, frame: f, ink: in, keep: keep, stacked: stacked,
+				printed: !in.plain || in.framed || l.Score < minScore || !stacked && ref.squeezed(p, text, f, in)}
 			if !m.printed {
 				m.refs = ref.refs(text, f, in)
 			}
@@ -1695,6 +1710,9 @@ func (d *textDoc) redrawPage(img image.Image, lines []ocr.Line, width, height fl
 	for i, m := range page.measured {
 		shapes[i] = ref.shape(m.text, serif)
 		sizes[i] = ref.size(shapes[i], m.frame, m.ink)
+		if m.stacked {
+			sizes[i] = ref.sizeStacked(shapes[i], m.frame, m.ink)
+		}
 	}
 	sizes = evenSizes(sizes)
 	// Where each line's characters lie, and the color each was printed in,
@@ -1706,12 +1724,17 @@ func (d *textDoc) redrawPage(img image.Image, lines []ocr.Line, width, height fl
 		if set[i] = m.frame.length > 0 && m.frame.height > 0 && shapes[i].inked && !m.printed; !set[i] {
 			continue
 		}
-		tl, origins, bare := ref.place(shapes[i], m.frame, m.ink, sizes[i])
-		bares[i] = bare
+		var tl textLine
+		var origins []float64
+		if m.stacked {
+			tl, origins = ref.placeStacked(shapes[i], m.frame, m.ink, sizes[i])
+		} else {
+			tl, origins, bares[i] = ref.place(shapes[i], m.frame, m.ink, sizes[i])
+		}
 		if m.ink.found {
 			m.colors = p.glyphColors(m.frame, m.ink, shapes[i], tl, origins)
 		}
-		if m.refs.ok {
+		if m.refs.ok && !m.stacked {
 			m.refs.words = ref.words(p, m.text, m.frame, m.ink, shapes[i], tl, origins)
 		}
 	}
@@ -1848,6 +1871,9 @@ func (d *textDoc) setLines() {
 		for i, m := range page.measured {
 			shapes[i] = d.shapeIn(m.text, m.face, glyphFaces(m))
 			sizes[i] = d.size(shapes[i], m.frame, m.ink)
+			if m.stacked {
+				sizes[i] = d.sizeStacked(shapes[i], m.frame, m.ink)
+			}
 			glyphs += len(shapes[i].glyphs)
 		}
 		sizes = evenSizes(sizes)
@@ -1867,6 +1893,25 @@ func (d *textDoc) setLines() {
 		for i, m := range page.measured {
 			f, sh, in := m.frame, shapes[i], m.ink
 			if f.length == 0 || f.height == 0 || !sh.inked {
+				continue
+			}
+			if m.stacked {
+				tl, origins := d.placeStacked(sh, f, in, sizes[i])
+				tl.cids = d.numberStacked(d.sets[page.set], sh, origins, sizes[i])
+				tl.hidden = m.printed
+				// From pixels, y down, to points, y up: the column's axis, its
+				// characters' right across the frame.
+				o := f.point(tl.x, tl.y)
+				vx, vy := f.v.X*page.sx, -f.v.Y*page.sy
+				n := math.Hypot(vx, vy)
+				tl.x, tl.y = o.X*page.sx, page.height-o.Y*page.sy
+				tl.dx, tl.dy = vx/n, vy/n
+				tl.size *= (page.sx + page.sy) / 2
+				tl.color = textColor(in.fg, in.bg, in.found, black)
+				if !m.printed {
+					tl.colors = lineColors(m.colors, sh, in.bg, black)
+				}
+				page.lines = append(page.lines, tl)
 				continue
 			}
 			tl, origins, _ := d.place(sh, f, in, sizes[i])
