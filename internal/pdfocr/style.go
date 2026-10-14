@@ -439,11 +439,14 @@ func (d *textDoc) styles(texts []string, frames []frame, inks []ink, lines []lin
 
 	// A word is set in its line's face but where it is surely heavier, by
 	// a fifth, than the lines of its kind are, in a line set regular, as
-	// a verb set bold in a caption is, or no more than a tenth heavier in
-	// one set bold. A word of a letter is in the face of the word after it,
-	// or before it, as "a" is in "Take a seat", but for a line's first, as
-	// "A", which is the line's, or a label's, as "A:", which is judged as
-	// words are, but surely heavier, by three tenths.
+	// a verb set bold in a caption is, its upright strokes too, which a
+	// bold face thickens most, where the blur of a small word's round
+	// letters thickens its level ones, as of "not" or "How" set regular;
+	// or no more than a tenth heavier in one set bold. A word of a letter
+	// is in the face of the word after it, or before it, as "a" is in
+	// "Take a seat", but for a line's first, as "A", which is the line's,
+	// or a label's, as "A:", which is judged as words are, but surely
+	// heavier, by three tenths.
 	for i, l := range lines {
 		kind := out[i] &^ 1
 		for k := range l.words {
@@ -458,8 +461,9 @@ func (d *textDoc) styles(texts []string, frames []frame, inks []ink, lines []lin
 				bold = 1.3 // a label's letter, which tells less surely
 			}
 			across, down := max(w.ink.across-gain, 1.0/3), max(w.ink.down-gain, 1.0/3)
+			stems := across / w.refs[kind/2].across / bases[i]
 			switch h := math.Sqrt(across/w.refs[kind/2].across*down/w.refs[kind/2].down) / bases[i]; {
-			case out[i] == kind && h >= bold:
+			case out[i] == kind && h >= bold && stems >= bold:
 				w.face = kind + 1
 			case out[i] == kind+1 && h < 1.1:
 				w.face = kind

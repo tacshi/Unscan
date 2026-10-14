@@ -165,7 +165,9 @@ For each scanned page, at the resolution it was read at:
    whose last characters stand taller than its first, is turned level with
    them where the line's ink stands a tenth shorter or more in it, as
    level text does in a level frame; on a page scanned askew, whose lines
-   tilt alike, a line keeps its tilt. Dot
+   tilt alike, a line keeps its tilt. A box no longer than three times its
+   height, as round a circled number, is not leveled: how the recognizer
+   tilts it says nothing of how its text runs. Dot
    leaders that a contents page's headings end with, or its page numbers
    start with, are kept as printed: the recognizer reads a few of the dots,
    a dot at times as 。, which set in the heading's face would come out its
@@ -201,7 +203,12 @@ For each scanned page, at the resolution it was read at:
    within a third on a log scale, and each side is measured again for its
    text's proportions, as a line is.
    Each word of Latin
-   letters or digits is measured too, where the line is first set: its
+   letters or digits is measured too, where the line is first set, each
+   stretch of its words set on its own ink, wherever they part, and
+   squeezed into it where it is narrower, so that a word whose face is
+   narrower than the text fonts' is not carried on along the line onto
+   the next word's ink, as "What" at a line's end would be onto the
+   margin, and measured pale: its
    strokes, as the line's, and how far they lean, the mean lean of its
    edges that run near upright, which an upright face's round and
    slanting strokes leave about upright, its ink sheared back upright by
@@ -244,22 +251,37 @@ For each scanned page, at the resolution it was read at:
    sans-serif face's bold has more contrast than its regular, and leans a
    little to serif. A word of two letters or more is set bold, against
    its own glyphs in its kind's regular face, where it is a fifth heavier
-   than the lines of its kind on its page are, as a verb set bold in a
-   caption is, and a line's label, of a letter, where it is three tenths
+   than the lines of its kind on its page are, its upright strokes too,
+   which a bold face thickens most, as a verb set bold in a caption is:
+   the blur of a small word's round letters thickens its level strokes,
+   as of "not" or "How" set regular, by half and more. A line's label, of a letter, where it is three tenths
    heavier; a word in a bold line is set regular where it is no more than
    a tenth heavier. A one-letter word within a line is set as the word
    after it.
 4. The line is set in its face so that its glyphs' outlines cover its
    ink. Their height gives the font size, which lines within 7% of
-   each other on a page share, as a paragraph's do. Glyphs keep their
+   each other on a page share, as a paragraph's do. And a paragraph's
+   lines, those that follow each other down a page, about as high as each
+   other, whatever their script, are set no larger than the middle of
+   their sizes, where theirs is larger by a quarter at most and more than
+   half of them are in their face: in a book setting Chinese and Latin in
+   faces proportioned unlike the text fonts', as a large Kai beside a
+   small Garamond, a line whose Chinese alone spans its ink, as one with
+   no Latin hanging below it, measures larger than the rest, and set so
+   would stand out, wider than its ink. A line in another face alone
+   between two of theirs, in their weight, is set as they are, but a
+   heading in a bolder face is its own. Glyphs keep their
    shapes: the line is spaced out to the ink's width as books are set.
-   Each place its words part at, a space or where CJK characters meet
-   Latin ones, is as wide as its gap in the ink, where it takes one: the
-   places take the gaps, in order along the line, that part the ink into
-   stretches as wide as the words between them, by the least sum of how
-   far each is from its word's width on a log scale, less a tenth for
-   each place that takes a gap, and a half more for each gap wider than
-   six tenths of the ink's height that none takes. They are not simply
+   Each place its words part at, a space or, in a line mostly of Latin,
+   where CJK characters meet Latin ones, but not CJK punctuation, whose
+   em spaces it as set, is as wide as its gap in the ink, where it takes
+   one: the places take the gaps, in order along the line, that part the
+   ink into stretches as wide as the words between them, by the least sum
+   of how far each is from its word's width on a log scale, less a tenth
+   for each place that takes a gap, and as much more as the line's ink is
+   wider than its glyphs, as a monospaced face's is, which each stretch is
+   too, and a half more for each gap wider than six tenths of the ink's
+   height that none takes. They are not simply
    the widest, as a contents page's section number, 1.10, has a gap after
    its point wider than the space between the words after it; and a
    place may take none, as where CJK characters meet the leaders after
@@ -495,7 +517,11 @@ CGO_ENABLED=0 go test ./...
   "Chapter", small and letter-spaced, read as one line with its "02",
   large and bold, is set as two, "Chapter" at its size, tracked out over
   its ink, and "02" in the bold face "Chapter" is judged printed in, while
-  a caption of one size, its number as far apart, stays whole; a line two fifths
+  a caption of one size, its number as far apart, stays whole; lines of
+  a book on Linux, its Latin printed in a monospaced face a third wider
+  than the text fonts', take the gaps where Chinese meets Latin, as
+  measured on the scan; a word whose blur thickened its level strokes,
+  not its upright ones, stays regular; a line two fifths
   wider than its glyphs is set a tenth wider at most, and tracked for
   the rest, or tracked alone where its letters lie apart; and an upright
   line in Arial full of y's stays upright. Text sheared as italic is by 0.12 and 0.2

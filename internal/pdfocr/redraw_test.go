@@ -1745,6 +1745,25 @@ func TestWordFaces(t *testing.T) {
 	dr.DrawString("A: ")
 	end := drawSheared(img, regular, "Good morning, Tom.", dr.Dot.X.Ceil(), 800, 0.2)
 	lines = append(lines, ocr.Line{Score: 1, Text: "A: Good morning, Tom.", Box: box(60, end, 800)})
+	// A regular line whose word "how" a blur thickened down its columns,
+	// its level strokes, as a small word's round letters blur, but not
+	// its upright ones.
+	dr = font.Drawer{Dst: img, Src: image.Black, Face: regular, Dot: fixed.P(60, 920)}
+	dr.DrawString("B. Tell me ")
+	from := dr.Dot.X.Ceil()
+	dr.DrawString("how")
+	to := dr.Dot.X.Ceil()
+	dr.DrawString(" it went.")
+	for x := from; x < to; x++ {
+		for y := 920 + 12; y >= 920-50; y-- {
+			for dy := 1; dy <= 3; dy++ {
+				if img.RGBAAt(x, y-dy).R < 128 {
+					img.Set(x, y, color.Black)
+				}
+			}
+		}
+	}
+	lines = append(lines, ocr.Line{Score: 1, Text: "B. Tell me how it went.", Box: box(60, dr.Dot.X.Ceil(), 920)})
 	page := d.redraw(img, lines, 1400, 1000)
 	d.setLines()
 	if len(page.lines) != len(lines) {
@@ -1764,6 +1783,9 @@ func TestWordFaces(t *testing.T) {
 	}
 	if text, _, slanted := set(page.lines[6]); slanted != "   ++++++++++++++++++" {
 		t.Errorf("%q slanted\n%q, want\n%q", text, slanted, "   ++++++++++++++++++")
+	}
+	if text, faces, _ := set(page.lines[7]); strings.Contains(faces, "B") {
+		t.Errorf("%q set in\n%q, want regular", text, faces)
 	}
 	if content := string(page.content(d.sets[page.set])); strings.Count(content, " Tm\n") != len(lines)+1 {
 		t.Errorf("%d text matrices, want one a line and one for the slanted words", strings.Count(content, " Tm\n"))
@@ -2049,7 +2071,10 @@ func TestNeighborInk(t *testing.T) {
 // TestLevel redraws a chapter opener's heading, printed level, whose box
 // the recognizer tilted, as round a heading whose last characters stand
 // taller than its first: it is set level with the page's lines. On a page
-// scanned askew, whose lines all tilt, a line keeps their tilt.
+// scanned askew, whose lines all tilt, a line keeps their tilt. And a
+// label's box, no longer than three times its height, as a circled
+// number's, is not leveled: as the recognizer draws it, it says nothing
+// of how its text runs.
 func TestLevel(t *testing.T) {
 	d, fonts := testTextDoc(t)
 	sf, err := opentype.Parse(fonts.Sans.Data)
@@ -2110,6 +2135,9 @@ func TestLevel(t *testing.T) {
 		if got := page.lines[0].dy / page.lines[0].dx; math.Abs(got+c.want) > 0.005 {
 			t.Errorf("%s: the heading set at a slope of %.3f, want %.3f", c.name, -got, c.want)
 		}
+	}
+	if _, ok := level(frame{u: ocr.Point{X: 1}, v: ocr.Point{Y: -1}, length: 60, height: 40}, 0.05); ok {
+		t.Error("a label's box leveled")
 	}
 }
 
@@ -2325,6 +2353,82 @@ func TestSpread(t *testing.T) {
 	adds = sh.spread(0, len(sh.glyphs), width-float64(sh.right-sh.left)*k, size, em, [][2]float64{point, column, space}, 0, width, size, 0.05*size)
 	if len(adds) != len(sh.glyphs)-1 || adds[first-1]+adds[first] < 40 || adds[second-1]+adds[second] > 10 {
 		t.Errorf("adds %v: want the column's after 1.10, and little before Telephone", adds)
+	}
+}
+
+// TestParagraphSizes sets a paragraph's lines no larger than the middle
+// of their sizes: a line whose Chinese alone spans its ink, measuring
+// larger, and one judged Kai alone among them; but not a heading in a
+// bolder face before them, a line measuring smaller, nor the lines of a
+// paragraph no face most of them are in.
+func TestParagraphSizes(t *testing.T) {
+	line := func(top float64, face int) measuredLine {
+		return measuredLine{face: face, frame: frame{o: ocr.Point{X: 100, Y: top + 50}, u: ocr.Point{X: 1}, v: ocr.Point{Y: -1}, length: 900, height: 50},
+			ink: ink{found: true, s0: 0, s1: 900, t0: 0, t1: 50}}
+	}
+	for _, c := range []struct {
+		name        string
+		faces       []int
+		sizes, want []float64
+	}{
+		{"a line larger", []int{serif, serif, serif, serif}, []float64{50, 51, 60, 48}, []float64{50, 50.5, 50.5, 48}},
+		{"a line in Kai among them", []int{serif, serif, kai, serif, serif}, []float64{50, 51, 60, 50, 49}, []float64{50, 50, 50, 50, 49}},
+		{"a bold heading", []int{sansBold, sans, sans, sans}, []float64{58, 50, 51, 50}, []float64{58, 50, 50.5, 50}},
+		{"no face most are in", []int{sansBold, sansBold, sans, sans}, []float64{55, 58, 50, 51}, []float64{55, 58, 50, 51}},
+	} {
+		lines := make([]measuredLine, len(c.faces))
+		for k, f := range c.faces {
+			lines[k] = line(100+60*float64(k), f)
+		}
+		if got := paragraphSizes(lines, c.sizes); !slices.Equal(got, c.want) {
+			t.Errorf("%s: sizes %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+// TestWordPlacesWide finds where a line's words part in lines of a book
+// on Linux, its Latin printed in a monospaced face a third wider than the
+// text fonts', its letters apart, among Chinese characters set apart from
+// it, as the scan measures them: each place where they meet, and each
+// space, takes the gap there, as each parts stretches all as much wider
+// than their glyphs; or, in the second line, the gap a letter before it,
+// within a word whose letters are tracked apart, where it shows no
+// different, as its Chinese characters are no wider than the text fonts'
+// while its Latin is.
+func TestWordPlacesWide(t *testing.T) {
+	d, _ := testTextDoc(t)
+	em := float64(d.fonts[serif].ttf.UnitsPerEm)
+	for _, c := range []struct {
+		text       string
+		size, high float64
+		from, to   float64
+		gaps       [][2]float64
+		want       []int // the gap each place takes
+		slack      int   // how many gaps off it may be
+	}{
+		{"把这四个项中的Present、Read/Write和User/Supervisor标志置位。", 36.73, 39.18, 3.1, 1422.9,
+			[][2]float64{{81, 88}, {120, 129}, {164, 170}, {207, 215}, {245, 256}, {289, 307}, {325, 332}, {351, 357},
+				{377, 384}, {401, 409}, {429, 435}, {455, 462}, {478, 490}, {498, 529}, {549, 555}, {574, 580}, {599, 606},
+				{627, 636}, {649, 657}, {679, 686}, {704, 714}, {727, 738}, {754, 764}, {783, 797}, {832, 847}, {867, 874},
+				{891, 899}, {918, 926}, {945, 954}, {968, 977}, {995, 1002}, {1048, 1054}, {1073, 1081}, {1126, 1134},
+				{1149, 1159}, {1176, 1183}, {1203, 1210}, {1229, 1242}, {1322, 1328}, {1362, 1368}, {1405, 1413}},
+			[]int{5, 23, 24, 37}, 0},
+		{"把这四个项中的Accessed、Dirty、PCD、PWD和Page Size标志清0。", 36.73, 38.41, 3.3, 1404.2,
+			[][2]float64{{80, 88}, {120, 130}, {164, 170}, {207, 215}, {245, 255}, {290, 304}, {349, 357}, {375, 383},
+				{402, 411}, {427, 437}, {454, 462}, {481, 487}, {508, 528}, {536, 567}, {588, 596}, {610, 620}, {638, 646},
+				{662, 669}, {690, 700}, {708, 741}, {784, 791}, {812, 821}, {828, 861}, {932, 945}, {980, 997}, {1039, 1046},
+				{1065, 1072}, {1091, 1124}, {1142, 1152}, {1167, 1178}, {1193, 1202}, {1221, 1234}, {1355, 1367}, {1386, 1393}},
+			[]int{5, 23, 24, 27, 31, 32}, 1},
+	} {
+		sh := d.shape(c.text, serif)
+		places, took := sh.wordPlaces(0, len(sh.glyphs), c.size, em, c.gaps, c.from, c.to, c.high)
+		ok := len(places) == len(c.want) && len(took) == len(c.want)
+		for p := range c.want {
+			ok = ok && took[p] >= 0 && absInt(took[p]-c.want[p]) <= c.slack
+		}
+		if !ok {
+			t.Errorf("%q: %d places took gaps %v, want %v, within %d", c.text, len(places), took, c.want, c.slack)
+		}
 	}
 }
 
