@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	xdraw "golang.org/x/image/draw"
 
@@ -1406,10 +1407,13 @@ const minScore = 0.85
 
 // squeezed reports whether a line's glyphs, at the size its ink gives
 // them, would have to be squeezed to less than four fifths of their width
-// to fit it, in either regular text face: its ink is not that of its text
-// alone, as of handwriting or lettering in a picture, which stays as
-// printed.
-func (d *textDoc) squeezed(text string, f frame, in ink) bool {
+// to fit it, in either regular text face, and squeezed so would not match
+// it: its ink is not that of its text alone, as of handwriting or
+// lettering in a picture, which stays as printed. Type squeezed matches
+// where typeMatch finds it does, as a label set in a condensed face does;
+// a character alone is not judged so, as an X written by hand matches
+// type as well, or a B read as 8.
+func (d *textDoc) squeezed(p *pixels, text string, f frame, in ink) bool {
 	if !in.found {
 		return false
 	}
@@ -1423,7 +1427,10 @@ func (d *textDoc) squeezed(text string, f frame, in ink) bool {
 			return false
 		}
 	}
-	return true
+	if utf8.RuneCountInString(strings.ReplaceAll(text, " ", "")) < 2 {
+		return true
+	}
+	return d.typeMatch(p, text, f, in) < minTypeMatch
 }
 
 // enDashes sets the hyphens between digits of a line that has nowhere to
@@ -1493,7 +1500,7 @@ func (d *textDoc) redrawPage(img image.Image, lines []ocr.Line, width, height fl
 		text = ref.enDashes(text, f, in)
 		in.tops = nil // for trimLeaders only: kept, a long document's would fill memory
 		m := measuredLine{text: text, frame: f, ink: in, keep: keep,
-			printed: !in.plain || in.framed || l.Score < minScore || ref.squeezed(text, f, in)}
+			printed: !in.plain || in.framed || l.Score < minScore || ref.squeezed(p, text, f, in)}
 		if !m.printed {
 			m.refs = ref.refs(text, f, in)
 		}

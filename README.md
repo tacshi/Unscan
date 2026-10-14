@@ -440,10 +440,12 @@ docs/                    how it works, in depth, the app icon's source (icon.svg
     comes out as its line is. Italics are the upright face slanted, as
     the fonts have no italic.
   - Medium weights come out bold, and display faces, such as a title's
-    condensed one, are squeezed into the nearest of the five. FangSong
-    comes out Kai, and bold Kai, which LXGW WenKai has no face for,
-    regular. Calligraphic lettering on covers,
-    such as a publisher's name, often comes out Kai.
+    condensed one, are squeezed into the nearest of the five. Labels in
+    a condensed bold face, as a book's figures have them, often come out
+    in the serif face, regular, as their strokes' contrast reads as a
+    serif face's. FangSong comes out Kai, and bold Kai, which LXGW WenKai
+    has no face for, regular. Calligraphic lettering on covers, such as
+    a publisher's name, often comes out Kai.
   - A face used only for bold lines in a document, with none of its lines
     regular, comes out regular, as there is no body text of its kind to
     judge them against.

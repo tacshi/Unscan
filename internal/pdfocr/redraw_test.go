@@ -18,6 +18,7 @@ import (
 	"strings"
 	"testing"
 
+	xdraw "golang.org/x/image/draw"
 	"golang.org/x/image/font"
 	"golang.org/x/image/font/opentype"
 	"golang.org/x/image/math/fixed"
@@ -1075,6 +1076,82 @@ func TestAsPrinted(t *testing.T) {
 		// The ink is kept.
 		if !keeps(page, float64(ink.Min.X+ink.Max.X)/2, 150-float64(ink.Min.Y+ink.Max.Y)/2) {
 			t.Errorf("%s: the ink is not kept: %d images, %d traced", c.name, len(page.images), len(page.paths))
+		}
+	}
+}
+
+// TestCondensed redraws labels set in a face a third narrower than the
+// text faces, as a book's figures have them: a label read as printed is
+// set in type, squeezed to end where its ink does, while the same ink read
+// as other words, and a letter alone, stay as printed, under invisible
+// text.
+func TestCondensed(t *testing.T) {
+	d, fonts := testTextDoc(t)
+	sf, err := opentype.Parse(fonts.SansBold.Data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	face, err := opentype.NewFace(sf, &opentype.FaceOptions{Size: 48, DPI: 72, Hinting: font.HintingNone})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeOrFail(t, face)
+	for _, c := range []struct {
+		name, drawn, read string
+		set               bool
+	}{
+		{"a label", "BASE(24-31)", "BASE(24-31)", true},
+		{"two labels", "TYPE LIMIT", "TYPE LIMIT", true},
+		{"other words", "TYPE LIMIT", "SIZE COUNT", false},
+		{"a letter alone", "G", "G", false},
+	} {
+		// The label drawn, then narrowed by a third, as a condensed face
+		// draws it.
+		wide := image.NewRGBA(image.Rect(0, 0, 900, 150))
+		draw.Draw(wide, wide.Rect, image.White, image.Point{}, draw.Src)
+		(&font.Drawer{Dst: wide, Src: image.Black, Face: face, Dot: fixed.P(0, 100)}).DrawString(c.drawn)
+		drawn := inkBounds(wide, wide.Rect)
+		img := image.NewRGBA(image.Rect(0, 0, 800, 150))
+		draw.Draw(img, img.Rect, image.White, image.Point{}, draw.Src)
+		narrow := image.Rect(60, 0, 60+drawn.Max.X*2/3, 150)
+		xdraw.CatmullRom.Scale(img, narrow, wide, image.Rect(0, 0, drawn.Max.X, 150), draw.Src, nil)
+		// In a box with margins, wider at the sides, as the detector draws.
+		ink := inkBounds(img, img.Rect)
+		r := image.Rect(ink.Min.X-12, ink.Min.Y-6, ink.Max.X+12, ink.Max.Y+6)
+		box := ocr.Quad{{X: float64(r.Min.X), Y: float64(r.Min.Y)}, {X: float64(r.Max.X), Y: float64(r.Min.Y)},
+			{X: float64(r.Max.X), Y: float64(r.Max.Y)}, {X: float64(r.Min.X), Y: float64(r.Max.Y)}}
+		page := d.redraw(img, []ocr.Line{{Score: 1, Box: box, Text: c.read}}, 800, 150)
+		d.setLines()
+		if len(page.lines) != 1 {
+			t.Fatalf("%s: %d lines", c.name, len(page.lines))
+		}
+		l := page.lines[0]
+		if l.hidden == c.set {
+			t.Errorf("%s: hidden %v, want %v", c.name, l.hidden, !c.set)
+			continue
+		}
+		if !c.set {
+			continue
+		}
+		if l.scale > 0.85 {
+			t.Errorf("%s: scale %.2f, want it squeezed", c.name, l.scale)
+		}
+		// Where the last glyph's outline ends: the advances before it, and
+		// its own outline, scaled alike.
+		f := d.fonts[l.face].ttf
+		em := float64(f.UnitsPerEm)
+		end := 0.0
+		for i, cid := range l.cids {
+			code := d.sets[0].codes[cid-1]
+			if i < len(l.cids)-1 {
+				end += float64(code.width)
+			} else {
+				b, _ := f.Bounds(f.Glyph(code.r))
+				end += float64(b[2])
+			}
+		}
+		if right := l.x + end/em*l.size*l.scale; math.Abs(right-float64(ink.Max.X)) > 3 {
+			t.Errorf("%s: the line ends at %.1f, its ink at %d", c.name, right, ink.Max.X)
 		}
 	}
 }

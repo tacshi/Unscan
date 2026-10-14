@@ -258,15 +258,24 @@ For each scanned page, at the resolution it was read at:
    are, which stays gray.
 5. Lines on plain paper are erased, but for those that type would not
    match, which stay as printed under invisible text, as text on color,
-   a pale tint's too, does: a line whose ink is framed, as a letter in a box is; one whose
-   glyphs, at the size its ink gives them, would have to be squeezed to
-   less than four fifths of their width, as handwriting or lettering in a
-   picture would; and one the recognizer read with less than 85%
-   confidence. What is left that is not white, a pale tint too, whole,
-   as a panel behind a picture or text, is cut out in parts: its line art
-   is traced (see 6), and the rest goes into images, what is mostly white
-   and ink losslessly, the rest as JPEG at 200 DPI at most. Specks of dust
-   are dropped, but for rows of four or more alike, level and evenly
+   a pale tint's too, does: a line whose ink is framed, as a letter in a
+   box is; one whose glyphs, at the size its ink gives them, would have
+   to be squeezed to less than four fifths of their width, and squeezed
+   so would not match it, as handwriting or lettering in a picture would
+   not; and one the recognizer read with less than 85% confidence. Type
+   squeezed matches where the text, set in each text face and stretched
+   over the ink, thickened or thinned a pixel at a time to cover as much
+   as the ink, correlates with it by 0.72 or more, both blurred by a
+   sixteenth of the ink's height: most labels set in a condensed face,
+   as a book's figures have them, measure 0.73 or more, and the lettering
+   of a picture's signs, calendars and handwriting 0.69 at most. A
+   character alone is not judged so, as an X written by hand matches type
+   as well as one printed, and a B read as 8 about as well as a B. What
+   is left that is not white, a pale tint too, whole, as a panel behind
+   a picture or text, is cut out in parts: its line art is traced (see
+   6), and the rest goes into images, what is mostly white and ink
+   losslessly, the rest as JPEG at 200 DPI at most. Specks of dust are
+   dropped, but for rows of four or more alike, level and evenly
    spaced, as dot leaders and dotted lines are, whose dots lie too far
    apart to join; and so are the marks the scan's edges leave, the shadow
    of the paper's edge or the scanner's lid: what lies in the outer half
@@ -340,7 +349,10 @@ CGO_ENABLED=0 go test ./...
   letters holes in it, and so do a letter in a
   box, a line read with little confidence and a word read as more than
   its ink holds; a word set tighter than the font is squeezed to end
-  where its ink does. A contents page's heading followed by a dot set
+  where its ink does. Labels set in a face a third narrower than the
+  text faces are set in type, squeezed to end where their ink does,
+  while the same ink read as other words, and a letter alone, stay as
+  printed. A contents page's heading followed by a dot set
   apart, read as nothing, as a period or as 。, a heading whose 。 read
   has no ink and a page number after a dot are set over their own ink,
   without the dots, which are kept with the rest of their box, while a
