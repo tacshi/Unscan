@@ -92,6 +92,8 @@ type app struct {
 	form      int       // searchable, retyped or plainText
 	at        int       // the page shown
 	pageArea  ui.Handle // where the page shows, whose arrows turn it
+	jumping   bool      // the page's number takes the number of a page to go to
+	jumpTo    string    // typed there
 	previews  map[preview]rendered
 	rendering bool // a preview is being rendered
 
@@ -133,6 +135,7 @@ type menuState struct {
 	startNew, open, save bool
 	sidebar, haveHistory bool // the sidebar is to show; there is history to show in it
 	compare, canCompare  bool
+	goTo                 bool
 }
 
 // result is what reading a PDF made: its pages' text, and the PDFs, which
@@ -366,7 +369,7 @@ func (a *app) show(r *result) {
 // setResult makes r the document shown, from its first page, in the form
 // shown, once the document is.
 func (a *app) setResult(r *result) {
-	a.result, a.at = r, 0
+	a.result, a.at, a.jumping = r, 0, false
 	a.previews, a.rendering = map[preview]rendered{}, false
 }
 
@@ -403,6 +406,14 @@ func (a *app) back() {
 // turn shows page i, within the document.
 func (a *app) turn(i int) {
 	a.at = min(max(i, 0), len(a.result.pages)-1)
+}
+
+// goToPage asks for the number of a page to go to, where the page shown's
+// is (see pageNumber).
+func (a *app) goToPage() {
+	if a.phase == done && len(a.result.pages) > 1 {
+		a.jumping, a.jumpTo = true, ""
+	}
 }
 
 // compares reports whether the original shows beside the form shown: the
@@ -515,6 +526,7 @@ func (a *app) syncMenu() {
 		startNew: a.phase == done, open: a.canOpen(), save: a.phase == done,
 		sidebar: a.sidebar, haveHistory: a.listed(),
 		compare: a.comparing, canCompare: a.phase == done && a.form != searchable,
+		goTo: a.phase == done && len(a.result.pages) > 1,
 	}
 	if m != a.menu {
 		a.menu = m
@@ -680,6 +692,7 @@ func main() {
 			{Label: "View", Submenu: []*mygo.MenuItem{
 				{ID: "sidebar", Label: "Hide Sidebar", Accelerator: "CmdOrCtrl+Alt+S", Disabled: true, Click: do(a.toggleSidebar)},
 				{ID: "compare", Label: "Compare with Original", Type: mygo.MenuItemCheckbox, Disabled: true, Click: do(a.toggleCompare)},
+				{ID: "goto", Label: "Go to Page…", Accelerator: "CmdOrCtrl+Alt+G", Disabled: true, Click: do(a.goToPage)},
 				mygo.Separator(),
 				{Role: mygo.RoleToggleFullScreen},
 			}},
@@ -716,6 +729,7 @@ func main() {
 				compare := menu.ItemByID("compare")
 				compare.SetEnabled(m.canCompare)
 				compare.SetChecked(m.compare)
+				menu.ItemByID("goto").SetEnabled(m.goTo)
 			},
 			dock: func(progress float64) { win.SetProgressBar(mygo.ProgressBar{Value: max(progress, 0)}) },
 			attend: func() {

@@ -386,7 +386,9 @@ CGO_ENABLED=0 go test ./...
   upright in the text PDF, and the scans are not written again.
 - `main_test.go`: the window's flow, run headless with `ui.NewTester`:
   among it, the arrows turn the page after the line between the pages
-  compared is dragged, and move the line once Tab reaches it; New leaves
+  compared is dragged, and move the line once Tab reaches it; a page's
+  number typed in place of the page shown's goes there, within the
+  document, on Enter, and nowhere on Escape or a click elsewhere; New leaves
   a document for the welcome, keeping the history, where a PDF dropped
   while another is read waits, its progress showing; and the Settings
   dialog's: a collection's font chosen, then another of

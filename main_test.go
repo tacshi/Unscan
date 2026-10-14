@@ -1020,6 +1020,70 @@ func TestStartNew(t *testing.T) {
 	wantTexts(t, tt, "1 of 2 PDFs")
 }
 
+// TestGoToPage goes to the page whose number is typed in place of the
+// page shown's: Enter goes there, within the document, and leaves the
+// arrows turning the page; Escape, or a click elsewhere, goes nowhere.
+func TestGoToPage(t *testing.T) {
+	pages := make([]pdfocr.Page, 5)
+	for i := range pages {
+		pages[i] = pdfocr.Page{Text: fmt.Sprint("Page ", i+1), Lines: 1}
+	}
+	f := newFixture(t, func(ctx context.Context, path string, p pdfocr.Progress) (*result, error) {
+		return &result{pages: pages, pdf: tempFile(t, "%PDF"), textPDF: tempFile(t, "%PDF text")}, nil
+	})
+	tt := ui.NewTester(f.view, 960, 720)
+	click(t, tt, "Choose PDF…")
+	if !f.menus[len(f.menus)-1].goTo {
+		t.Errorf("Go to Page can't be chosen: menu %+v", f.menus[len(f.menus)-1])
+	}
+	jump := func(typed string, key ui.Key) {
+		t.Helper()
+		click(t, tt, "Go to Page")
+		if _, ok := tt.Find("Page"); !ok || !f.jumping {
+			t.Fatalf("no field for the page's number in %q", tt.Texts())
+		}
+		tt.Type(typed)
+		tt.Frame()
+		if key != 0 {
+			tt.Key(0, key)
+			tt.Frame()
+		}
+	}
+
+	jump("4", ui.KeyEnter)
+	wantTexts(t, tt, "4 of 5")
+	if f.jumping || f.at != 3 {
+		t.Errorf("jumping %v, at page %d", f.jumping, f.at+1)
+	}
+	tt.Key(0, ui.KeyRight)
+	tt.Frame()
+	if f.at != 4 {
+		t.Errorf("Right after the jump shows page %d", f.at+1)
+	}
+
+	jump("99", ui.KeyEnter)
+	if f.at != 4 {
+		t.Errorf("page 99 of 5 shows page %d", f.at+1)
+	}
+	jump("2", 0)
+	tt.Key(0, ui.KeyLeft) // in the field, the arrows move the caret
+	tt.Frame()
+	if f.at != 4 {
+		t.Errorf("Left in the field shows page %d", f.at+1)
+	}
+	tt.Key(0, ui.KeyEscape)
+	tt.Frame()
+	if f.jumping || f.at != 4 {
+		t.Errorf("after Escape, jumping %v, at page %d", f.jumping, f.at+1)
+	}
+
+	jump("1", 0)
+	click(t, tt, "Retyped PDF")
+	if f.jumping || f.at != 4 {
+		t.Errorf("after a click elsewhere, jumping %v, at page %d", f.jumping, f.at+1)
+	}
+}
+
 // TestQueueFailure goes on with the queue past a PDF that cannot be read,
 // saying so in a toast.
 func TestQueueFailure(t *testing.T) {

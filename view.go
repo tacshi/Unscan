@@ -6,6 +6,7 @@ import (
 	"math"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -317,8 +318,52 @@ func (a *app) document(c *ui.Context, dragging bool) {
 		BorderWidth(1, 0, 0, 0).BorderColor(t.Border).Children(func() {
 		ui.Text(c, note).FontSize(12).TextColor(t.TextMuted).SingleLine().Grow(1).MinWidth(0)
 		if len(r.pages) > 1 {
-			ui.Textf(c, "%d of %d", a.at+1, len(r.pages)).FontFeatures("tnum").MinWidth(64).TextAlign(ui.End)
+			a.pageNumber(c, len(r.pages))
 		}
+	})
+}
+
+// pageNumber says which page shows, of how many. Clicked, or with Go to
+// Page, it takes the number of a page to go to: Enter goes there, and
+// Escape, or a click elsewhere, leaves it. Either way the focus goes back
+// to the page, whose arrows turn it.
+func (a *app) pageNumber(c *ui.Context, pages int) {
+	t := c.Theme()
+	if !a.jumping {
+		key := "⌥⌘G"
+		if runtime.GOOS != "darwin" {
+			key = "Ctrl+Alt+G"
+		}
+		b := ui.ButtonBase(c).Label("Go to Page").Tooltip("Go to Page ("+key+")").
+			Padding(t.Space(1), t.Space(2)).Radius(t.Radius).OnClick(a.goToPage)
+		switch {
+		case b.Pressed():
+			b.Background(t.SurfacePressed)
+		case b.Hovered():
+			b.Background(t.SurfaceHover)
+		}
+		b.Children(func() { ui.Textf(c, "%d of %d", a.at+1, pages).FontFeatures("tnum") })
+		return
+	}
+	ui.Row(c).Gap(t.Space(1.5)).Padding(0, t.Space(2)).Children(func() {
+		in := ui.TextInput(c, &a.jumpTo).Width(t.Space(14)).Placeholder(strconv.Itoa(a.at + 1)).
+			Label("Page").FontFeatures("tnum").AutoFocus()
+		leave := func() {
+			a.jumping = false
+			a.pageArea.Focus(c)
+		}
+		switch {
+		case in.Submitted():
+			if n, err := strconv.Atoi(strings.TrimSpace(a.jumpTo)); err == nil {
+				a.turn(n - 1)
+			}
+			leave()
+		case in.Shortcut(0, ui.KeyEscape):
+			leave()
+		case !in.Focused():
+			a.jumping = false // the focus went elsewhere, where it stays
+		}
+		ui.Textf(c, "of %d", pages).FontFeatures("tnum")
 	})
 }
 
