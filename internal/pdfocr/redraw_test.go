@@ -1851,6 +1851,76 @@ func TestItalics(t *testing.T) {
 	}
 }
 
+// TestHeavyPage redraws a document of pages of regular body text, and a
+// cover set mostly in bold, in the same face as the body, with two lines
+// regular: the cover's bold lines are set bold, weighed against the
+// document's lines, not the cover's own, which are mostly heavy, and its
+// regular lines regular; the body stays regular.
+func TestHeavyPage(t *testing.T) {
+	d, fonts := testTextDoc(t)
+	faceOf := func(data []byte) font.Face {
+		sf, err := opentype.Parse(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		face, err := opentype.NewFace(sf, &opentype.FaceOptions{Size: 40, DPI: 72, Hinting: font.HintingNone})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return face
+	}
+	regular, bold := faceOf(fonts.Sans.Data), faceOf(fonts.SansBold.Data)
+	defer closeOrFail(t, regular)
+	defer closeOrFail(t, bold)
+	box := func(x0, x1, base int) ocr.Quad {
+		return ocr.Quad{{X: float64(x0 - 6), Y: float64(base - 46)}, {X: float64(x1 + 6), Y: float64(base - 46)},
+			{X: float64(x1 + 6), Y: float64(base + 14)}, {X: float64(x0 - 6), Y: float64(base + 14)}}
+	}
+	// page draws lines, each in bold where its flag is, and redraws them.
+	page := func(lines []string, heavy []bool) *textPage {
+		img := image.NewRGBA(image.Rect(0, 0, 1200, 900))
+		draw.Draw(img, img.Rect, image.White, image.Point{}, draw.Src)
+		var read []ocr.Line
+		for k, text := range lines {
+			face := regular
+			if heavy[k] {
+				face = bold
+			}
+			dr := font.Drawer{Dst: img, Src: image.Black, Face: face, Dot: fixed.P(60, 80+80*k)}
+			dr.DrawString(text)
+			read = append(read, ocr.Line{Score: 1, Text: text, Box: box(60, dr.Dot.X.Ceil(), 80+80*k)})
+		}
+		return d.redraw(img, read, 1200, 900)
+	}
+	body := []string{"本书分上下两篇，上篇解决语序的问题。", "英语四种句式的主干，也就是动词的形式。", "的表达后，再分别为四种句式找到标记。",
+		"格。英语这三种修饰成分比汉语复杂。", "情况强调某一成分，最后是比较句等。", "形式部分是按照标记语法身份来写的。"}
+	var pages []*textPage
+	for range 3 {
+		pages = append(pages, page(body, make([]bool, len(body))))
+	}
+	coverLines := []string{"学会英语", "思维转换是关键", "汉语人英语人", "两大原理：重要先说形式标记",
+		"条语法：丰富的例句练习", "高手指路：十年双语教学经验", "你的第一本", "语法学习书"}
+	coverBold := []bool{true, true, true, false, true, false, true, true}
+	cover := page(coverLines, coverBold)
+	d.setLines()
+	weight := func(p *textPage, k int) bool {
+		code := d.sets[p.set].codes[p.lines[k].cids[0]-1]
+		return code.face == sansBold
+	}
+	for k, want := range coverBold {
+		if got := weight(cover, k); got != want {
+			t.Errorf("cover line %q set bold %v, want %v", coverLines[k], got, want)
+		}
+	}
+	for _, p := range pages {
+		for k := range body {
+			if weight(p, k) {
+				t.Errorf("body line %q set bold", body[k])
+			}
+		}
+	}
+}
+
 // TestWordFaces redraws a caption whose verb is set bold, "Look up", among
 // lines set regular, and sets each word in its face; and an example set
 // italic after a label set upright, whose words it slants.

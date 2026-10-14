@@ -358,8 +358,10 @@ func (d *textDoc) hanBrush(p *pixels, f frame, in ink, sh shape, tl textLine, or
 // Its weight is how much thicker its strokes, upright and level, are than
 // its kind's regular face's, against how much thicker they are in the
 // lines of its kind on its page, or in the document if its page has a few
-// such lines only: most are body text, which is set regular, though the
-// pages of a scan print a little darker or lighter than each other. A
+// such lines only, or they are mostly far heavier than the document's, as
+// on a cover set in bold (see pageHeavy): most are body text, which is set
+// regular, though the pages of a scan print a little darker or lighter
+// than each other. A
 // line is bold where its strokes are 13% thicker, as a medium weight is:
 // the fonts have no weight between, and headings set heavier than the
 // body, as they are in medium faces as often as in bold ones, read best
@@ -502,6 +504,13 @@ func (d *textDoc) styles(texts []string, frames []frame, inks []ink, lines []lin
 		if most {
 			b, ok = base(own)
 		}
+		// But a page whose lines of the kind are mostly heavier than the
+		// document's, by pageHeavy, as a cover set in bold type, is
+		// weighed against the document's: a page printed darker is no more
+		// than a fifth heavier.
+		if doc, dok := base(byDoc[out[i]]); ok && dok && b >= pageHeavy*doc {
+			b = doc
+		}
 		if !ok {
 			if b, ok = base(byDoc[out[i]]); !ok {
 				b = 1
@@ -565,6 +574,13 @@ func (d *textDoc) styles(texts []string, frames []frame, inks []ink, lines []lin
 	}
 	return out
 }
+
+// pageHeavy is how many times as heavy as the lines of its kind in the
+// document the lines of a kind on a page must be, by their median, for the
+// page to be weighed against the document's rather than its own (see
+// styles): a book's pages of body text print within a fifth of each other,
+// 0.94 to 1.24 times, and a cover set mostly in bold type 1.4.
+const pageHeavy = 1.3
 
 // paragraphWeights votes on the weight of paragraphs' lines, as kinds
 // returns them: out has each line in its kind's bold face where it is 15%

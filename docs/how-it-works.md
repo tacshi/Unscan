@@ -245,8 +245,10 @@ For each scanned page, at the resolution it was read at:
    of that is where the lines of its size on its page are, as one a good
    part Latin is. A line is bold where its strokes are 15%
    thicker than those of its kind's lines on its page (or in the
-   document, for a kind few of the page's lines are), as headings set in
-   medium or bold faces are. Both are voted by paragraph (lines that
+   document, for a kind few of the page's lines are, or one whose lines
+   on the page are mostly 1.3 times as heavy as the document's or more,
+   as a cover set in bold type, while a book's pages print within a
+   fifth of each other), as headings set in medium or bold faces are. Both are voted by paragraph (lines that
    follow each other down a page, as high as each other, in one script):
    a paragraph is set in the kind most of its lines lean to, and regular
    if most of them are, but for a CJK line leaning surely to the other
@@ -591,7 +593,9 @@ CGO_ENABLED=0 go test ./...
   their English in the serif face, while the same examples with Song
   translations stay in the serif face; and of paragraphs mostly of
   English, a single line's Chinese must slant further than a paragraph's,
-  and on a FangSong page they are FangSong.
+  and on a FangSong page they are FangSong. A cover set mostly in bold,
+  with two lines regular, among pages of regular body text in the same
+  face, has its bold lines set bold and its regular ones regular.
   In a
   sans-serif document, a heading leaning a little to serif, a page number
   and a line whose ink was not found are sans-serif; in a serif one, a
