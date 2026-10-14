@@ -130,7 +130,7 @@ type rendered struct {
 // menuState is what the menu bar shows: the items that can be chosen now,
 // and the state of those that show one.
 type menuState struct {
-	open, save           bool
+	startNew, open, save bool
 	sidebar, haveHistory bool // the sidebar is to show; there is history to show in it
 	compare, canCompare  bool
 }
@@ -221,6 +221,10 @@ func (a *app) add(paths ...string) {
 		default:
 			a.queue = append(a.queue, path)
 		}
+	}
+	// From the welcome, the progress shows, with them waiting.
+	if a.phase == idle {
+		a.watch()
 	}
 }
 
@@ -340,6 +344,16 @@ func (a *app) read() {
 			}
 		})
 	})
+}
+
+// startNew shows the welcome, to open another PDF. The document shown
+// stays in the sidebar, which shows it again, as it does the progress of
+// the one being read.
+func (a *app) startNew() {
+	if a.phase == done {
+		a.setResult(nil)
+		a.phase = idle
+	}
 }
 
 // show shows r, from its first page, in the form shown; nil shows the
@@ -498,7 +512,7 @@ func (a *app) saveFile(name string, write func(path string) error) {
 // what the window shows.
 func (a *app) syncMenu() {
 	m := menuState{
-		open: a.canOpen(), save: a.phase == done,
+		startNew: a.phase == done, open: a.canOpen(), save: a.phase == done,
 		sidebar: a.sidebar, haveHistory: a.listed(),
 		compare: a.comparing, canCompare: a.phase == done && a.form != searchable,
 	}
@@ -653,6 +667,7 @@ func main() {
 				{Role: mygo.RoleQuit},
 			}},
 			{Label: "File", Submenu: []*mygo.MenuItem{
+				{ID: "new", Label: "New", Accelerator: "CmdOrCtrl+N", Disabled: true, Click: do(a.startNew)},
 				{ID: "open", Label: "Open…", Accelerator: "CmdOrCtrl+O", Click: do(a.choose)},
 				{ID: "save", Label: "Save…", Accelerator: "CmdOrCtrl+S", Disabled: true, Click: do(a.save)},
 				mygo.Separator(),
@@ -692,6 +707,7 @@ func main() {
 			},
 			reveal: mygo.Shell.ShowItemInFolder,
 			menu: func(m menuState) {
+				menu.ItemByID("new").SetEnabled(m.startNew)
 				menu.ItemByID("open").SetEnabled(m.open)
 				menu.ItemByID("save").SetEnabled(m.save)
 				sidebar := menu.ItemByID("sidebar")

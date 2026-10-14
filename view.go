@@ -25,6 +25,7 @@ const (
 
 // Icons, drawn in strokes of the text's color.
 var (
+	newIcon      = icon(`<circle cx="12" cy="12" r="9"/><path d="M8 12h8M12 8v8"/>`)
 	documentIcon = icon(`<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M9 13h6M9 17h4"/>`)
 	previousIcon = icon(`<path d="m15 18-6-6 6-6"/>`)
 	nextIcon     = icon(`<path d="m9 18 6-6-6-6"/>`)
@@ -91,6 +92,13 @@ func (a *app) titleBar(c *ui.Context) {
 		title.Children(func() {
 			if a.listed() {
 				a.sidebarButton(c)
+			}
+			if a.phase == done {
+				key := "⌘N"
+				if runtime.GOOS != "darwin" {
+					key = "Ctrl+N"
+				}
+				iconButton(c, newIcon, "New", key, false).OnClick(a.startNew)
 			}
 			switch a.phase {
 			case working:

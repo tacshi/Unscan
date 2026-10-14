@@ -978,6 +978,48 @@ func TestQueue(t *testing.T) {
 	}
 }
 
+// TestStartNew goes from a document to the welcome with New, keeping the
+// history, whose row shows the document again. A PDF dropped there while
+// another is read waits, and the progress shows.
+func TestStartNew(t *testing.T) {
+	f := newFixture(t, readFake(t))
+	later := &spawnLater{}
+	f.fx.spawn = later.spawn
+	a, b := filepath.Join(f.dir, "a.pdf"), filepath.Join(f.dir, "b.pdf")
+	tt := ui.NewTester(f.view, 960, 720)
+	f.add(a)
+	for later.step() {
+	}
+	tt.Frame()
+	if f.phase != done || !f.menus[len(f.menus)-1].startNew {
+		t.Fatalf("phase %v, menu %+v", f.phase, f.menus[len(f.menus)-1])
+	}
+
+	click(t, tt, "New")
+	wantTexts(t, tt, "Drop a scanned PDF here", "a.pdf")
+	if f.phase != idle || f.result != nil || len(f.history) != 1 {
+		t.Errorf("phase %v, showing %+v, history %d long", f.phase, f.result, len(f.history))
+	}
+	if _, ok := tt.Find("New"); ok || f.menus[len(f.menus)-1].startNew {
+		t.Errorf("New can be chosen on the welcome: menu %+v", f.menus[len(f.menus)-1])
+	}
+	click(t, tt, "a.pdf")
+	if f.phase != done || f.result != f.history[0] {
+		t.Errorf("phase %v, showing %+v", f.phase, f.result)
+	}
+
+	f.add(b)
+	tt.Frame()
+	click(t, tt, "a.pdf") // the document again, as b is read
+	click(t, tt, "New")
+	f.drop([]string{f.scan})
+	tt.Frame()
+	if f.phase != working || f.file != b || !slices.Equal(f.queue, []string{f.scan}) {
+		t.Errorf("phase %v, reading %q, queue %q", f.phase, f.file, f.queue)
+	}
+	wantTexts(t, tt, "1 of 2 PDFs")
+}
+
 // TestQueueFailure goes on with the queue past a PDF that cannot be read,
 // saying so in a toast.
 func TestQueueFailure(t *testing.T) {

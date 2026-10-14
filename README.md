@@ -153,10 +153,13 @@ Its searchable and retyped PDFs are kept in `history/` in the app's user
 data folder (`~/Library/Application Support/Unscan` on macOS) until you
 remove them: **Remove from History…** in a row's context menu, or Delete,
 removes one, and **Clear…** removes them all. The scans themselves are
-never touched.
+never touched. **+** beside the sidebar's button, or **File › New** (⌘N),
+leaves the document shown for the welcome, to open another PDF; its row
+in the sidebar shows it again.
 
 | Shortcut | Action |
 |---|---|
+| ⌘N | Go to the welcome, to open another PDF |
 | ⌘O | Open a PDF |
 | ⌘S | Save the form shown |
 | ← → | Turn the pages |
