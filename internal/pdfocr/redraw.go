@@ -184,6 +184,40 @@ func lineFrame(q ocr.Quad) frame {
 	return f
 }
 
+// pageAngle is the angle the page's lines run at, by the median of those
+// running along their boxes at least three times as long as high, the
+// tangent of their slope down the image; false where fewer than three do.
+func pageAngle(frames []frame) (float64, bool) {
+	var angles []float64
+	for _, f := range frames {
+		if !f.turned && f.length >= 3*f.height && f.length > 0 {
+			angles = append(angles, math.Atan2(f.u.Y, f.u.X))
+		}
+	}
+	if len(angles) < 3 {
+		return 0, false
+	}
+	slices.Sort(angles)
+	return angles[len(angles)/2], true
+}
+
+// level is a frame f turned about its middle to run at angle, as the
+// page's lines do, where it runs off it by half a degree to 15; false
+// where it runs at it, or turned.
+func level(f frame, angle float64) (frame, bool) {
+	turn := angle - math.Atan2(f.u.Y, f.u.X)
+	if f.turned || f.length == 0 || math.Abs(turn) < 0.5*math.Pi/180 || math.Abs(turn) > 15*math.Pi/180 {
+		return f, false
+	}
+	sin, cos := math.Sincos(turn)
+	rot := func(p ocr.Point) ocr.Point { return ocr.Point{X: p.X*cos - p.Y*sin, Y: p.X*sin + p.Y*cos} }
+	mid := f.point(f.length/2, f.height/2)
+	g := f
+	g.u, g.v = rot(f.u), rot(f.v)
+	g.o = ocr.Point{X: mid.X - g.u.X*f.length/2 - g.v.X*f.height/2, Y: mid.Y - g.u.Y*f.length/2 - g.v.Y*f.height/2}
+	return g, true
+}
+
 // point is the image point s pixels along the line from its origin and t
 // up from it.
 func (f frame) point(s, t float64) ocr.Point {
@@ -1711,6 +1745,29 @@ func (d *textDoc) squeezed(p *pixels, text string, f frame, in ink) bool {
 	return d.typeMatch(p, text, f, in) < minTypeMatch
 }
 
+// drawn reports whether a line of one character is drawn rather than
+// set: its ink a third wider than the character's glyph or more, in
+// either regular face, at the size its ink gives it, as a logo drawn of
+// the character twice over, which stays as printed. A line of more
+// characters is spaced out to its ink as type is (see spread), and one
+// whose ink is narrower is squeezed (see squeezed).
+func (d *textDoc) drawn(text string, f frame, in ink) bool {
+	if !in.found || utf8.RuneCountInString(strings.TrimSpace(text)) != 1 {
+		return false
+	}
+	for _, fi := range []int{serif, sans} {
+		sh := d.shape(text, fi)
+		if !sh.inked || sh.right <= sh.left {
+			return false
+		}
+		width := float64(sh.right-sh.left) / float64(d.fonts[fi].ttf.UnitsPerEm) * d.size(sh, f, in)
+		if in.s1-in.s0 < 4.0/3*width {
+			return false
+		}
+	}
+	return true
+}
+
 // enDashes sets the hyphens between digits of a line that has nowhere to
 // space out, as a page range, 28-29, as en dashes where that fits its ink
 // better: the recognizer reads the one as the other, and a line set with
@@ -1776,6 +1833,23 @@ func (d *textDoc) redrawPage(img image.Image, lines []ocr.Line, width, height fl
 	for i, l := range lines {
 		frames[i] = lineFrame(l.Box)
 	}
+	// A box tilted off the page's lines, as round a heading whose last
+	// characters stand taller than its first, is set level with them where
+	// its ink lies so: it stands shorter in a level frame, as text set
+	// along its frame does, by a tenth or more.
+	angle, ok := pageAngle(frames)
+	for i, l := range lines {
+		if !ok {
+			break
+		}
+		if alt, tilted := level(frames[i], angle); tilted {
+			aspect := ref.shape(l.Text, serif).aspect()
+			a, b := p.measure(frames[i], aspect), p.measure(alt, aspect)
+			if a.found && b.found && b.t1-b.t0 <= 0.9*(a.t1-a.t0) {
+				frames[i] = alt
+			}
+		}
+	}
 	for i, l := range lines {
 		// The other lines' boxes, whose ink is theirs, but for those the
 		// recognizer was unsure of, as of a picture's scribbles, whose
@@ -1812,7 +1886,8 @@ func (d *textDoc) redrawPage(img image.Image, lines []ocr.Line, width, height fl
 				in.strokes.across, in.strokes.down = in.strokes.down, in.strokes.across
 			}
 			m := measuredLine{text: text, frame: f, ink: in, keep: keep, stacked: stacked,
-				printed: !in.plain || in.framed || l.Score < minScore || !stacked && ref.squeezed(p, text, f, in)}
+				printed: !in.plain || in.framed || l.Score < minScore || !stacked && ref.squeezed(p, text, f, in) ||
+					ref.drawn(text, f, in)}
 			if !m.printed {
 				m.refs = ref.refs(text, f, in)
 			}

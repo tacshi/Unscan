@@ -160,7 +160,12 @@ For each scanned page, at the resolution it was read at:
    sets them beside it, is not the character's; a piece mostly another
    line's, but a fifth or more this one's, as of two characters run
    together, is shared out by its pixels. Boxes the recognizer was unsure
-   of claim no ink. Dot
+   of claim no ink. A box tilted off the page's lines, by their median
+   angle, by half a degree to 15, as the recognizer draws round a heading
+   whose last characters stand taller than its first, is turned level with
+   them where the line's ink stands a tenth shorter or more in it, as
+   level text does in a level frame; on a page scanned askew, whose lines
+   tilt alike, a line keeps its tilt. Dot
    leaders that a contents page's headings end with, or its page numbers
    start with, are kept as printed: the recognizer reads a few of the dots,
    a dot at times as 。, which set in the heading's face would come out its
@@ -356,7 +361,10 @@ For each scanned page, at the resolution it was read at:
    as a book's figures have them, measure 0.73 or more, and the lettering
    of a picture's signs, calendars and handwriting 0.69 at most. A
    character alone is not judged so, as an X written by hand matches type
-   as well as one printed, and a B read as 8 about as well as a B. What
+   as well as one printed, and a B read as 8 about as well as a B; but a
+   character alone whose ink is a third wider than its glyph or more, in
+   either regular face, is drawn rather than set, as a logo drawn of the
+   character twice over, and stays as printed too. What
    is left that is not white, a pale tint too, whole, as a panel behind
    a picture or text, is cut out in parts: its line art is traced (see
    6), and the rest goes into images, what is mostly white and ink
@@ -498,7 +506,11 @@ CGO_ENABLED=0 go test ./...
   box, lying as it was printed. A cover's title characters, large, each
   a line of its own, the first's box taking in the end of the line beside
   it and overlapping the next's, are each measured within 3 pixels of
-  its own ink and set at its size. Dot
+  its own ink and set at its size. A heading printed level whose box the
+  recognizer tilted is set level, within a slope of 0.005, while on a
+  page scanned askew it keeps the page's tilt; and a logo drawn of a
+  character twice over, read as the character, stays as printed under
+  invisible text, while the character printed alone is set. Dot
   leaders at 300 DPI, too far apart to join, are kept, while
   a speck of dust and three specks in a row are not. A line printed on a
   panel of a pale tint, scanned clean, stays as printed on it, and the

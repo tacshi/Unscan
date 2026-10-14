@@ -1960,6 +1960,112 @@ func TestNeighborInk(t *testing.T) {
 	}
 }
 
+// TestLevel redraws a chapter opener's heading, printed level, whose box
+// the recognizer tilted, as round a heading whose last characters stand
+// taller than its first: it is set level with the page's lines. On a page
+// scanned askew, whose lines all tilt, a line keeps their tilt.
+func TestLevel(t *testing.T) {
+	d, fonts := testTextDoc(t)
+	sf, err := opentype.Parse(fonts.Sans.Data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	face, err := opentype.NewFace(sf, &opentype.FaceOptions{Size: 50, DPI: 72, Hinting: font.HintingNone})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeOrFail(t, face)
+	// tilted is a box round x0 to x1 along a baseline at base, turned by
+	// slope about its middle.
+	tilted := func(x0, x1, base int, slope float64) ocr.Quad {
+		mx, my := float64(x0+x1)/2, float64(base)-15
+		at := func(x, y float64) ocr.Point {
+			dx, dy := x-mx, y-my
+			return ocr.Point{X: mx + dx - dy*slope, Y: my + dy + dx*slope}
+		}
+		return ocr.Quad{at(float64(x0-8), float64(base-50)), at(float64(x1+8), float64(base-50)),
+			at(float64(x1+8), float64(base+16)), at(float64(x0-8), float64(base+16))}
+	}
+	for _, c := range []struct {
+		name         string
+		page, single float64 // the slope of the page's lines, and the heading's box's
+		want         float64 // the slope it is set at
+	}{
+		{"a heading's box tilted", 0, -0.047, 0},
+		{"a page scanned askew", -0.03, -0.03, -0.03},
+	} {
+		img := image.NewRGBA(image.Rect(0, 0, 1000, 700))
+		draw.Draw(img, img.Rect, image.White, image.Point{}, draw.Src)
+		var lines []ocr.Line
+		for k, text := range []string{"第二章 句式的势利眼", "植入了势利眼这个思维，下面检验", "我们解决学习英语语法的困惑。", "句式是句子的根基，我们先从它入手"} {
+			base := 120 + 140*k
+			// Drawn along the page's slope, a pixel column at a time.
+			line := image.NewRGBA(image.Rect(0, 0, 1000, 100))
+			draw.Draw(line, line.Rect, image.White, image.Point{}, draw.Src)
+			dr := font.Drawer{Dst: line, Src: image.Black, Face: face, Dot: fixed.P(60, 70)}
+			dr.DrawString(text)
+			end := dr.Dot.X.Ceil()
+			for x := range 1000 {
+				shift := int(math.Round(float64(x-500) * c.page))
+				for y := range 100 {
+					if line.RGBAAt(x, y).R < 255 {
+						img.Set(x, base-70+y+shift, line.At(x, y))
+					}
+				}
+			}
+			slope := c.page
+			if k == 0 {
+				slope = c.single
+			}
+			lines = append(lines, ocr.Line{Score: 1, Text: text, Box: tilted(60, end, base+int(math.Round(float64((60+end)/2-500)*c.page)), slope)})
+		}
+		page := d.redraw(img, lines, 1000, 700)
+		d.setLines()
+		if got := page.lines[0].dy / page.lines[0].dx; math.Abs(got+c.want) > 0.005 {
+			t.Errorf("%s: the heading set at a slope of %.3f, want %.3f", c.name, -got, c.want)
+		}
+	}
+}
+
+// TestDrawn redraws a logo drawn of a character twice over, which the
+// recognizer reads as the character: it stays as printed, under
+// invisible text, while the character printed alone is set in type.
+func TestDrawn(t *testing.T) {
+	d, fonts := testTextDoc(t)
+	sf, err := opentype.Parse(fonts.SansBold.Data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	face, err := opentype.NewFace(sf, &opentype.FaceOptions{Size: 100, DPI: 72, Hinting: font.HintingNone})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeOrFail(t, face)
+	img := image.NewRGBA(image.Rect(0, 0, 800, 500))
+	draw.Draw(img, img.Rect, image.White, image.Point{}, draw.Src)
+	// The logo: the character twice, run together.
+	dr := font.Drawer{Dst: img, Src: image.Black, Face: face, Dot: fixed.P(100, 180)}
+	dr.DrawString("当")
+	dr.Dot.X -= fixed.I(30)
+	dr.DrawString("当")
+	logo := dr.Dot.X.Ceil()
+	dr = font.Drawer{Dst: img, Src: image.Black, Face: face, Dot: fixed.P(100, 400)}
+	dr.DrawString("当")
+	alone := dr.Dot.X.Ceil()
+	box := func(x0, x1, base int) ocr.Quad {
+		return ocr.Quad{{X: float64(x0 - 8), Y: float64(base - 100)}, {X: float64(x1 + 8), Y: float64(base - 100)},
+			{X: float64(x1 + 8), Y: float64(base + 20)}, {X: float64(x0 - 8), Y: float64(base + 20)}}
+	}
+	page := d.redraw(img, []ocr.Line{{Score: 1, Text: "当", Box: box(100, logo, 180)}, {Score: 1, Text: "当", Box: box(100, alone, 400)}}, 800, 500)
+	d.setLines()
+	if len(page.lines) != 2 || !page.lines[0].hidden || page.lines[1].hidden {
+		t.Fatalf("lines %+v: want the logo kept as printed, and the character set", page.lines)
+	}
+	if !keeps(page, 150, 500-140) {
+		t.Error("the logo not kept as printed")
+	}
+}
+
 // TestUnderline redraws a line with a word underlined, the rule running
 // into its letters' feet, and one with the rule apart from them: both are
 // set at their size, and their rules kept as printed.
