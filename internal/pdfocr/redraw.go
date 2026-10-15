@@ -203,13 +203,18 @@ func pageAngle(frames []frame) (float64, bool) {
 }
 
 // level is a frame f turned about its middle to run at angle, as the
-// page's lines do, where it runs off it by half a degree to 15, and is a
+// page's lines do, or across them, down the page, for a turned one, a
+// column's, where it runs off that by half a degree to 15, and is a
 // line's, three times as long as it is high or longer, as those it was
-// told by are; false where it runs at it, or is turned, or a label's, as a
-// number's in a circle, whose box runs as the recognizer happens to draw it.
+// told by are, or a column's, which turned frames are; false where it
+// runs so, or is a label's, as a number's in a circle, whose box runs as
+// the recognizer happens to draw it.
 func level(f frame, angle float64) (frame, bool) {
-	turn := angle - math.Atan2(f.u.Y, f.u.X)
-	if f.turned || f.length < 3*f.height || math.Abs(turn) < 0.5*math.Pi/180 || math.Abs(turn) > 15*math.Pi/180 {
+	if f.turned {
+		angle += math.Pi / 2
+	}
+	turn := math.Remainder(angle-math.Atan2(f.u.Y, f.u.X), 2*math.Pi)
+	if !f.turned && f.length < 3*f.height || math.Abs(turn) < 0.5*math.Pi/180 || math.Abs(turn) > 15*math.Pi/180 {
 		return f, false
 	}
 	sin, cos := math.Sincos(turn)
@@ -277,8 +282,11 @@ type ink struct {
 // it is, as a descender dipping into the line below is its own line's,
 // but for a piece of which no more than a fifth and less than half is
 // the line's, as of two characters run together, which is shared out as
-// its pixels are. Others are the boxes of the page's other lines.
-func foreignInk(f frame, others []frame, m, ns, nt int, ink func(k int) bool) []bool {
+// its pixels are. Others are the boxes of the page's other lines. If
+// relative, a pixel's depth in a box is over half the box's shorter side,
+// so that a small box holds its ink against a large one round it, as a
+// title's column's box takes in the lines beside it.
+func foreignInk(f frame, others []frame, m, ns, nt int, ink func(k int) bool, relative bool) []bool {
 	foreign := make([]bool, ns*nt)
 	// The others whose boxes reach where the samples lie.
 	lo, hi := f.point(float64(-m), float64(-m)), f.point(float64(-m), float64(-m))
@@ -304,7 +312,11 @@ func foreignInk(f frame, others []frame, m, ns, nt int, ink func(k int) bool) []
 	depth := func(g frame, pt ocr.Point) float64 {
 		dx, dy := pt.X-g.o.X, pt.Y-g.o.Y
 		s, t := dx*g.u.X+dy*g.u.Y, dx*g.v.X+dy*g.v.Y
-		return min(s, g.length-s, t, g.height-t)
+		d := min(s, g.length-s, t, g.height-t)
+		if relative {
+			d /= max(1, min(g.length, g.height)/2)
+		}
+		return d
 	}
 	theirs := func(k int) bool {
 		pt := f.point(float64(k%ns-m)+0.5, float64(k/ns-m)+0.5)
@@ -533,7 +545,7 @@ func (p *pixels) measureRules(f frame, aspect float64, rules bool, others []fram
 	thr := max(32, diff(in.fg, in.bg)/2)
 	if len(others) > 0 {
 		faint := max(24, thr/2)
-		for k, theirs := range foreignInk(f, others, m, ns, nt, func(k int) bool { return diff(samples[k], in.bg) > faint }) {
+		for k, theirs := range foreignInk(f, others, m, ns, nt, func(k int) bool { return diff(samples[k], in.bg) > faint }, false) {
 			if theirs {
 				samples[k] = in.bg
 			}
@@ -1167,10 +1179,97 @@ func percentile(hist []int, n int, q float64) int {
 	return len(hist) - 1
 }
 
-// fill paints the part of a line's frame from s0 to s1 along it and t0
-// to t1 up it in c.
-func (p *pixels) fill(f frame, s0, s1, t0, t1 float64, c rgb) {
-	p.each(f, s0, s1, t0, t1, func(i int) { copy(p.pix[i:][:3], c[:]) })
+// keepTitles keeps as printed the lines of a title beside one kept so, as
+// the columns of a title page's title, one of which the recognizer was
+// unsure of: set in the text faces beside the scan's, the title would mix
+// two. A title's lines are set large, twice as high as the page's lines
+// by their median or more, and those beside a line run its way, within a
+// quarter of its height of it, alongside it, no further across from it
+// than half its height; and so on, line by line, for a title of more.
+// Lines of the text's size are each kept or set alone, as a paragraph's
+// line the recognizer was unsure of keeps no other.
+func keepTitles(lines []measuredLine) {
+	var heights []float64
+	for _, m := range lines {
+		if m.ink.found {
+			heights = append(heights, m.ink.t1-m.ink.t0)
+		}
+	}
+	if len(heights) == 0 {
+		return
+	}
+	slices.Sort(heights)
+	large := 2 * heights[len(heights)/2]
+	big := func(m measuredLine) bool { return m.ink.found && m.ink.t1-m.ink.t0 >= large }
+	beside := func(a, b measuredLine) bool {
+		fa, fb := a.frame, b.frame
+		if fa.u.X*fb.u.X+fa.u.Y*fb.u.Y < math.Cos(10*math.Pi/180) {
+			return false // not running the same way
+		}
+		ha, hb := a.ink.t1-a.ink.t0, b.ink.t1-b.ink.t0
+		if math.Abs(ha-hb) > 0.25*max(ha, hb) {
+			return false
+		}
+		// b's ink in a's frame.
+		s0, s1, t0, t1 := math.Inf(1), math.Inf(-1), math.Inf(1), math.Inf(-1)
+		for _, c := range [][2]float64{{b.ink.s0, b.ink.t0}, {b.ink.s1, b.ink.t0}, {b.ink.s0, b.ink.t1}, {b.ink.s1, b.ink.t1}} {
+			pt := fb.point(c[0], c[1])
+			dx, dy := pt.X-fa.o.X, pt.Y-fa.o.Y
+			s, t := dx*fa.u.X+dy*fa.u.Y, dx*fa.v.X+dy*fa.v.Y
+			s0, s1, t0, t1 = min(s0, s), max(s1, s), min(t0, t), max(t1, t)
+		}
+		return s0 < a.ink.s1 && s1 > a.ink.s0 && max(t0-a.ink.t1, a.ink.t0-t1) <= 0.5*max(ha, hb)
+	}
+	for changed := true; changed; {
+		changed = false
+		for i := range lines {
+			if !lines[i].printed || !big(lines[i]) {
+				continue
+			}
+			for j := range lines {
+				if !lines[j].printed && big(lines[j]) && beside(lines[i], lines[j]) {
+					lines[j].printed, lines[j].refs = true, lineRefs{}
+					changed = true
+				}
+			}
+		}
+	}
+}
+
+// keptInk reports which pixels, by their index into pix, of the part of
+// a line's frame f from s0 to s1 along it and t0 to t1 up it are the ink
+// of lines kept as printed, of kept, their boxes: the pieces of ink there
+// that are theirs, as foreignInk tells a line's ink from its neighbors',
+// which erasing the line would cut, as a title page's 极简 column's box
+// takes in the right of 英语's beside it. A pixel is a box's that it lies
+// deepest in for the box's size, as the lines set beside the title, in
+// small boxes inside its large one, are their own. Ink is what differs
+// from the line's paper by a quarter of its ink's contrast or more, as
+// measureRules takes a stroke's faint edges.
+func (p *pixels) keptInk(f frame, in ink, s0, s1, t0, t1 float64, kept []frame) func(k int) bool {
+	none := func(int) bool { return false }
+	det := f.u.X*f.v.Y - f.u.Y*f.v.X
+	if len(kept) == 0 || f.length <= 0 || f.height <= 0 || det == 0 {
+		return none
+	}
+	m := int(math.Ceil(max(1, -s0, s1-f.length, -t0, t1-f.height))) + 1
+	ns, nt := int(math.Ceil(f.length))+2*m, int(math.Ceil(f.height))+2*m
+	if ns*nt > 1<<24 {
+		return none
+	}
+	faint := max(24, max(32, diff(in.fg, in.bg)/2)/2)
+	inked := func(k int) bool {
+		pt := f.point(float64(k%ns-m)+0.5, float64(k/ns-m)+0.5)
+		return diff(p.at(int(math.Floor(pt.X)), int(math.Floor(pt.Y))), in.bg) > faint
+	}
+	foreign := foreignInk(f, kept, m, ns, nt, inked, true)
+	return func(k int) bool {
+		x, y := (k/3)%p.w, (k/3)/p.w
+		dx, dy := float64(x)+0.5-f.o.X, float64(y)+0.5-f.o.Y
+		s, t := (dx*f.v.Y-dy*f.v.X)/det, (f.u.X*dy-f.u.Y*dx)/det
+		i, j := int(math.Floor(s))+m, int(math.Floor(t))+m
+		return i >= 0 && j >= 0 && i < ns && j < nt && foreign[j*ns+i]
+	}
 }
 
 // each calls do with the index into pix of each pixel in the part of a
@@ -2082,18 +2181,27 @@ func (d *textDoc) redrawPage(img image.Image, lines []ocr.Line, width, height fl
 		frames[i] = lineFrame(l.Box)
 	}
 	// A box tilted off the page's lines, as round a heading whose last
-	// characters stand taller than its first, is set level with them where
-	// its ink lies so: it stands shorter in a level frame, as text set
-	// along its frame does, by a tenth or more.
+	// characters stand taller than its first, or a column's off upright, as
+	// round a cover's title set down it, is set level with them where its
+	// ink lies so: it stands shorter in a level frame, as text set along its
+	// frame does, by a tenth or more, or a column narrower by a fiftieth.
 	angle, ok := pageAngle(frames)
 	for i, l := range lines {
 		if !ok {
 			break
 		}
+		// A column's characters are as wide across it as they are high,
+		// which a box tilted by a few degrees widens by a few hundredths
+		// only: a cover's column of two characters, its box tilted 4.7°,
+		// stands 3% narrower level.
 		if alt, tilted := level(frames[i], angle); tilted {
 			aspect := ref.shape(l.Text, serif).aspect()
 			a, b := p.measure(frames[i], aspect), p.measure(alt, aspect)
-			if a.found && b.found && b.t1-b.t0 <= 0.9*(a.t1-a.t0) {
+			shorter := 0.9
+			if frames[i].turned {
+				shorter = 0.98
+			}
+			if a.found && b.found && b.t1-b.t0 <= shorter*(a.t1-a.t0) {
 				frames[i] = alt
 			}
 		}
@@ -2142,6 +2250,7 @@ func (d *textDoc) redrawPage(img image.Image, lines []ocr.Line, width, height fl
 			page.measured = append(page.measured, m)
 		}
 	}
+	keepTitles(page.measured)
 	// Erase the lines to set, set provisionally in the serif face to find
 	// the ink no character is matched to (see place), which stays.
 	shapes := make([]shape, len(page.measured))
@@ -2194,6 +2303,14 @@ func (d *textDoc) redrawPage(img image.Image, lines []ocr.Line, width, height fl
 			}
 		}
 	}
+	// The boxes of the lines kept as printed, whose ink a line's box may
+	// hold, as a title's columns' boxes overlap.
+	var kept []frame
+	for i, m := range page.measured {
+		if !set[i] && m.frame.length > 0 && m.frame.height > 0 {
+			kept = append(kept, m.frame)
+		}
+	}
 	for i, m := range page.measured {
 		if !set[i] {
 			continue
@@ -2201,10 +2318,19 @@ func (d *textDoc) redrawPage(img image.Image, lines []ocr.Line, width, height fl
 		f, in := m.frame, m.ink
 		// The box, and the ink that runs past it, with a pixel to spare,
 		// but for the bare ink, and what is to be kept, which may run on
-		// to the box's ends, past the text's ink.
+		// to the box's ends, past the text's ink; and but for the ink of
+		// the lines kept as printed.
 		s0, s1, t0, t1 := 0.0, f.length, 0.0, f.height
 		if in.found {
 			s0, s1, t0, t1 = min(s0, in.s0), max(s1, in.s1), min(t0, in.t0), max(t1, in.t1)
+		}
+		theirs := p.keptInk(f, in, s0-1, s1+1, t0-1, t1+1, kept)
+		fill := func(from, to float64) {
+			p.each(f, from, to, t0-1, t1+1, func(k int) {
+				if !theirs(k) {
+					copy(p.pix[k:][:3], white[:])
+				}
+			})
 		}
 		bare := bares[i]
 		for _, k := range m.keep {
@@ -2213,10 +2339,10 @@ func (d *textDoc) redrawPage(img image.Image, lines []ocr.Line, width, height fl
 		slices.SortFunc(bare, func(a, b [2]float64) int { return cmp.Compare(a[0], b[0]) })
 		from := s0 - 1
 		for _, b := range bare {
-			p.fill(f, from, b[0]-2, t0-1, t1+1, white)
+			fill(from, b[0]-2)
 			from = b[1] + 2
 		}
-		p.fill(f, from, s1+1, t0-1, t1+1, white)
+		fill(from, s1+1)
 	}
 	for _, px := range ruled {
 		copy(p.pix[px.i:][:3], px.c[:])

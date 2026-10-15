@@ -2360,8 +2360,6 @@ func TestLevel(t *testing.T) {
 	}
 }
 
-// TestDrawn redraws a logo drawn of a character twice over, which the
-// recognizer reads as the character: it stays as printed, under
 // TestMonoWords redraws a page of Chinese naming code in Courier New, as a
 // book on Linux prints it, beside English words in Times New Roman, and a
 // few lines of code: the code is set in the monospaced face, its letters
@@ -2549,6 +2547,197 @@ func TestLargeAlone(t *testing.T) {
 		if got, ok := faces[c.text]; !ok || got != c.want {
 			t.Errorf("%s set in face %d, want %d (faces %v)", c.text, got, c.want, faces)
 		}
+	}
+}
+
+// TestLevelColumn redraws a title's column of two characters, upright,
+// whose box the recognizer drew tilted 4.7°, as round a title page's 极简,
+// beside level lines and a smaller column kept as printed, 英语, which the
+// recognizer was unsure of, whose ink the tilted box takes in: the column
+// is set upright down the page, level across it, not along the tilted
+// box, turned and drifting across it; and erasing it leaves 英语 whole.
+func TestLevelColumn(t *testing.T) {
+	d, fonts := testTextDoc(t)
+	sf, err := opentype.Parse(fonts.SansBold.Data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	big, err := opentype.NewFace(sf, &opentype.FaceOptions{Size: 150, DPI: 72, Hinting: font.HintingNone})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeOrFail(t, big)
+	small, err := opentype.NewFace(sf, &opentype.FaceOptions{Size: 40, DPI: 72, Hinting: font.HintingNone})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeOrFail(t, small)
+	const w, h = 1000, 900
+	img := image.NewRGBA(image.Rect(0, 0, w, h))
+	draw.Draw(img, img.Rect, image.White, image.Point{}, draw.Src)
+	var lines []ocr.Line
+	for k, text := range []string{"你的第一本语法学习书", "民主与建设出版社出版", "第二章 句式的势利眼"} {
+		base := 600 + 90*k
+		dr := font.Drawer{Dst: img, Src: image.Black, Face: small, Dot: fixed.P(400, base)}
+		dr.DrawString(text)
+		end := dr.Dot.X.Ceil()
+		lines = append(lines, ocr.Line{Score: 1, Text: text, Box: ocr.Quad{{X: 394, Y: float64(base - 40)},
+			{X: float64(end + 6), Y: float64(base - 40)}, {X: float64(end + 6), Y: float64(base + 12)}, {X: 394, Y: float64(base + 12)}}})
+	}
+	// The columns, 英 over 语 at x 150 to 250, y 80 to 290, two thirds the
+	// size of 极 over 简 at x 290 to 440, y 60 to 360.
+	mid, err := opentype.NewFace(sf, &opentype.FaceOptions{Size: 100, DPI: 72, Hinting: font.HintingNone})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeOrFail(t, mid)
+	for k, r := range []string{"英", "语"} {
+		dr := font.Drawer{Dst: img, Src: image.Black, Face: mid, Dot: fixed.P(150, 170+110*k)}
+		dr.DrawString(r)
+	}
+	for k, r := range []string{"极", "简"} {
+		dr := font.Drawer{Dst: img, Src: image.Black, Face: big, Dot: fixed.P(290, 190+150*k)}
+		dr.DrawString(r)
+	}
+	// 英's rightmost ink, which 极简's box takes in.
+	edge := image.Point{}
+	for y := 60; y < 200; y++ {
+		for x := 100; x < 270; x++ {
+			if img.RGBAAt(x, y).R < 128 && x > edge.X {
+				edge = image.Point{X: x, Y: y}
+			}
+		}
+	}
+	lines = append(lines, ocr.Line{Score: 0.8, Text: "英语", Box: ocr.Quad{{X: 135, Y: 60}, {X: 265, Y: 60}, {X: 265, Y: 310}, {X: 135, Y: 310}}})
+	// 极简's box, turned 4.7° about its middle, (345, 210).
+	slope := math.Tan(4.7 * math.Pi / 180)
+	at := func(x, y float64) ocr.Point {
+		dx, dy := x-345, y-210
+		return ocr.Point{X: 345 + dx - dy*slope, Y: 210 + dy + dx*slope}
+	}
+	lines = append(lines, ocr.Line{Score: 1, Text: "极简", Box: ocr.Quad{at(230, 30), at(460, 30), at(460, 390), at(230, 390)}})
+	page := d.redraw(img, lines, w, h)
+	d.setLines()
+	set := false
+	for _, l := range page.lines {
+		if l.vertical && !l.hidden {
+			set = true
+			if math.Abs(l.dy/l.dx) > 0.005 {
+				t.Errorf("the column set across at a slope of %.3f, want level", l.dy/l.dx)
+			}
+		}
+	}
+	if !set {
+		t.Error("no column set upright")
+	}
+	if !keeps(page, float64(edge.X), h-float64(edge.Y)) {
+		t.Errorf("英's ink at %v erased with the column beside it", edge)
+	}
+}
+
+// TestKeepTitles redraws a title page's title, two columns side by side at
+// one size, one of which the recognizer was unsure of, beside lines of
+// smaller text, one of which it was unsure of too: the title's columns
+// are both kept as printed, in the face they were printed in, not one in
+// the text faces, and the small lines but for the one are set.
+func TestKeepTitles(t *testing.T) {
+	d, fonts := testTextDoc(t)
+	sf, err := opentype.Parse(fonts.SansBold.Data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	big, err := opentype.NewFace(sf, &opentype.FaceOptions{Size: 150, DPI: 72, Hinting: font.HintingNone})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeOrFail(t, big)
+	small, err := opentype.NewFace(sf, &opentype.FaceOptions{Size: 40, DPI: 72, Hinting: font.HintingNone})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeOrFail(t, small)
+	img := image.NewRGBA(image.Rect(0, 0, 1000, 900))
+	draw.Draw(img, img.Rect, image.White, image.Point{}, draw.Src)
+	var lines []ocr.Line
+	for k, text := range []string{"你的第一本语法学习书", "民主与建设出版社出版", "第二章 句式的势利眼"} {
+		base := 600 + 90*k
+		dr := font.Drawer{Dst: img, Src: image.Black, Face: small, Dot: fixed.P(400, base)}
+		dr.DrawString(text)
+		end := dr.Dot.X.Ceil()
+		score := float32(1)
+		if k == 1 {
+			score = 0.8
+		}
+		lines = append(lines, ocr.Line{Score: score, Text: text, Box: ocr.Quad{{X: 394, Y: float64(base - 40)},
+			{X: float64(end + 6), Y: float64(base - 40)}, {X: float64(end + 6), Y: float64(base + 12)}, {X: 394, Y: float64(base + 12)}}})
+	}
+	for c, col := range [][]string{{"英", "语"}, {"极", "简"}} {
+		x := 100 + 180*c
+		for k, r := range col {
+			dr := font.Drawer{Dst: img, Src: image.Black, Face: big, Dot: fixed.P(x, 190+150*k)}
+			dr.DrawString(r)
+		}
+		score := float32(1)
+		if c == 0 {
+			score = 0.8
+		}
+		lines = append(lines, ocr.Line{Score: score, Text: col[0] + col[1], Box: ocr.Quad{{X: float64(x - 10), Y: 40},
+			{X: float64(x + 160), Y: 40}, {X: float64(x + 160), Y: 380}, {X: float64(x - 10), Y: 380}}})
+	}
+	page := d.redraw(img, lines, 1000, 900)
+	d.setLines()
+	hidden := map[string]bool{}
+	for _, l := range page.lines {
+		var text string
+		for _, c := range l.cids {
+			text += string(d.sets[page.set].codes[c-1].r)
+		}
+		hidden[strings.ReplaceAll(text, " ", "")] = l.hidden
+	}
+	for text, want := range map[string]bool{"英语": true, "极简": true, "你的第一本语法学习书": false,
+		"民主与建设出版社出版": true, "第二章句式的势利眼": false} {
+		if got, ok := hidden[text]; !ok || got != want {
+			t.Errorf("%s kept as printed %v, want %v (lines %v)", text, got, want, hidden)
+		}
+	}
+}
+
+// TestDrawn redraws a logo drawn of a character twice over, which the
+// recognizer reads as the character: it stays as printed, under
+// invisible text, while the character printed alone is set in type.
+func TestDrawn(t *testing.T) {
+	d, fonts := testTextDoc(t)
+	sf, err := opentype.Parse(fonts.SansBold.Data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	face, err := opentype.NewFace(sf, &opentype.FaceOptions{Size: 100, DPI: 72, Hinting: font.HintingNone})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeOrFail(t, face)
+	img := image.NewRGBA(image.Rect(0, 0, 800, 500))
+	draw.Draw(img, img.Rect, image.White, image.Point{}, draw.Src)
+	// The logo: the character twice, run together.
+	dr := font.Drawer{Dst: img, Src: image.Black, Face: face, Dot: fixed.P(100, 180)}
+	dr.DrawString("当")
+	dr.Dot.X -= fixed.I(30)
+	dr.DrawString("当")
+	logo := dr.Dot.X.Ceil()
+	dr = font.Drawer{Dst: img, Src: image.Black, Face: face, Dot: fixed.P(100, 400)}
+	dr.DrawString("当")
+	alone := dr.Dot.X.Ceil()
+	box := func(x0, x1, base int) ocr.Quad {
+		return ocr.Quad{{X: float64(x0 - 8), Y: float64(base - 100)}, {X: float64(x1 + 8), Y: float64(base - 100)},
+			{X: float64(x1 + 8), Y: float64(base + 20)}, {X: float64(x0 - 8), Y: float64(base + 20)}}
+	}
+	page := d.redraw(img, []ocr.Line{{Score: 1, Text: "当", Box: box(100, logo, 180)}, {Score: 1, Text: "当", Box: box(100, alone, 400)}}, 800, 500)
+	d.setLines()
+	if len(page.lines) != 2 || !page.lines[0].hidden || page.lines[1].hidden {
+		t.Fatalf("lines %+v: want the logo kept as printed, and the character set", page.lines)
+	}
+	if !keeps(page, 150, 500-140) {
+		t.Error("the logo not kept as printed")
 	}
 }
 

@@ -174,9 +174,16 @@ For each scanned page, at the resolution it was read at:
    whose last characters stand taller than its first, is turned level with
    them where the line's ink stands a tenth shorter or more in it, as
    level text does in a level frame; on a page scanned askew, whose lines
-   tilt alike, a line keeps its tilt. A box no longer than three times its
-   height, as round a circled number, is not leveled: how the recognizer
-   tilts it says nothing of how its text runs. Dot
+   tilt alike, a line keeps its tilt. A column's box, as round a title set
+   down a cover, is turned to run across them, down the page, where its
+   ink stands a fiftieth narrower or more: its characters are as wide
+   across it as they are high, which a few degrees' tilt widens by a few
+   hundredths only, as a title page's 极简, its box tilted 4.7° on the
+   GPU, stands 3% narrower level. Set along the tilted box, its
+   characters would turn and drift across the column. A box no longer
+   than three times its height, as round a circled number, is not
+   leveled: how the recognizer tilts it says nothing of how its text
+   runs. Dot
    leaders that a contents page's headings end with, or its page numbers
    start with, are kept as printed: the recognizer reads a few of the dots,
    a dot at times as 。, which set in the heading's face would come out its
@@ -469,7 +476,19 @@ For each scanned page, at the resolution it was read at:
    as well as one printed, and a B read as 8 about as well as a B; but a
    character alone whose ink is a third wider than its glyph or more, in
    either regular face, is drawn rather than set, as a logo drawn of the
-   character twice over, and stays as printed too. What
+   character twice over, and stays as printed too. A title's lines are
+   kept or set together: beside a line set large, twice as high as the
+   page's lines or more, kept as printed, as one of a title page's
+   columns the recognizer read with 81% confidence, the lines of its size
+   running its way alongside it, half its height away or nearer, are kept
+   too, as set in the text faces beside the scan's face the title would
+   mix two. A line of the text's size keeps no other. A line is erased
+   with its box, but for the ink in it of a line kept as printed, as a
+   title's column the recognizer was unsure of, whose ink the box of the
+   column beside it takes in: the pieces of ink that lie deeper in the
+   kept line's box than in the line's, as measuring tells a line's ink
+   from its neighbors', each depth over half its box's shorter side, so
+   that a line in a small box inside the kept one's is erased whole. What
    is left that is not white, a pale tint too, whole, as a panel behind
    a picture or text, is cut out in parts: its line art is traced (see
    6), and the rest goes into images, what is mostly white and ink
@@ -631,7 +650,12 @@ CGO_ENABLED=0 go test ./...
   it and overlapping the next's, are each measured within 3 pixels of
   its own ink and set at its size. A heading printed level whose box the
   recognizer tilted is set level, within a slope of 0.005, while on a
-  page scanned askew it keeps the page's tilt; and a logo drawn of a
+  page scanned askew it keeps the page's tilt; so is a column of two
+  characters whose box it tilted 4.7°, upright, and erasing it leaves a
+  smaller column kept as printed beside it, whose ink its box takes in,
+  whole; a title's two columns at one size, one read with too little
+  confidence, are both kept as printed, while beside them a small line
+  read so keeps no other; and a logo drawn of a
   character twice over, read as the character, stays as printed under
   invisible text, while the character printed alone is set. Dot
   leaders at 300 DPI, too far apart to join, are kept, while
