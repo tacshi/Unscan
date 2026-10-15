@@ -97,7 +97,7 @@ type app struct {
 	previews  map[preview]rendered
 	rendering bool // a preview is being rendered
 
-	comparing bool    // the original shows beside the form shown, where they differ
+	comparing bool    // the original shows beside the form shown, where they differ, as it does at first
 	split     float32 // the share of the page area the original takes; 0 for half
 
 	history     []*result // the documents read, newest first
@@ -643,7 +643,7 @@ func main() {
 	// Checks for updates once a day, and offers them in a window of native
 	// UI, as Sparkle does.
 	mygo.Use(native.Plugin)
-	a := &app{sidebar: true}
+	a := &app{sidebar: true, comparing: true}
 	var win *mygo.Window
 	var launched []string // files the app was opened with before its window
 	// Files opened with the app, as by `open -a Unscan scan.pdf`.

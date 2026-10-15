@@ -31,7 +31,7 @@ type fixture struct {
 
 func newFixture(t *testing.T, convert func(ctx context.Context, path string, p pdfocr.Progress) (*result, error)) *fixture {
 	dir := t.TempDir()
-	f := &fixture{app: &app{sidebar: true}, dir: dir, scan: filepath.Join(dir, "scan.pdf")}
+	f := &fixture{app: &app{sidebar: true, comparing: true}, dir: dir, scan: filepath.Join(dir, "scan.pdf")}
 	if err := os.WriteFile(f.scan, []byte("%PDF-1.4"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -485,9 +485,9 @@ func fileSize(t *testing.T, path string) int64 {
 	return info.Size()
 }
 
-// TestCompare shows the original beside the retyped PDF and the text, and
-// the searchable PDF, which looks just like it, alone. Both turn together,
-// and the split stays where it is dragged.
+// TestCompare shows the original beside the retyped PDF and the text from
+// the start, and the searchable PDF, which looks just like it, alone. Both
+// turn together, and the split stays where it is dragged.
 func TestCompare(t *testing.T) {
 	pages := []pdfocr.Page{{Text: "第一页", Lines: 1}, {Text: "Second page", Lines: 1}}
 	res := &result{pdf: tempFile(t, "%PDF searchable"), textPDF: tempFile(t, "%PDF text")}
@@ -497,8 +497,7 @@ func TestCompare(t *testing.T) {
 	})
 	tt := ui.NewTester(f.view, 1200, 800)
 	click(t, tt, "Choose PDF…")
-	f.toggleCompare()
-	tt.Frame()
+	// Comparing from the start, but for the searchable PDF.
 	if slices.Contains(tt.Texts(), "Original") {
 		t.Errorf("the searchable PDF shows beside the original: %q", tt.Texts())
 	}

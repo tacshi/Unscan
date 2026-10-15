@@ -157,10 +157,11 @@ and a click on the page's number, or **View › Go to Page…** (⌥⌘G), goes
 to the page whose number is typed there. **Save…** (⌘S) saves the one
 shown.
 
-**Comparing.** The button beside **Save…**, or **View › Compare with
-Original**, shows the scanned page beside the retyped page or its text,
-to check what was read; drag the line between them to resize them. The searchable PDF looks just like the scan, so it
-shows alone.
+**Comparing.** The retyped page and its text show beside the scanned
+page, to check what was read; drag the line between them to resize
+them. The button beside **Save…**, or **View › Compare with Original**,
+shows them alone, or beside it again. The searchable PDF looks just like
+the scan, so it shows alone.
 
 **History.** Every PDF read stays in the sidebar (**View › Hide
 Sidebar**, ⌥⌘S), newest first, to open again without reading it again.
