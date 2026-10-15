@@ -1721,7 +1721,8 @@ func (d *textDoc) words(p *pixels, text string, f frame, in ink, sh shape, tl te
 		w := wordInk{from: i, to: j, letters: letters(word)}
 		// The word's ink, between the gaps parting words nearest where it
 		// is set, as it may be set a little off its ink.
-		if cover, cols, rows := inkOf(in.words(tl.x+origins[i]*tl.scale, tl.x+origins[j]*tl.scale, 0.3*tl.size)); cover != nil {
+		w.s0, w.s1 = in.words(tl.x+origins[i]*tl.scale, tl.x+origins[j]*tl.scale, 0.3*tl.size)
+		if cover, cols, rows := inkOf(w.s0, w.s1); cover != nil {
 			at := func(x, y int) float64 { return cover[y*cols+x] }
 			w.ink = strokeStats(cols, rows, at, false)
 			// How it leans, by its edges but for those in a tenth of it at
@@ -1757,6 +1758,43 @@ func (d *textDoc) words(p *pixels, text string, f frame, in ink, sh shape, tl te
 			}
 		}
 		words = append(words, w)
+		i = j
+	}
+	// A run of words that spaces alone part, as a phrase of a few short
+	// words, is measured whole too, as its words alone have too few strokes
+	// to lean surely.
+	spaced := func(a, b wordInk) bool {
+		for g := a.to; g < b.from; g++ {
+			if !sh.glyphs[g].space {
+				return false
+			}
+		}
+		return a.to < b.from
+	}
+	for i := 0; i < len(words); {
+		j := i + 1
+		for j < len(words) && spaced(words[j-1], words[j]) {
+			j++
+		}
+		if j-i >= 2 {
+			letters := 0
+			for _, w := range words[i:j] {
+				letters += w.letters
+			}
+			lean := math.NaN()
+			if cover, cols, rows := inkOf(words[i].s0, words[j-1].s1); cover != nil {
+				at := func(x, y int) float64 { return cover[y*cols+x] }
+				lean = slant(cols, rows, at, cols/10, cols-cols/10)
+				if ws := d.shape(string(runes[words[i].from:words[j-1].to]), sans); ws.inked {
+					if rw, rh, rc := d.draw(ws, sizes[1]); rc != nil {
+						lean -= slant(rw, rh, rc, rw/10, rw-rw/10)
+					}
+				}
+			}
+			for k := i; k < j; k++ {
+				words[k].phrase, words[k].phraseLetters = lean, letters
+			}
+		}
 		i = j
 	}
 	return words
@@ -2562,7 +2600,10 @@ func glyphFaces(m measuredLine) []int {
 // "A:" or "1.", and a word that leans less than 0.04, as "Report:" before
 // an example, or a reply quoted in one, which are upright; a line leaning
 // less, upright, has a word of four letters or more italic where it leans
-// by 0.15 or more, as a short word's few strokes may lean by chance. The
+// by 0.15 or more, as a short word's few strokes may lean by chance, and
+// the words of a run that spaces alone part, of four letters or more,
+// where the run leans so, measured whole, as "System V IPC" or "spin lock"
+// italic among Chinese, whose words lean by 0.03 or less alone. The
 // few letters of punctuation, digits or a one-letter word lean as their
 // glyphs do, as / and 7 do: they are set as the words beside them. An
 // italic word is set slanted on to the next, italic too, where spaces
@@ -2589,7 +2630,7 @@ func italics(words []wordInk, n int, space func(g int) bool) ([]bool, float64) {
 		case line:
 			italic[k] = w.slant >= 0.04
 		default:
-			italic[k] = w.slant >= 0.15 && w.letters >= 4
+			italic[k] = w.slant >= 0.15 && w.letters >= 4 || w.phraseLetters >= 4 && w.phrase >= 0.15
 		}
 	}
 	for k := 1; k < len(words); k++ { // the short words but a label

@@ -44,11 +44,15 @@ adds none.
    each step, but for the spaces between Latin words, which it often
    finds less likely than the letters it reads there, and drops, as in
    "Heloves me" or "CanIgo": a space is read between two Latin letters
-   where it finds one 0.3 likely or more, or 0.1 where the line's pixels
-   part between them by a run of blank columns an eighth of the line high,
-   as a word's space does (6 to 16 pixels of 48 in a grammar book's
-   examples) and its letters' gaps do not (4 at most). Within words it
-   finds a space 0.001 likely or less.
+   where it finds one 0.1 likely or more, and the line's pixels part
+   between them as words do, by a run of blank columns an eighth of the
+   line high (6 to 29 pixels of 48 for the spaces it drops in a grammar
+   book and a book on Linux) and twice as wide as the other gaps of the
+   run of letters and digits about them, by their median: code in a
+   monospaced face, its narrow letters apart in their cells, as "f g" or
+   "PMD_SHI FT", parts by 0.8 to 2 times as widely, and a run that reads as
+   code, with an underscore or as hexadecimal, is never parted. Within
+   most words it finds a space 0.001 likely or less.
 4. **Reading order.** Each line goes in the block that covers most of
    it, or the smallest of those it is all but inside, as a column inside
    a block the model drew round two; the blocks read in the model's
@@ -295,7 +299,9 @@ For each scanned page, at the resolution it was read at:
    follow each other down a page, as high as each other, in one script):
    a paragraph is set in the kind most of its lines lean to, and regular
    if most of them are, but for a CJK line leaning surely to the other
-   kind, as a heading does, or a line surely heavier, or a first line a
+   kind, as a heading does, or a paragraph's first line, three quarters as
+   wide as the rest or narrower, leaning to it by 0.08 or more, as a
+   heading run into the paragraph below it does, or a line surely heavier, or a first line a
    fifth heavier, as a heading run into its paragraph is. A line too short to
    judge, as a paragraph's last of one character, takes its paragraph's,
    and a paragraph of such lines, as a page number alone, the kind most
@@ -394,7 +400,10 @@ For each scanned page, at the resolution it was read at:
    as the document's italic lines lean, by their median, but for its
    label, as "A:", and a word that leans little, as a reply quoted in an
    instruction; a long word in an upright line that leans that far is set
-   slanted alone. An italic word's slant carries on over the spaces to an
+   slanted alone, and so are the words of a run that spaces alone part,
+   of four letters or more, where the run leans so measured whole, as
+   "System V IPC" italic among Chinese, whose short words lean by 0.03 or
+   less alone, as a few strokes may. An italic word's slant carries on over the spaces to an
    italic word after it, but not over CJK characters between them, as a
    Chinese title between "Chapter 14" and a page number. A word's lean is its edges', by their median, less what
    its letters lean set upright in the text font, as a y's long stroke

@@ -248,6 +248,13 @@ type wordInk struct {
 	// that face would be set to span it, for its line's size 1 (see
 	// monoMatch), 0 where unmeasured.
 	mono, monoSize float64
+	// phrase is how far the run of words that spaces alone part it from
+	// leans, as slant does, measured over their ink together, and
+	// phraseLetters how many letters or digits they have, 0 for a word
+	// alone; s0 and s1 are where its ink lies along the line.
+	phrase        float64
+	phraseLetters int
+	s0, s1        float64
 }
 
 // refs sets a line's text in each face, at the size its ink gives it,
@@ -430,7 +437,7 @@ func (d *textDoc) styles(texts []string, frames []frame, inks []ink, lines []lin
 		}
 		top, bottom := f.point(in.s0, in.t1), f.point(in.s0, in.t0)
 		geoms[i] = lineGeom{ok: true, judged: l.ok, top: top.Y, bottom: bottom.Y, height: in.t1 - in.t0,
-			cjk: geoms[i].cjk, han: strings.ContainsFunc(texts[i], isHan), letters: letters(texts[i])}
+			width: in.s1 - in.s0, cjk: geoms[i].cjk, han: strings.ContainsFunc(texts[i], isHan), letters: letters(texts[i])}
 		if pages != nil {
 			geoms[i].page = pages[i]
 		}
@@ -876,8 +883,9 @@ type lineGeom struct {
 	page        int
 	top, bottom float64 // in the page's pixels, y down
 	height      float64
-	cjk         bool // mostly CJK characters
-	han         bool // some Chinese characters
+	width       float64 // its ink's, along it
+	cjk         bool    // mostly CJK characters
+	han         bool    // some Chinese characters
 	letters     int
 	lean        float64
 	brush       float64
@@ -887,8 +895,16 @@ type lineGeom struct {
 }
 
 // sure is how far a CJK line's strokes must lean to a kind for the line to
-// be set in it against its paragraph: as far as a heading's do.
-const sure = 0.15
+// be set in it against its paragraph: as far as a heading's do. A heading
+// run into the paragraph below it, as its first line, three quarters as
+// wide as the paragraph's other lines or narrower, must lean headingSure:
+// a book's sans-serif headings above serif text lean to sans-serif by
+// 0.084 to 0.14 at least, and the body's first lines, a measure wide, by
+// 0.087 at most.
+const (
+	sure        = 0.15
+	headingSure = 0.08
+)
 
 // tie is how far a paragraph of a line or two of Latin must lean to
 // sans-serif for it to be set so where most of the document's Latin lines
@@ -1136,9 +1152,20 @@ each:
 		case lean < 0:
 			kind = sans
 		}
-		for _, i := range para {
+		// A heading run into the paragraph, its first line, much shorter
+		// than the lines after it, leans the other way less surely.
+		var widths []float64
+		for _, i := range para[1:] {
+			widths = append(widths, lines[i].width)
+		}
+		heading := len(widths) > 0 && lines[para[0]].width <= 0.75*median(widths)
+		for k, i := range para {
 			out[i] = kind
-			if l := lines[i]; l.judged && l.cjk && (kind == serif && l.lean <= -sure || kind == sans && l.lean >= sure) {
+			least := sure
+			if k == 0 && heading {
+				least = headingSure
+			}
+			if l := lines[i]; l.judged && l.cjk && (kind == serif && l.lean <= -least || kind == sans && l.lean >= least) {
 				out[i] = kind ^ sans // the other kind
 			}
 		}

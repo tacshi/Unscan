@@ -651,6 +651,23 @@ func TestKinds(t *testing.T) {
 	if got, _ := kinds(lines, true, false); !slices.Equal(got, want) {
 		t.Errorf("kinds %v, want %v", got, want)
 	}
+
+	// A short heading run into the serif paragraph below it, leaning a
+	// little to sans-serif, keeps its kind; a first line a measure wide,
+	// leaning as far, as body text may, takes the paragraph's.
+	wide := func(top, width, lean float64) lineGeom {
+		l := line(0, top, true, lean)
+		l.width = width
+		return l
+	}
+	lines = []lineGeom{
+		wide(200, 600, -0.12), wide(254, 1500, 0.20), wide(308, 1500, 0.18), wide(362, 1480, 0.19),
+		wide(1000, 1450, -0.09), wide(1054, 1500, 0.20), wide(1108, 1500, 0.18),
+	}
+	want = []int{sans, serif, serif, serif, serif, serif, serif}
+	if got, _ := kinds(lines, true, false); !slices.Equal(got, want) {
+		t.Errorf("headings: kinds %v, want %v", got, want)
+	}
 }
 
 // TestKaiExamples redraws a page of Song body text with example lines
@@ -1818,6 +1835,10 @@ func TestItalics(t *testing.T) {
 	word := func(from, to, letters int, slant float64) wordInk {
 		return wordInk{from: from, to: to, letters: letters, slant: slant}
 	}
+	phrase := func(w wordInk, lean float64, letters int) wordInk {
+		w.phrase, w.phraseLetters = lean, letters
+		return w
+	}
 	for _, c := range []struct {
 		name  string
 		words []wordInk
@@ -1839,6 +1860,14 @@ func TestItalics(t *testing.T) {
 		// is not slanted with them.
 		{"a Chinese title between italic words", []wordInk{word(0, 7, 7, 0.2), word(8, 10, 2, 0.2), word(17, 20, 3, 0.1)}, 20,
 			"++++++++++       +++", func(g int) bool { return g == 7 || g == 10 }},
+		// "……称为System V IPC。": the short words lean by too little alone,
+		// and their run, measured whole, leans as italic does.
+		{"a short italic phrase among Chinese", []wordInk{
+			phrase(word(10, 16, 6, 0.03), 0.2, 10), phrase(word(17, 18, 1, -0.28), 0.2, 10), phrase(word(19, 22, 3, 0.11), 0.2, 10)}, 23,
+			"          ++++++++++++ ", func(g int) bool { return g == 16 || g == 18 }},
+		{"a short upright phrase among Chinese", []wordInk{
+			phrase(word(10, 16, 6, 0.03), 0.05, 10), phrase(word(17, 18, 1, -0.28), 0.05, 10), phrase(word(19, 22, 3, 0.11), 0.05, 10)}, 23,
+			"", func(g int) bool { return g == 16 || g == 18 }},
 	} {
 		slanted, lean := italics(c.words, c.n, c.space)
 		var got string
