@@ -860,6 +860,13 @@ func TestUpdates(t *testing.T) {
 	f.openSettings()
 	tt.Frame()
 	wantTexts(t, tt, "Settings", "Updates", "Last checked: Mar 4, 2025")
+	// Below the fonts, which a window this short scrolls.
+	r, ok := tt.Find("Fonts")
+	if !ok {
+		t.Fatal("no fonts in Settings")
+	}
+	tt.Scroll(r.X+r.W/2, r.Y+r.H/2, 0, 1000)
+	tt.Frame()
 
 	click(t, tt, "Download and install updates automatically")
 	click(t, tt, "Check for updates automatically")

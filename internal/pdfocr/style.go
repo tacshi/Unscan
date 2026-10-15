@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"image"
 	"math"
+	"regexp"
 	"slices"
 	"strings"
 	"unicode"
@@ -171,10 +172,10 @@ func (d *textDoc) draw(sh shape, size float64) (w, h int, cover func(x, y int) f
 	var buf sfnt.Buffer
 	pen := pad - float64(sh.left)*k
 	base := pad + float64(sh.yMax)*k
-	ppem := fixed.Int26_6(math.Round(size * 64))
 	for _, g := range sh.glyphs {
 		if g.inked {
 			fc := d.font(g.face)
+			ppem := fixed.Int26_6(math.Round(size * d.faceSize(g.face) * 64))
 			segs, err := fc.outline.LoadGlyph(&buf, sfnt.GlyphIndex(fc.ttf.Glyph(g.r)), ppem, nil)
 			if err == nil {
 				at := func(p fixed.Point26_6) (float32, float32) {
@@ -232,15 +233,21 @@ type lineRefs struct {
 // (not included), between spaces or CJK characters, with letters letters
 // or digits. Ink is its ink's strokes, refs its strokes set in the serif
 // and sans-serif regular faces at the size the line's ink gives each, and
-// slant how far its upright strokes lean to the right, the tangent of
+// in the monospaced one at monoSize, and slant how far its upright
+// strokes lean to the right, the tangent of
 // their angle (see slant), beyond how far its letters lean set upright,
 // as a y's long stroke and a W's do. Face is the face styles sets it in.
 type wordInk struct {
 	from, to, letters int
 	ink               strokes
-	refs              [2]strokes
+	refs              [3]strokes
 	slant             float64
 	face              int
+	// mono is how much better its ink matches it set in the monospaced
+	// face than in the serif or sans-serif one, and monoSize how large
+	// that face would be set to span it, for its line's size 1 (see
+	// monoMatch), 0 where unmeasured.
+	mono, monoSize float64
 }
 
 // refs sets a line's text in each face, at the size its ink gives it,
@@ -572,8 +579,163 @@ func (d *textDoc) styles(texts []string, frames []frame, inks []ink, lines []lin
 			}
 		}
 	}
+	d.monoSize = 0
+	if d.fonts[mono] != d.fonts[serif] {
+		d.monoWords(texts, lines, out, paras, bases, gain)
+	}
 	return out
 }
+
+// monoBetter is how much better a word's ink must match it set in the
+// monospaced face than in the serif or sans-serif one, by monoMatch, for
+// it to be told printed so by its ink alone: on a book on Linux, whose
+// code is set in a monospaced face, words of three glyphs or more that
+// match so measure up to 0.6, and English words in a grammar book and a
+// picture dictionary, none of it monospaced, 0.29 at most. MinMonoWords
+// is how many a document must have for any of its words to be set so.
+const (
+	monoBetter   = 0.35
+	minMonoWords = 3
+)
+
+// monoWords sets the words of lines printed in a monospaced face, as code
+// is, in the monospaced face, in a document that has minMonoWords words of
+// three glyphs or more, a letter among them, whose ink matches them set so
+// better than in the text faces, by monoBetter, or more. A word is so
+// where it is such a word, or reads as one does, or reads as code, with an
+// underscore, a pair of parentheses after it, as the recognizer may read
+// in the CJK punctuation after it too, or as a number in hexadecimal,
+// unless its line is set bold, where a book may set code in the line's
+// face, or its ink matches it set in the text faces surely better, by
+// monoBetter; and
+// every word of a paragraph of Latin, as code set apart, where most of
+// those it tells are, and a word too short to tell, as "cr3" or "=", where
+// the words beside it in its run of Latin are, each side or the side it
+// has one. A word is bold where it is surely heavier than the face's
+// regular, as words are weighed in their line's face (see styles), against
+// bases, its line's, its strokes less the scan's gain. The face is set as
+// large as the words told so by their ink in lines of Chinese are, by
+// their median, or where fewer than three are, all the words set so in
+// them, as their ink spans them: the Chinese gives a line its size, and
+// in lines of Latin alone, the line's size is the monospaced face's.
+func (d *textDoc) monoWords(texts []string, lines []lineRefs, out []int, paras [][]int, bases []float64, gain float64) {
+	// A word of three glyphs or more, a letter among them, as a number's
+	// digits are as far apart in a text face.
+	told := func(w wordInk) bool { return w.to-w.from >= 3 && w.letters >= 1 && w.monoSize > 0 }
+	runes := make([][]rune, len(texts))
+	for i, t := range texts {
+		runes[i] = []rune(strings.TrimSpace(t))
+	}
+	word := func(i int, w wordInk) string { return strings.Trim(string(runes[i][w.from:w.to]), ",;:.") }
+	monos := make([][]bool, len(lines))
+	sure := map[string]bool{}
+	for i, l := range lines {
+		monos[i] = make([]bool, len(l.words))
+		for k, w := range l.words {
+			if told(w) && w.mono >= monoBetter {
+				monos[i][k] = true
+				sure[word(i, w)] = true
+			}
+		}
+	}
+	n := 0
+	for _, m := range monos {
+		for _, yes := range m {
+			if yes {
+				n++
+			}
+		}
+	}
+	if n < minMonoWords {
+		return
+	}
+	for i, l := range lines {
+		for k, w := range l.words {
+			text := word(i, w)
+			switch {
+			case monos[i][k] || w.to-w.from < 2:
+			case sure[text]:
+				monos[i][k] = true
+			case (codeLike.MatchString(text) || strings.HasPrefix(string(runes[i][w.to:]), "（）")) &&
+				out[i]%2 == 0 && (w.monoSize == 0 || w.mono > -monoBetter):
+				monos[i][k] = true
+			}
+		}
+	}
+	cjk := func(i int) bool { return slices.ContainsFunc(runes[i], cjkRune) }
+	for _, para := range paras {
+		if slices.ContainsFunc(para, cjk) {
+			continue
+		}
+		yes, no := 0, 0
+		for _, i := range para {
+			for k, w := range lines[i].words {
+				switch {
+				case monos[i][k]:
+					yes++
+				case told(w):
+					no++
+				}
+			}
+		}
+		if yes >= 2 && yes > no {
+			for _, i := range para {
+				for k := range monos[i] {
+					monos[i][k] = true
+				}
+			}
+		}
+	}
+	for i, l := range lines {
+		// Whether a CJK character parts words a and b, which are in one
+		// run of Latin else.
+		apart := func(a, b wordInk) bool {
+			return a.to > b.from || slices.ContainsFunc(runes[i][a.to:b.from], cjkRune)
+		}
+		for k, w := range l.words {
+			if told(w) || monos[i][k] {
+				continue
+			}
+			prev := k > 0 && !apart(l.words[k-1], w)
+			next := k+1 < len(l.words) && !apart(w, l.words[k+1])
+			monos[i][k] = (prev || next) && (!prev || monos[i][k-1]) && (!next || monos[i][k+1])
+		}
+	}
+	var sizes, all []float64
+	for i, l := range lines {
+		for k := range l.words {
+			if !monos[i][k] {
+				continue
+			}
+			w := &l.words[k]
+			w.face = mono
+			if ref := w.refs[2]; w.letters >= 2 && ref.across > 0 && ref.down > 0 {
+				across, down := max(w.ink.across-gain, 1.0/3), max(w.ink.down-gain, 1.0/3)
+				if h := math.Sqrt(across/ref.across*down/ref.down) / bases[i]; h >= 1.2 && across/ref.across/bases[i] >= 1.2 {
+					w.face = monoBold
+				}
+			}
+			if w.monoSize > 0 && cjk(i) {
+				all = append(all, w.monoSize)
+				if told(*w) && w.mono >= monoBetter {
+					sizes = append(sizes, w.monoSize)
+				}
+			}
+		}
+	}
+	if len(sizes) < 3 {
+		sizes = all
+	}
+	if len(sizes) > 0 {
+		slices.Sort(sizes)
+		d.monoSize = sizes[len(sizes)/2]
+	}
+}
+
+// codeLike matches a word that reads as code: with an underscore, a pair
+// of parentheses after it, or a number in hexadecimal, as 0xc0000000, or
+// as the recognizer reads it, Oxc0000000.
+var codeLike = regexp.MustCompile(`_|[A-Za-z0-9]\(\)$|^[0O][xX][0-9A-Fa-f]+$`)
 
 // pageHeavy is how many times as heavy as the lines of its kind in the
 // document the lines of a kind on a page must be, by their median, for the

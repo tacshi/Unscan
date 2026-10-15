@@ -127,6 +127,8 @@ var userFonts = [...]struct {
 	{"sans-bold", "bold sans-serif", "Noto Sans SC Bold", true},
 	{"kai", "Kai (楷体)", "LXGW WenKai", false},
 	{"fangsong", "FangSong (仿宋)", "Zhuque Fangsong", false},
+	{"mono", "monospaced", "Source Code Pro", false},
+	{"mono-bold", "bold monospaced", "Source Code Pro Bold", true},
 }
 
 // readUserFonts reads the font files given by flag, each a path, or a
@@ -156,7 +158,8 @@ func readUserFonts(files [len(userFonts)]string) (pdfocr.TextFonts, error) {
 		}
 		fonts[i] = f
 	}
-	return pdfocr.TextFonts{Serif: fonts[0], SerifBold: fonts[1], Sans: fonts[2], SansBold: fonts[3], Kai: fonts[4], FangSong: fonts[5]}, nil
+	return pdfocr.TextFonts{Serif: fonts[0], SerifBold: fonts[1], Sans: fonts[2], SansBold: fonts[3], Kai: fonts[4], FangSong: fonts[5],
+		Mono: fonts[6], MonoBold: fonts[7]}, nil
 }
 
 // convert converts the PDF at in, writing the searchable PDF to out and,

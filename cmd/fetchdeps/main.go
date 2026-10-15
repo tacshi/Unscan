@@ -63,10 +63,12 @@ var (
 	// Noto Serif SC and Noto Sans SC, Regular and Bold, TrueType builds from
 	// Google Fonts, with Noto Serif TC and Noto Sans TC, in traditional
 	// Chinese's forms, LXGW WenKai Regular, a Kai face, from its release
-	// v1.522, and Zhuque Fangsong Regular (朱雀仿宋), a FangSong face, from
-	// its release v0.212, which zips it (all SIL Open Font License 1.1); and
-	// their licenses, which go with them, from the google/fonts repository,
-	// LXGW WenKai's and Zhuque Fangsong's.
+	// v1.522, Zhuque Fangsong Regular (朱雀仿宋), a FangSong face, from its
+	// release v0.212, which zips it, and Source Code Pro, Regular and Bold,
+	// a monospaced face, from its release 2.042, which zips them (all SIL
+	// Open Font License 1.1); and their licenses, which go with them, from
+	// the google/fonts repository, LXGW WenKai's, Zhuque Fangsong's and
+	// Source Code Pro's.
 	textFonts = []struct {
 		r    remote
 		name string
@@ -107,7 +109,15 @@ var (
 			"ZhuqueFangsong-Regular.ttf", "558c62730844fe54ba220146ed62f859d4e2880188d92d985f8921c6e3743bc4"},
 		{remote{"https://raw.githubusercontent.com/TrionesType/zhuque/803217b9663d1c6e1402e91acc94e4f572713d73/LICENSE.txt",
 			"66cc01ad4df62fca6936431a426104cb32a52ce8da49de9a7d643e02d7659043"}, "ZhuqueFangsong-OFL.txt", "", ""},
+		{sourceCodePro, "SourceCodePro-Regular.ttf",
+			"SourceCodePro-Regular.ttf", "74bd80d3e42a08517cd7e1108ba3d86f2da29ac0f3065be95e0357956ab9db37"},
+		{sourceCodePro, "SourceCodePro-Bold.ttf",
+			"SourceCodePro-Bold.ttf", "b2095e0d657e6d28dc32444a9dacabab0c9241d0bf39d96371756cc9bdbc3a5f"},
+		{remote{"https://raw.githubusercontent.com/adobe-fonts/source-code-pro/d3f1a5962cde503f9409c21e58527611d4a19ef1/LICENSE.md",
+			"7c940e28a5388e9bba866cf0e408edda45fe0899ba98665b8f6ab31dc5e4b8ff"}, "SourceCodePro-OFL.txt", "", ""},
 	}
+	sourceCodePro = remote{"https://github.com/adobe-fonts/source-code-pro/releases/download/2.042R-u/1.062R-i/1.026R-vf/TTF-source-code-pro-2.042R-u_1.062R-i.zip",
+		"0c85bac90d15c040b82939aa92bc8404420fccc02e37bbcb9c93a7f21abb52c6"}
 )
 
 // ONNX Runtime 1.27.1, the version onnxruntime_purego is built against.

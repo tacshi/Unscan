@@ -878,11 +878,11 @@ func TestKaiLatin(t *testing.T) {
 	s := &cidSet{cids: map[code]uint16{}}
 	p := &textPage{lines: []textLine{{face: kai, cids: d.number(s, sh, origins, size), size: size, scale: 1, dx: 1}}}
 	var fonts []string
-	for _, f := range regexp.MustCompile(`/F(\d+) 40 Tf`).FindAllStringSubmatch(string(p.content(s)), -1) {
+	for _, f := range regexp.MustCompile(`/F(\d+) 40 Tf`).FindAllStringSubmatch(string(p.content(s, d.faceSize)), -1) {
 		fonts = append(fonts, f[1])
 	}
 	if want := []string{"1", "5", "1"}; !slices.Equal(fonts, want) {
-		t.Errorf("fonts %v, want %v: %s", fonts, want, p.content(s))
+		t.Errorf("fonts %v, want %v: %s", fonts, want, p.content(s, d.faceSize))
 	}
 }
 
@@ -1555,7 +1555,7 @@ func TestRedrawColors(t *testing.T) {
 			t.Errorf("%q set in %v", r, c)
 		}
 	}
-	if content := string(page.content(d.sets[page.set])); strings.Count(content, " rg\n") != 2 {
+	if content := string(page.content(d.sets[page.set], d.faceSize)); strings.Count(content, " rg\n") != 2 {
 		t.Errorf("the line's colors set %d times, want twice", strings.Count(content, " rg\n"))
 	}
 }
@@ -2006,7 +2006,7 @@ func TestWordFaces(t *testing.T) {
 	if text, faces, _ := set(page.lines[7]); strings.Contains(faces, "B") {
 		t.Errorf("%q set in\n%q, want regular", text, faces)
 	}
-	if content := string(page.content(d.sets[page.set])); strings.Count(content, " Tm\n") != len(lines)+1 {
+	if content := string(page.content(d.sets[page.set], d.faceSize)); strings.Count(content, " Tm\n") != len(lines)+1 {
 		t.Errorf("%d text matrices, want one a line and one for the slanted words", strings.Count(content, " Tm\n"))
 	}
 }
@@ -2362,40 +2362,127 @@ func TestLevel(t *testing.T) {
 
 // TestDrawn redraws a logo drawn of a character twice over, which the
 // recognizer reads as the character: it stays as printed, under
-// invisible text, while the character printed alone is set in type.
-func TestDrawn(t *testing.T) {
-	d, fonts := testTextDoc(t)
-	sf, err := opentype.Parse(fonts.SansBold.Data)
-	if err != nil {
-		t.Fatal(err)
+// TestMonoWords redraws a page of Chinese naming code in Courier New, as a
+// book on Linux prints it, beside English words in Times New Roman, and a
+// few lines of code: the code is set in the monospaced face, its letters
+// as far apart as printed, and the English is not.
+func TestMonoWords(t *testing.T) {
+	d, _ := testTextDoc(t)
+	if d.fonts[mono] == d.fonts[serif] {
+		t.Skip("no monospaced face: run go run ./cmd/fetchdeps")
 	}
-	face, err := opentype.NewFace(sf, &opentype.FaceOptions{Size: 100, DPI: 72, Hinting: font.HintingNone})
-	if err != nil {
-		t.Fatal(err)
+	coll := func(path string, index int, size float64) font.Face {
+		c, err := opentype.ParseCollection(systemFont(t, path))
+		if err != nil {
+			t.Fatal(err)
+		}
+		sf, err := c.Font(index)
+		if err != nil {
+			t.Fatal(err)
+		}
+		face, err := opentype.NewFace(sf, &opentype.FaceOptions{Size: size, DPI: 72, Hinting: font.HintingNone})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return face
 	}
-	defer closeOrFail(t, face)
-	img := image.NewRGBA(image.Rect(0, 0, 800, 500))
+	song := coll("/System/Library/Fonts/Supplemental/Songti.ttc", 6, 40)
+	courier := coll("/System/Library/Fonts/Supplemental/Courier New.ttf", 0, 36)
+	times := coll("/System/Library/Fonts/Supplemental/Times New Roman.ttf", 0, 40)
+	defer closeOrFail(t, song)
+	defer closeOrFail(t, courier)
+	defer closeOrFail(t, times)
+	// Each line's runs: Chinese in Song, code in Courier, English in Times.
+	type run struct {
+		text string
+		face font.Face
+	}
+	page := [][]run{
+		{{"每个处理器的段描述符都存放在", song}, {"cpu_gdt_table", courier}, {"数组中。", song}},
+		{{"内核调用", song}, {"zap_low_mappings()", courier}, {"函数清除对应的页表项。", song}},
+		{{"宏", song}, {"PAGE_OFFSET", courier}, {"产生的值是进程的偏移量。", song}},
+		{{"页全局目录由", song}, {"swapper_pg_dir", courier}, {"变量指定，", song}},
+		{{"进程描述符是", song}, {"task_struct", courier}, {"类型的结构。", song}},
+		{{"函数", song}, {"fix_to_virt()", courier}, {"计算常量线性地址。", song}},
+		{{"内存描述符的类型是", song}, {"mm_struct", courier}, {"结构。", song}},
+		{{"本书讲述", song}, {"Linux", times}, {"内核的设计与实现。", song}},
+		{{"它管理计算机的", song}, {"memory", times}, {"和处理器。", song}},
+		{{"我们以", song}, {"Intel", times}, {"处理器为例讲述分页。", song}},
+		{{"pgd = swapper_pg_dir + pgd_index(PAGE_OFFSET);", courier}},
+		{{"while (phys_addr < max_low_pfn) {", courier}},
+		{{"    pmd = one_md_table_init(pgd);", courier}},
+		{{"    set_pmd(pmd, __pmd(phys_addr | 0x1e3));", courier}},
+		{{"}", courier}},
+	}
+	img := image.NewRGBA(image.Rect(0, 0, 1200, 1200))
 	draw.Draw(img, img.Rect, image.White, image.Point{}, draw.Src)
-	// The logo: the character twice, run together.
-	dr := font.Drawer{Dst: img, Src: image.Black, Face: face, Dot: fixed.P(100, 180)}
-	dr.DrawString("当")
-	dr.Dot.X -= fixed.I(30)
-	dr.DrawString("当")
-	logo := dr.Dot.X.Ceil()
-	dr = font.Drawer{Dst: img, Src: image.Black, Face: face, Dot: fixed.P(100, 400)}
-	dr.DrawString("当")
-	alone := dr.Dot.X.Ceil()
-	box := func(x0, x1, base int) ocr.Quad {
-		return ocr.Quad{{X: float64(x0 - 8), Y: float64(base - 100)}, {X: float64(x1 + 8), Y: float64(base - 100)},
-			{X: float64(x1 + 8), Y: float64(base + 20)}, {X: float64(x0 - 8), Y: float64(base + 20)}}
+	var lines []ocr.Line
+	var code []bool // whether each line's Latin is code
+	for k, runs := range page {
+		base := 60 + 70*k
+		dr := font.Drawer{Dst: img, Src: image.Black, Dot: fixed.P(60, base)}
+		var text string
+		for _, r := range runs {
+			dr.Face = r.face
+			dr.DrawString(r.text)
+			text += r.text
+		}
+		// The recognizer's box from the first ink to the last, as it reads
+		// none of a line's leading spaces.
+		x0 := 60 + font.MeasureString(courier, text[:len(text)-len(strings.TrimLeft(text, " "))]).Ceil()
+		x1 := dr.Dot.X.Ceil()
+		lines = append(lines, ocr.Line{Score: 1, Text: strings.TrimSpace(text), Box: ocr.Quad{{X: float64(x0 - 6), Y: float64(base - 44)},
+			{X: float64(x1 + 6), Y: float64(base - 44)}, {X: float64(x1 + 6), Y: float64(base + 14)}, {X: float64(x0 - 6), Y: float64(base + 14)}}})
+		code = append(code, runs[min(1, len(runs)-1)].face == courier)
 	}
-	page := d.redraw(img, []ocr.Line{{Score: 1, Text: "当", Box: box(100, logo, 180)}, {Score: 1, Text: "当", Box: box(100, alone, 400)}}, 800, 500)
+	// Blurred as a scan's are.
+	blurred := image.NewRGBA(img.Rect)
+	for y := range img.Rect.Dy() {
+		for x := range img.Rect.Dx() {
+			sum, n := 0, 0
+			for dy := -1; dy <= 1; dy++ {
+				for dx := -1; dx <= 1; dx++ {
+					if p := (image.Point{X: x + dx, Y: y + dy}); p.In(img.Rect) {
+						sum += int(img.RGBAAt(p.X, p.Y).R)
+						n++
+					}
+				}
+			}
+			v := uint8(sum / n)
+			blurred.SetRGBA(x, y, color.RGBA{v, v, v, 255})
+		}
+	}
+	p := d.redraw(blurred, lines, 1200, 1200)
 	d.setLines()
-	if len(page.lines) != 2 || !page.lines[0].hidden || page.lines[1].hidden {
-		t.Fatalf("lines %+v: want the logo kept as printed, and the character set", page.lines)
+	if len(p.lines) != len(page) {
+		t.Fatalf("%d lines set, want %d", len(p.lines), len(page))
 	}
-	if !keeps(page, 150, 500-140) {
-		t.Error("the logo not kept as printed")
+	for k, l := range p.lines {
+		if l.hidden {
+			continue // kept as printed, as the closing brace, too short to judge
+		}
+		var latin, monoed string
+		for _, c := range l.cids {
+			cd := d.sets[p.set].codes[c-1]
+			if cd.r >= 0x2E80 { // CJK characters and punctuation
+				continue
+			}
+			latin += string(cd.r)
+			if cd.face == mono || cd.face == monoBold {
+				monoed += string(cd.r)
+			}
+		}
+		switch {
+		case code[k] && monoed != latin:
+			t.Errorf("line %d: %q of %q set monospaced, want all", k, monoed, latin)
+		case !code[k] && monoed != "":
+			t.Errorf("line %d: %q set monospaced, want none", k, monoed)
+		}
+	}
+	// As far apart as printed: Courier New at 36 pixels an em sets its
+	// letters 21.6 pixels apart, and Source Code Pro advances 0.6 of an em.
+	if pitch := d.monoSize * p.lines[0].size * 0.6; math.Abs(pitch-21.6) > 0.08*21.6 {
+		t.Errorf("monospaced letters %.1f pixels apart, want 21.6", pitch)
 	}
 }
 

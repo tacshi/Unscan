@@ -176,3 +176,87 @@ func correlation(a, b []float64) float64 {
 	}
 	return ab / math.Sqrt(aa*bb)
 }
+
+// monoMatch measures how much better a word's ink matches it set in the
+// monospaced face than in the serif or sans-serif one, by correlation, as
+// typeMatch measures a line's: each face's glyphs' outlines stretched over
+// the ink, thickened or thinned to cover about as much, and both blurred
+// by a sixteenth of their height. Stretched over the same ink, the faces'
+// type differs most in where each letter lies, a monospaced face's evenly
+// apart, each in a cell as wide, its i and l as wide as its m. Where the
+// word's ink lies the recognizer does not say, and a monospaced face's
+// letters part as widely as its words do, so wins are where it may lie,
+// each giving each of its pixels' ink, top first, and each face is matched
+// where it matches best. It returns that, from -2 to 2, and how large the
+// monospaced face would be set to span its ink there, for a line set at
+// size, as a fraction of it; 0, 0 where the word cannot be measured, as
+// one of few pixels.
+func (d *textDoc) monoMatch(text string, size float64, wins []wordWindow) (better, scale float64) {
+	type drawn struct {
+		tw, th int
+		at     func(x, y int) float64
+		gw, gh float64
+	}
+	var types [3]drawn
+	for k, fi := range []int{serif, sans, mono} {
+		sh := d.shape(text, fi)
+		if !sh.inked || sh.right <= sh.left || sh.yMax <= sh.yMin {
+			return 0, 0
+		}
+		tw, th, at := d.draw(sh, size)
+		if at == nil {
+			return 0, 0
+		}
+		em := float64(d.fonts[fi].ttf.UnitsPerEm)
+		types[k] = drawn{tw, th, at, float64(sh.right-sh.left) / em * size, float64(sh.yMax-sh.yMin) / em * size}
+	}
+	best := [3]float64{-1, -1, -1}
+	for _, win := range wins {
+		c, cw, ch := win.cover, win.w, win.h
+		x0, x1, y0, y1 := cw, -1, ch, -1
+		area := 0.0
+		for y := range ch {
+			for x := range cw {
+				if v := c[y*cw+x]; v > 0 {
+					x0, x1, y0, y1 = min(x0, x), max(x1, x), min(y0, y), max(y1, y)
+					area += v
+				}
+			}
+		}
+		if x1-x0 < 4 || y1-y0 < 3 {
+			continue
+		}
+		r := max(1, int(math.Round(float64(ch)/16)))
+		blurred := boxBlur(c, cw, ch, r)
+		set := make([]float64, cw*ch)
+		for k, t := range types {
+			for y := range ch {
+				for x := range cw {
+					// Where the pixel's middle lies on the type, drawn top
+					// first with two pixels round it, between its pixels'
+					// middles.
+					tx := 1.5 + (float64(x-x0)+0.5)/float64(x1+1-x0)*t.gw
+					ty := 1.5 + (float64(y-y0)+0.5)/float64(y1+1-y0)*t.gh
+					set[y*cw+x] = bilinear(t.tw, t.th, t.at, tx, ty)
+				}
+			}
+			if corr := correlation(blurred, boxBlur(weighted(set, area, cw, ch), cw, ch, r)); corr > best[k] {
+				best[k] = corr
+				if k == 2 {
+					scale = float64(x1+1-x0) / t.gw * d.faceSize(mono)
+				}
+			}
+		}
+	}
+	if best[2] < -0.5 {
+		return 0, 0
+	}
+	return best[2] - max(best[0], best[1]), scale
+}
+
+// wordWindow is where a word's ink may lie: cover gives each of its w×h
+// pixels' ink, top first.
+type wordWindow struct {
+	cover []float64
+	w, h  int
+}

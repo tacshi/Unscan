@@ -227,7 +227,19 @@ For each scanned page, at the resolution it was read at:
    strokes, as the line's, and how far they lean, the mean lean of its
    edges that run near upright, which an upright face's round and
    slanting strokes leave about upright, its ink sheared back upright by
-   it and read again until little lean is left.
+   it and read again until little lean is left. And how much better its
+   ink matches it set in the monospaced face than in the serif or
+   sans-serif one: each face's type stretched over the ink, thickened or
+   thinned to cover as much, and both blurred by a sixteenth of the ink's
+   height, by their correlation, each face where it matches best, the
+   word's ink where the line set in the text faces places it, or where
+   the line set with its Latin in the monospaced face does, between the
+   ink's gaps nearest each. Stretched over the same ink, the faces differ
+   most in where each letter lies, a monospaced face's evenly apart, and
+   code printed in such a face is wider or narrower than the text faces
+   set it, word by word, so that set in them the line carries its words
+   off their ink. Set so, the monospaced face's letters span the word's
+   ink at some fraction of the line's size, which is measured too.
 3. Once every page is measured, each line's face is judged from its
    strokes, against each face's glyphs drawn at the line's size.
    Printing and scanning thicken every stroke by about as much, which
@@ -283,7 +295,21 @@ For each scanned page, at the resolution it was read at:
    as of "not" or "How" set regular, by half and more. A line's label, of a letter, where it is three tenths
    heavier; a word in a bold line is set regular where it is no more than
    a tenth heavier. A one-letter word within a line is set as the word
-   after it.
+   after it. Code, as a book on programming prints it in a monospaced
+   face, is set in Source Code Pro, in a document with three words of
+   three glyphs or more, a letter among them, that match it set so better
+   than in the text faces by 0.35 or more: a book on Linux's code measures
+   up to 0.6, and English in a grammar book and a picture dictionary, none
+   of it monospaced, 0.29 at most. There, such a word is set so, and so is
+   one that reads as such a word does elsewhere, or reads as code, with an
+   underscore, a pair of parentheses after it, ASCII or the CJK ones the
+   recognizer may read, or as a number in hexadecimal, unless it is in a
+   bold line, where a book may set code in the line's face, or matches the
+   text faces better by 0.35; every word of a paragraph of Latin, as a
+   block of code, where most of those it tells are; and a short word, as
+   "cr3" or "=", between such words in its run of Latin. Such a word is
+   bold where it is a fifth heavier than its glyphs in the monospaced
+   regular face, against its line's kind's weight.
 4. The line is set in its face so that its glyphs' outlines cover its
    ink. Their height gives the font size, which lines within 7% of
    each other on a page share, as a paragraph's do. And a paragraph's
@@ -351,7 +377,13 @@ For each scanned page, at the resolution it was read at:
    narrow punctuation from the serif face, as books set them in Times
    beside Kai, since LXGW WenKai's own are a casual hand. Without the
    FangSong face, as with resources fetched before it was added,
-   FangSong is set in Kai. A document in
+   FangSong is set in Kai, and without the monospaced one, no code is
+   told. The monospaced face is set, beside a line's others, at the size
+   that spans the ink of the words told so in lines of Chinese, whose
+   size the Chinese gives, by their median, as a book's code is set
+   larger or smaller than its text; in a line of code alone, its size is
+   the monospaced face's own. It takes what it lacks from the serif face.
+   A document in
    traditional Chinese, which more characters of its alone than of
    simplified's tell, is set in Noto Serif TC and Noto Sans TC, which
    center its punctuation in the em and draw its characters as it
@@ -550,7 +582,11 @@ CGO_ENABLED=0 go test ./...
   not its upright ones, stays regular; a line two fifths
   wider than its glyphs is set a tenth wider at most, and tracked for
   the rest, or tracked alone where its letters lie apart; and an upright
-  line in Arial full of y's stays upright. Text sheared as italic is by 0.12 and 0.2
+  line in Arial full of y's stays upright. A page of Chinese naming code
+  in Courier New, blurred as a scan's is, with a few lines of code, sets
+  the code in the monospaced face, its letters within 8% as far apart as
+  printed, and English words in Times New Roman beside it in the text
+  faces. Text sheared as italic is by 0.12 and 0.2
   measures within 0.04 of that, and upright text about upright; a line
   whose words lean is italic but for its label and a word leaning left,
   and in an upright line only a long word leaning far is; the Chinese

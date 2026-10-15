@@ -7,6 +7,7 @@ import (
 	"image"
 	"image/draw"
 	"image/jpeg"
+	"maps"
 	"math"
 	"slices"
 	"strings"
@@ -1558,7 +1559,12 @@ func (p *pixels) glyphColors(f frame, in ink, sh shape, tl textLine, origins []f
 // and origins place it (see wordInk): their ink across their advances, up
 // the line's ink, as measure measures a line's, and their glyphs in the
 // regular serif and sans-serif faces, at the size the line's ink gives
-// each. A word too short to have strokes to measure has none.
+// each. A word too short to have strokes to measure has none. Where there
+// is a monospaced face, each is measured against it too (see monoMatch),
+// where the line set so places the word, and where the line set with its
+// Latin in the monospaced face does: code printed in such a face is wider
+// or narrower than the serif face sets it, word by word, so that set in
+// the serif face, the line carries its words off their ink.
 func (d *textDoc) words(p *pixels, text string, f frame, in ink, sh shape, tl textLine, origins []float64) []wordInk {
 	runes := []rune(strings.TrimSpace(text))
 	if len(runes) != len(sh.glyphs) {
@@ -1569,6 +1575,39 @@ func (d *textDoc) words(p *pixels, text string, f frame, in ink, sh shape, tl te
 		sizes[k] = d.size(d.shape(text, fi), f, in)
 	}
 	contrast := float64(max(1, diff(in.fg, in.bg)))
+	// The ink from s0 to s1 along the line, a column a pixel, from the top
+	// of the line's.
+	inkOf := func(s0, s1 float64) (cover []float64, cols, rows int) {
+		cols, rows = int(s1-s0), int(math.Ceil(in.t1-in.t0))+2
+		if cols < 2 || rows < 2 {
+			return nil, 0, 0
+		}
+		cover = make([]float64, cols*rows)
+		for y := range rows {
+			for x := range cols {
+				pt := f.point(s0+float64(x)+0.5, in.t1+1-float64(y)-0.5)
+				c := float64(diff(p.at(int(math.Floor(pt.X)), int(math.Floor(pt.Y))), in.bg)) / contrast
+				if c >= 0.08 {
+					cover[y*cols+x] = min(1, c)
+				}
+			}
+		}
+		return cover, cols, rows
+	}
+	// The line set with its Latin in the monospaced face.
+	monoed := d.fonts[mono] != d.fonts[serif] && slices.ContainsFunc(sh.glyphs, func(g glyph) bool { return !g.wide && !g.space })
+	var mtl textLine
+	var mOrigins []float64
+	if monoed {
+		faces := make([]int, len(runes))
+		for k, g := range sh.glyphs {
+			if faces[k] = serif; !g.wide {
+				faces[k] = mono
+			}
+		}
+		msh := d.shapeIn(text, serif, faces)
+		mtl, mOrigins, _ = d.placeAt(msh, f, in, d.size(msh, f, in), true)
+	}
 	var words []wordInk
 	for i := 0; i < len(sh.glyphs); {
 		if g := sh.glyphs[i]; g.space || g.wide {
@@ -1579,23 +1618,11 @@ func (d *textDoc) words(p *pixels, text string, f frame, in ink, sh shape, tl te
 		for j < len(sh.glyphs) && !sh.glyphs[j].space && !sh.glyphs[j].wide {
 			j++
 		}
-		w := wordInk{from: i, to: j, letters: letters(string(runes[i:j]))}
-		// The word's ink, a column a pixel, from the top of the line's,
-		// between the gaps parting words nearest where it is set, as it may
-		// be set a little off its ink.
-		s0, s1 := in.words(tl.x+origins[i]*tl.scale, tl.x+origins[j]*tl.scale, 0.3*tl.size)
-		cols, rows := int(s1-s0), int(math.Ceil(in.t1-in.t0))+2
-		if cols >= 2 && rows >= 2 {
-			cover := make([]float64, cols*rows)
-			for y := range rows {
-				for x := range cols {
-					pt := f.point(s0+float64(x)+0.5, in.t1+1-float64(y)-0.5)
-					c := float64(diff(p.at(int(math.Floor(pt.X)), int(math.Floor(pt.Y))), in.bg)) / contrast
-					if c >= 0.08 {
-						cover[y*cols+x] = min(1, c)
-					}
-				}
-			}
+		word := string(runes[i:j])
+		w := wordInk{from: i, to: j, letters: letters(word)}
+		// The word's ink, between the gaps parting words nearest where it
+		// is set, as it may be set a little off its ink.
+		if cover, cols, rows := inkOf(in.words(tl.x+origins[i]*tl.scale, tl.x+origins[j]*tl.scale, 0.3*tl.size)); cover != nil {
 			at := func(x, y int) float64 { return cover[y*cols+x] }
 			w.ink = strokeStats(cols, rows, at, false)
 			// How it leans, by its edges but for those in a tenth of it at
@@ -1603,7 +1630,7 @@ func (d *textDoc) words(p *pixels, text string, f frame, in ink, sh shape, tl te
 			// 7's, where the line is set a little off its ink.
 			w.slant = slant(cols, rows, at, cols/10, cols-cols/10)
 			for k, fi := range []int{serif, sans} {
-				if ws := d.shape(string(runes[i:j]), fi); ws.inked {
+				if ws := d.shape(word, fi); ws.inked {
 					rw, rh, rc := d.draw(ws, sizes[k])
 					if rc == nil {
 						continue
@@ -1611,6 +1638,21 @@ func (d *textDoc) words(p *pixels, text string, f frame, in ink, sh shape, tl te
 					w.refs[k] = strokeStats(rw, rh, rc, false)
 					if fi == sans { // how far its letters lean upright
 						w.slant -= slant(rw, rh, rc, rw/10, rw-rw/10)
+					}
+				}
+			}
+			// And against the monospaced face, where the line set in it
+			// places the word, and where the line set in the text faces
+			// does, between the gaps parting words nearest each.
+			if monoed {
+				wins := []wordWindow{{cover, cols, rows}}
+				if mc, mcols, mrows := inkOf(in.words(mtl.x+mOrigins[i]*mtl.scale, mtl.x+mOrigins[j]*mtl.scale, 0.3*mtl.size)); mc != nil {
+					wins = append(wins, wordWindow{mc, mcols, mrows})
+				}
+				w.mono, w.monoSize = d.monoMatch(word, sizes[0], wins)
+				if ws := d.shape(word, mono); w.monoSize > 0 && ws.inked {
+					if rw, rh, rc := d.draw(ws, sizes[0]*w.monoSize/d.faceSize(mono)); rc != nil {
+						w.refs[2] = strokeStats(rw, rh, rc, false)
 					}
 				}
 			}
@@ -2260,6 +2302,7 @@ func (d *textDoc) setLines() {
 	for i, fi := range d.ref.styles(texts, frames, inks, refs, pages) {
 		all[i].face = fi
 	}
+	d.monoSize = d.ref.monoSize
 	// A part of a line set apart (see apart) with too few letters to be
 	// judged by, as a chapter's number, "02", after "Chapter", is in the
 	// face the line's other part was judged printed in, as one face set
@@ -2503,8 +2546,7 @@ func (d *textDoc) shapeIn(text string, face int, faces []int) shape {
 		g := font.Glyph(r)
 		b, inked := font.Bounds(g)
 		adv := font.Advance(g)
-		if font.UnitsPerEm != em {
-			k := float64(em) / float64(font.UnitsPerEm)
+		if k := d.faceSize(fi) * float64(em) / float64(font.UnitsPerEm); k != 1 {
 			for i := range b {
 				b[i] = int(math.Round(float64(b[i]) * k))
 			}
@@ -2532,7 +2574,8 @@ func (d *textDoc) shapeIn(text string, face int, faces []int) shape {
 // behind it (see fallbacks) for what it lacks, as Chinese characters in a
 // Latin font. A Kai or FangSong font of the user's takes the Chinese
 // characters it lacks from the text fonts' face of its kind, and the rest
-// from the serif face.
+// from the serif face, as the monospaced faces take what they lack from
+// the serif face of their weight.
 func (d *textDoc) glyphFace(face int, r rune) int {
 	if from := latin(face); from != face {
 		for _, fi := range []int{face, fallback + face} {
@@ -2546,6 +2589,9 @@ func (d *textDoc) glyphFace(face int, r rune) int {
 	}
 	if fc := d.font(fallback + face); fc != nil && d.fonts[face].ttf.Glyph(r) == 0 && fc.ttf.Glyph(r) != 0 {
 		return fallback + face
+	}
+	if (face == mono || face == monoBold) && d.fonts[face].ttf.Glyph(r) == 0 {
+		return d.glyphFace(serif+face%2, r)
 	}
 	return face
 }
@@ -2882,8 +2928,11 @@ func (sh shape) spread(i, j int, extra, size, em float64, gaps [][2]float64, fro
 	}
 	adds := make([]float64, len(weights))
 	rest := extra
-	for k, e := range sh.wordGaps(i, j, size, em, gaps, from, to, high) {
-		e = min(e, rest)
+	// In the line's order, as a map's would part what is left differently
+	// each time.
+	gapped := sh.wordGaps(i, j, size, em, gaps, from, to, high)
+	for _, k := range slices.Sorted(maps.Keys(gapped)) {
+		e := min(gapped[k], rest)
 		adds[k-i] += e
 		rest -= e
 		if sh.cjk() { // its gap is all a place of a CJK line takes
@@ -3277,9 +3326,12 @@ func (d *textDoc) placeAt(sh shape, f frame, in ink, size float64, measure bool)
 		width, span := in.s1-in.s0, float64(sh.right-sh.left)/em*size
 		gaps := in.gapsIn(in.s0, in.s1)
 		if width > span && !tracked && !sh.cjk() {
+			// In the line's order, as a sum in a map's would come out a
+			// little different each time.
 			words := 0.0
-			for _, e := range sh.wordGaps(0, n, size, em, gaps, in.s0, in.s1, high) {
-				words += e
+			extra := sh.wordGaps(0, n, size, em, gaps, in.s0, in.s1, high)
+			for _, k := range slices.Sorted(maps.Keys(extra)) {
+				words += extra[k]
 			}
 			tl.scale = min(max((width-words)/span, 1), 1.1)
 			for k := range gaps {
@@ -3323,8 +3375,8 @@ func (d *textDoc) number(s *cidSet, sh shape, origins []float64, size float64) [
 		carry = want - float64(add)
 		font := d.font(g.face).ttf
 		own := font.Advance(font.Glyph(g.r))
-		if font.UnitsPerEm != int(em) {
-			add = int(math.Round(float64(add) * float64(font.UnitsPerEm) / em))
+		if k := float64(font.UnitsPerEm) / em / d.faceSize(g.face); k != 1 {
+			add = int(math.Round(float64(add) * k))
 		}
 		cids = append(cids, d.cid(s, g.face, g.r, own+add))
 	}

@@ -49,7 +49,8 @@ bold, or Noto Serif TC and Noto Sans TC for a document in traditional
 Chinese, whose punctuation they center as it is printed, or in LXGW
 WenKai for Kai (楷体), the brush-written face of Chinese prefaces and
 running heads, or in Zhuque Fangsong for FangSong (仿宋), the even,
-slanting face of prefaces and quotations, or in
+slanting face of prefaces and quotations, with code printed in a
+monospaced face set in Source Code Pro, or in
 [fonts of your own](#your-own-fonts).
 Line art, such as a figure's boxes, arrows and rules, is traced into
 outlines that stay as sharp as the type at any zoom; photos and shading
@@ -97,8 +98,10 @@ the right, as **Compare with Original** shows them:
 - **Matches the typeface.** Each line's kind (serif, sans-serif, Kai or
   FangSong) and weight are judged from its strokes, and its size and
   spacing from its ink, so retyped lines land where they were printed.
-  Words set bold or italic within a line are set so too, titles tracked
-  out are tracked as printed, and underlines are kept.
+  Words set bold or italic within a line are set so too, and code
+  printed in a monospaced face, as a book on programming sets it, is set
+  in one; titles tracked out are tracked as printed, and underlines are
+  kept.
 - **Sets vertical text upright.** Columns of Chinese characters, as a
   cover sets them, are set one character under the other, upright, in
   the fonts' vertical writing mode, their punctuation and arrows in their
@@ -216,7 +219,7 @@ written when asked for.
 | `-dpi` | `300` | The resolution pages are read at |
 | `-force` | `false` | Read pages that already have text too |
 | `-cpu` | `false` | Run every model on the CPU, not the text models on the GPU through Core ML |
-| `-serif`, `-serif-bold`, `-sans`, `-sans-bold`, `-kai`, `-fangsong` | built-in fonts | Font files to set the retyped PDF in (see below) |
+| `-serif`, `-serif-bold`, `-sans`, `-sans-bold`, `-kai`, `-fangsong`, `-mono`, `-mono-bold` | built-in fonts | Font files to set the retyped PDF in (see below) |
 
 ### Your own fonts
 
@@ -225,8 +228,9 @@ built-in ones: a `.ttf` file, or one font of a `.ttc` collection, of any
 units per em.
 
 - **In the app,** **Unscan › Settings…** (⌘,) chooses a font file for
-  each face: serif and sans-serif, regular and bold, Kai and FangSong (on
-  Linux and Windows, **File › Settings…**). For a collection, the font named Regular
+  each face: serif and sans-serif, regular and bold, Kai and FangSong,
+  and monospaced, regular and bold (on Linux and Windows,
+  **File › Settings…**). For a collection, the font named Regular
   or Bold, to match the face, is picked, and a menu picks another. The
   choice is kept in `fonts.json` in the app's user data folder, and
   applies to the PDFs read from then on.
@@ -293,6 +297,7 @@ resources/
 ├── fonts/NotoSansTC-{Regular,Bold}.ttf   (7.1 MB each, OFL-1.1)
 ├── fonts/LXGWWenKai-Regular.ttf          and its Kai face, v1.522 (26 MB, OFL-1.1)
 ├── fonts/ZhuqueFangsong-Regular.ttf      and its FangSong face, v0.212 (8.8 MB, OFL-1.1)
+├── fonts/SourceCodePro-{Regular,Bold}.ttf  and its monospaced faces, 2.042 (0.2 MB each, OFL-1.1)
 ├── fonts/*-OFL.txt                       their licenses
 └── darwin-arm64/libonnxruntime.dylib  (or linux-*/libonnxruntime.so, windows-*/onnxruntime.dll)
 ```
@@ -461,6 +466,12 @@ docs/                    how it works, in depth, the app icon's source (icon.svg
   - A face used only for bold lines in a document, with none of its lines
     regular, comes out regular, as there is no body text of its kind to
     judge them against.
+  - Code is told monospaced by where its letters lie, evenly apart, and
+    only in a document with a few words of it that surely are, so a
+    document with little code sets it in the text faces; and in a book
+    that sets code so, a word told by little, as one a reader's pen ran
+    through, may come out in the text face, or one that reads as code but
+    was printed in the text face, in the monospaced one.
   - Line art is traced as it was scanned: sharper, but no straighter,
     so a box whose edges the scan left uneven keeps them so; and shading
     that a black-and-white scan broke into specks, with whatever was
@@ -489,12 +500,13 @@ Unscan builds on these projects, under their own licenses:
 | [ONNX Runtime](https://onnxruntime.ai) | MIT |
 | [PDFium](https://pdfium.googlesource.com/pdfium/) | Apache-2.0 / BSD |
 | [go-pdfium](https://github.com/klippa-app/go-pdfium), [onnxruntime_purego](https://github.com/getcharzp/onnxruntime_purego), [purego](https://github.com/ebitengine/purego) | MIT / Apache-2.0 |
-| [Noto Serif SC](https://fonts.google.com/noto/specimen/Noto+Serif+SC), [Noto Sans SC](https://fonts.google.com/noto/specimen/Noto+Sans+SC), [Noto Serif TC](https://fonts.google.com/noto/specimen/Noto+Serif+TC), [Noto Sans TC](https://fonts.google.com/noto/specimen/Noto+Sans+TC), [LXGW WenKai](https://github.com/lxgw/LxgwWenKai), [Zhuque Fangsong](https://github.com/TrionesType/zhuque) | SIL Open Font License 1.1 |
+| [Noto Serif SC](https://fonts.google.com/noto/specimen/Noto+Serif+SC), [Noto Sans SC](https://fonts.google.com/noto/specimen/Noto+Sans+SC), [Noto Serif TC](https://fonts.google.com/noto/specimen/Noto+Serif+TC), [Noto Sans TC](https://fonts.google.com/noto/specimen/Noto+Sans+TC), [LXGW WenKai](https://github.com/lxgw/LxgwWenKai), [Zhuque Fangsong](https://github.com/TrionesType/zhuque), [Source Code Pro](https://github.com/adobe-fonts/source-code-pro) | SIL Open Font License 1.1 |
 
 The app carries the fonts' licenses in `fonts/NotoSerifSC-OFL.txt`,
 `fonts/NotoSansSC-OFL.txt`, `fonts/NotoSerifTC-OFL.txt`,
-`fonts/NotoSansTC-OFL.txt`, `fonts/LXGWWenKai-OFL.txt` and
-`fonts/ZhuqueFangsong-OFL.txt`, and embeds
+`fonts/NotoSansTC-OFL.txt`, `fonts/LXGWWenKai-OFL.txt`,
+`fonts/ZhuqueFangsong-OFL.txt` and `fonts/SourceCodePro-OFL.txt`, and
+embeds
 subsets of the fonts in retyped PDFs, as the license allows. Subsets of
 your own fonts are embedded under those fonts' licenses, which are yours
 to comply with; fonts that forbid embedding are refused. Check the
