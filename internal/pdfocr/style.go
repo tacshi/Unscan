@@ -255,7 +255,16 @@ type wordInk struct {
 // needs none of the document's other lines, so it is done as each page is
 // redrawn, while the next pages are read.
 func (d *textDoc) refs(text string, f frame, in ink) lineRefs {
-	if !in.found || in.strokes.across == 0 || in.strokes.down == 0 || letters(text) < 2 {
+	if letters(text) < 2 {
+		return lineRefs{}
+	}
+	return d.refsOf(text, f, in)
+}
+
+// refsOf sets a line's text in each face as refs does, however few its
+// letters.
+func (d *textDoc) refsOf(text string, f frame, in ink) lineRefs {
+	if !in.found || in.strokes.across == 0 || in.strokes.down == 0 {
 		return lineRefs{}
 	}
 	var l lineRefs
@@ -538,6 +547,12 @@ func (d *textDoc) styles(texts []string, frames []frame, inks []ink, lines []lin
 		bases[i] = b
 	}
 	paragraphWeights(paras, out, heavier)
+	d.alone(texts, frames, inks, lines, out, paras, gain, func(kind int) float64 {
+		if b, ok := base(byDoc[kind]); ok {
+			return b
+		}
+		return 1
+	})
 
 	// A word is set in its line's face but where it is surely heavier, by
 	// a fifth, than the lines of its kind are, in a line set regular, as
@@ -737,6 +752,78 @@ func (d *textDoc) monoWords(texts []string, lines []lineRefs, out []int, paras [
 // of parentheses after it, or a number in hexadecimal, as 0xc0000000, or
 // as the recognizer reads it, Oxc0000000.
 var codeLike = regexp.MustCompile(`_|[A-Za-z0-9]\(\)$|^[0O][xX][0-9A-Fa-f]+$`)
+
+// alone sets the kind and weight of a paragraph whose lines are each a
+// Chinese character alone, set large, as a cover's title down a column,
+// read a character a line, which have too few letters to be judged as
+// lines are (see styles), by its characters: the paragraph is sans-serif
+// where their strokes lean to it, by their median, and serif else, and
+// each character bold where its strokes are 15% thicker than its glyph's
+// in its kind's regular face, at the size its ink gives it, against base,
+// the weight of the document's lines of the kind, its strokes less gain,
+// the scan's thickening. Large is twice as high as the document's judged
+// lines' ink, by their median, or more: the grammar book's cover sets 思
+// and 维 eight times as high. A character alone at the size of the text,
+// as a colophon's or a picture dictionary's label, has too few strokes to
+// tell its kind or weight by, measuring a fifth heavier and leaning to
+// either kind by chance, and a paragraph's last line of a character is in
+// its paragraph: they are set as their paragraph is.
+func (d *textDoc) alone(texts []string, frames []frame, inks []ink, lines []lineRefs, out []int, paras [][]int, gain float64, base func(kind int) float64) {
+	var heights []float64
+	for i, l := range lines {
+		if l.ok {
+			heights = append(heights, inks[i].t1-inks[i].t0)
+		}
+	}
+	if len(heights) == 0 {
+		return
+	}
+	slices.Sort(heights)
+	large := 2 * heights[len(heights)/2]
+	one := func(i int) bool {
+		rs := []rune(strings.TrimSpace(texts[i]))
+		return !lines[i].ok && len(rs) == 1 && isHan(rs[0]) && inks[i].found && inks[i].t1-inks[i].t0 >= large
+	}
+	for _, para := range paras {
+		if !slices.ContainsFunc(para, one) || slices.ContainsFunc(para, func(i int) bool { return !one(i) }) {
+			continue
+		}
+		var leans []float64
+		refs := make([]lineRefs, len(para))
+		for k, i := range para {
+			refs[k] = d.refsOf(texts[i], frames[i], inks[i])
+			if !refs[k].ok {
+				continue
+			}
+			across := max(inks[i].strokes.across-gain, 1.0/3)
+			down := max(inks[i].strokes.down-gain, 1.0/3)
+			nearest := [2]float64{math.Inf(1), math.Inf(1)} // serif, sans
+			for fi, ref := range refs[k].refs[:kai] {
+				nearest[fi/2] = min(nearest[fi/2], math.Abs(math.Log(across/down*ref.down/ref.across)))
+			}
+			leans = append(leans, nearest[1]-nearest[0])
+		}
+		if len(leans) == 0 {
+			continue
+		}
+		slices.Sort(leans)
+		kind := serif
+		if leans[len(leans)/2] < 0 {
+			kind = sans
+		}
+		for k, i := range para {
+			out[i] = kind
+			if reg := refs[k].refs[kind]; refs[k].ok && reg.across > 0 && reg.down > 0 {
+				across := max(inks[i].strokes.across-gain, 1.0/3)
+				down := max(inks[i].strokes.down-gain, 1.0/3)
+				w := math.Sqrt(across / reg.across * down / reg.down)
+				if w/base(kind) >= 1.15 {
+					out[i] = kind + 1
+				}
+			}
+		}
+	}
+}
 
 // pageHeavy is how many times as heavy as the lines of its kind in the
 // document the lines of a kind on a page must be, by their median, for the

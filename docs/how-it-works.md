@@ -292,7 +292,14 @@ For each scanned page, at the resolution it was read at:
    fifth heavier, as a heading run into its paragraph is. A line too short to
    judge, as a paragraph's last of one character, takes its paragraph's,
    and a paragraph of such lines, as a page number alone, the kind most
-   of the document's lines of its script lean to. So does a heading or a
+   of the document's lines of its script lean to; but a paragraph of
+   Chinese characters alone, a character a line, set twice as high as the
+   document's lines or more, as a cover's title down a column, is judged
+   by its characters, whose strokes are many at that size: sans-serif
+   where they lean to it, and each bold where 15% heavier than the
+   document's lines of its kind. A character alone at the text's size has
+   too few strokes to tell by, and measures a fifth heavier, or leans to
+   either kind, by chance. So does a heading or a
    label, a paragraph of a line or two, that leans to serif less than
    surely, where most of the document's lines are sans-serif: a
    sans-serif face's bold has more contrast than its regular, and leans a
@@ -656,6 +663,9 @@ CGO_ENABLED=0 go test ./...
   and weight. A Kai paragraph's last line of one character, a preface's
   first line alone and a line mostly of English among Kai ones are Kai
   too, and a bold Song heading as slanted as Kai's least is not. A
+  title of two characters, a character a line, set large in Hiragino
+  Sans GB W6 beside Song text, is set in the bold sans-serif face, and a
+  character alone at the text's size in it as its paragraph is. A
   paragraph of FangSong, slanting a little less than Kai, is FangSong,
   as is one of even strokes a pale scan straightened, or one a little
   short of either among FangSong ones; one of Song, as slanted, is not.

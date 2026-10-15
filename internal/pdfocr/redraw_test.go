@@ -2486,6 +2486,72 @@ func TestMonoWords(t *testing.T) {
 	}
 }
 
+// TestLargeAlone redraws a page of Song text beside a title set large in
+// a heavy sans-serif face, a character a line, as a cover sets 思 and 维:
+// the title is set in the bold sans-serif face, as its strokes show, and a
+// character alone at the text's size, which has too few to tell by, as
+// its paragraph is.
+func TestLargeAlone(t *testing.T) {
+	d, _ := testTextDoc(t)
+	coll := func(path string, index int, size float64) font.Face {
+		c, err := opentype.ParseCollection(systemFont(t, path))
+		if err != nil {
+			t.Fatal(err)
+		}
+		sf, err := c.Font(index)
+		if err != nil {
+			t.Fatal(err)
+		}
+		face, err := opentype.NewFace(sf, &opentype.FaceOptions{Size: size, DPI: 72, Hinting: font.HintingNone})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return face
+	}
+	song := coll("/System/Library/Fonts/Supplemental/Songti.ttc", 6, 40)
+	heavy := coll("/System/Library/Fonts/Hiragino Sans GB.ttc", 2, 300) // W6
+	small := coll("/System/Library/Fonts/Hiragino Sans GB.ttc", 2, 40)
+	defer closeOrFail(t, song)
+	defer closeOrFail(t, heavy)
+	defer closeOrFail(t, small)
+	img := image.NewRGBA(image.Rect(0, 0, 1400, 1300))
+	draw.Draw(img, img.Rect, image.White, image.Point{}, draw.Src)
+	var lines []ocr.Line
+	add := func(text string, face font.Face, x, base, above, below int) {
+		dr := font.Drawer{Dst: img, Src: image.Black, Face: face, Dot: fixed.P(x, base)}
+		dr.DrawString(text)
+		x1 := dr.Dot.X.Ceil()
+		lines = append(lines, ocr.Line{Score: 1, Text: text, Box: ocr.Quad{{X: float64(x - 6), Y: float64(base - above)},
+			{X: float64(x1 + 6), Y: float64(base - above)}, {X: float64(x1 + 6), Y: float64(base + below)}, {X: float64(x - 6), Y: float64(base + below)}}})
+	}
+	for k, text := range []string{"当着手翻译第三版时，我不由得回想起开始接触的那段日子。", "几年前，当我们拿到内核代码开始研究时，可以说茫然无措。",
+		"其规模之大，叫覆压三百余里，隔离天日似乎不为过。", "其关系错综复杂，也非言过其实，可能正是因为它的结构。",
+		"阿房宫在规模和结构上给人的震撼可能与之有异曲同工之妙。", "我们在翻译的过程中，尽力保持原书的风格和准确性。"} {
+		add(text, song, 60, 80+70*k, 44, 14)
+	}
+	add("思", heavy, 400, 780, 280, 40)
+	add("维", heavy, 400, 1140, 280, 40)
+	add("著", small, 1100, 1000, 44, 14)
+	page := d.redraw(img, lines, 1400, 1300)
+	d.setLines()
+	faces := map[string]int{}
+	for _, l := range page.lines {
+		var text string
+		for _, c := range l.cids {
+			text += string(d.sets[page.set].codes[c-1].r)
+		}
+		faces[text] = l.face
+	}
+	for _, c := range []struct {
+		text string
+		want int
+	}{{"思", sansBold}, {"维", sansBold}, {"著", serif}} {
+		if got, ok := faces[c.text]; !ok || got != c.want {
+			t.Errorf("%s set in face %d, want %d (faces %v)", c.text, got, c.want, faces)
+		}
+	}
+}
+
 // TestPenUnderline redraws a line of Chinese a reader underlined by hand,
 // the pen's stroke slanting down along it and wavy, running into the
 // characters' feet where it starts: the line is set at its size, as its
