@@ -78,18 +78,90 @@ func (e *Engine) recognize(crops []*rgbImage) ([]recognized, error) {
 	steps, classes := int(shape[1]), int(shape[2])
 	res := make([]recognized, len(crops))
 	parallel(len(crops), func(i int) {
-		res[i] = e.decode(probs[i*steps*classes:][:steps*classes], steps, classes)
+		c := crops[i]
+		w := min(int(math.Ceil(recHeight*float64(c.w)/float64(c.h))), width)
+		gap := blankAt(input[i*3*plane:][:3*plane], w, width, float64(width)/float64(steps))
+		res[i] = e.decode(probs[i*steps*classes:][:steps*classes], steps, classes, gap)
 	})
 	return res, nil
 }
 
+// minSpace is how likely the recognizer must find a space between two
+// Latin letters, though it finds what it reads there likelier, for the
+// space to be read: as likely as minSpace, or minGapSpace where the line's
+// pixels part there. Most of the spaces it drops between words, as in
+// "Heloves me" or "CanIgo", it finds 0.1 to 0.5 likely, and few between a
+// word's letters, which it finds 0.001 likely or less, more than 0.2, as
+// between the i and t of "it", which no blank parts.
+const (
+	minSpace    = 0.3
+	minGapSpace = 0.1
+)
+
+// blankAt reports, for a crop resized into a recognizer's input, w of its
+// width columns drawn, each step of its output stepWidth columns wide,
+// whether a run of blank columns as wide as an eighth of its height lies
+// from step t0 to step t1: in the grammar book, a word's space, as dropped
+// in "Whendidyougetup", 6 to 16 columns, and its letters' gaps, as of "i s",
+// 4 at most. A column is blank where none of its pixels is darker than
+// halfway from the crop's paper, its lightest fifth, as a dense line inks
+// half of it, to its ink, its darkest fiftieth.
+func blankAt(input []float32, w, width int, stepWidth float64) func(t0, t1 int) bool {
+	plane := recHeight * width
+	lum := func(x, y int) float32 {
+		i := y*width + x
+		return input[i] + input[plane+i] + input[2*plane+i]
+	}
+	values := make([]float32, 0, recHeight*w)
+	for y := range recHeight {
+		for x := range w {
+			values = append(values, lum(x, y))
+		}
+	}
+	if len(values) == 0 {
+		return func(int, int) bool { return false }
+	}
+	slices.Sort(values)
+	paper, ink := values[len(values)*4/5], values[len(values)/50]
+	limit := (paper + ink) / 2
+	blank := make([]bool, w)
+	for x := range w {
+		blank[x] = true
+		for y := range recHeight {
+			if lum(x, y) < limit {
+				blank[x] = false
+				break
+			}
+		}
+	}
+	need := max(3, recHeight/8)
+	return func(t0, t1 int) bool {
+		run := 0
+		for x := max(0, int(float64(t0)*stepWidth)); x < min(w, int(float64(t1+1)*stepWidth)); x++ {
+			if !blank[x] {
+				run = 0
+			} else if run++; run >= need {
+				return true
+			}
+		}
+		return false
+	}
+}
+
 // decode reads CTC output greedily: the likeliest class of each step,
 // without repeats and blanks; the score is the mean probability of the
-// characters kept.
-func (e *Engine) decode(probs []float32, steps, classes int) recognized {
-	var b strings.Builder
+// characters kept. A space between two Latin letters is read where the
+// recognizer finds it likely though less than what it reads, as likely as
+// minSpace at a step from the first's to the second's, or as minGapSpace
+// where gap reports the line's pixels part between them, from the first's
+// last step to the second's first (see blankAt).
+func (e *Engine) decode(probs []float32, steps, classes int, gap func(t0, t1 int) bool) recognized {
+	type read struct {
+		c           int // its class
+		first, last int // the steps it is read at
+	}
+	var chars []read
 	var sum float32
-	var n int
 	prev := -1
 	for t := range steps {
 		row := probs[t*classes:][:classes]
@@ -99,17 +171,37 @@ func (e *Engine) decode(probs []float32, steps, classes int) recognized {
 				best = c
 			}
 		}
-		if best != 0 && best != prev {
-			b.WriteString(e.chars[best])
+		switch {
+		case best != 0 && best != prev:
+			chars = append(chars, read{best, t, t})
 			sum += row[best]
-			n++
+		case best != 0:
+			chars[len(chars)-1].last = t
 		}
 		prev = best
 	}
-	if n == 0 {
+	if len(chars) == 0 {
 		return recognized{}
 	}
-	return recognized{text: b.String(), score: sum / float32(n)}
+	space := classes - 1
+	latin := func(c int) bool {
+		s := e.chars[c]
+		return len(s) == 1 && (s[0] >= 'a' && s[0] <= 'z' || s[0] >= 'A' && s[0] <= 'Z')
+	}
+	var b strings.Builder
+	for k, ch := range chars {
+		if k > 0 && latin(chars[k-1].c) && latin(ch.c) {
+			var most float32
+			for t := chars[k-1].first; t <= ch.last; t++ {
+				most = max(most, probs[t*classes+space])
+			}
+			if most >= minSpace || most >= minGapSpace && gap(chars[k-1].last, ch.first) {
+				b.WriteByte(' ')
+			}
+		}
+		b.WriteString(e.chars[ch.c])
+	}
+	return recognized{text: b.String(), score: sum / float32(len(chars))}
 }
 
 // resizeRecInto resizes the crop to w×recHeight into the first w columns

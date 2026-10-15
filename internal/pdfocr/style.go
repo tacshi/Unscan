@@ -414,7 +414,8 @@ func (d *textDoc) styles(texts []string, frames []frame, inks []ink, lines []lin
 	geoms := make([]lineGeom, len(texts))
 	for i, l := range lines {
 		f, in := frames[i], inks[i]
-		geoms[i].cjk = d.shape(texts[i], serif).cjk()
+		// Its script by its characters, not the spaces between its words.
+		geoms[i].cjk = d.shape(strings.ReplaceAll(texts[i], " ", ""), serif).cjk()
 		if !in.found {
 			continue
 		}
@@ -802,6 +803,14 @@ type lineGeom struct {
 // be set in it against its paragraph: as far as a heading's do.
 const sure = 0.15
 
+// tie is how far a paragraph of a line or two of Latin must lean to
+// sans-serif for it to be set so where most of the document's Latin lines
+// lean to serif: small lowercase Latin, blurred, leans to sans-serif more
+// than its face does, and a grammar book's short lines in Times, as "a
+// mess", lean so by 0.011 and 0.016, and a cartoon's casual "don't" by
+// 0.027.
+const tie = 0.02
+
 // brushy is how much more of a CJK paragraph's edges must run aslant than
 // the serif face's, set in its text, for it to be Kai. In scans of 24 to
 // 64 pixels an em, Kai's run 0.09 to 0.16 more, and FangSong's, which
@@ -856,7 +865,8 @@ const kaiBrush = 0.13
 // a line or two, as a heading or a label, leaning to serif less than
 // surely, is sans-serif where most of the document's lines of its script
 // lean to it: a sans-serif face's bold has more contrast than its regular,
-// and leans a little to serif. A paragraph it cannot judge at all is of
+// and leans a little to serif; and one of Latin leaning to sans-serif by
+// less than tie is serif where most of them lean to that. A paragraph it cannot judge at all is of
 // the kind most of the document's lines of its script lean to. Lines it
 // cannot judge take their paragraph's kind, and lines it knows nothing of,
 // whose ink was not found, the document's. It returns the paragraphs too,
@@ -1031,7 +1041,12 @@ each:
 		slices.Sort(leans)
 		lean := leans[len(leans)/2]
 		kind := serif
-		if lean < 0 || len(leans) < 3 && lean < sure && prevail[lines[para[0]].cjk] == sans {
+		short, cjk := len(leans) < 3, lines[para[0]].cjk
+		switch {
+		case short && lean < sure && prevail[cjk] == sans:
+			kind = sans
+		case short && !cjk && lean > -tie && prevail[cjk] == serif:
+		case lean < 0:
 			kind = sans
 		}
 		for _, i := range para {

@@ -240,3 +240,68 @@ func squash(text string) string {
 		return r
 	}, text)
 }
+
+// TestDecodeSpaces reads a space the recognizer finds likely between two
+// Latin letters, though less than the letters it reads there, as in
+// "He loves", which it otherwise drops: where it is likely enough alone,
+// or less so where the line's pixels part there; not between a letter and
+// a Chinese character, nor where it is unlikely, as within a word.
+func TestDecodeSpaces(t *testing.T) {
+	e := &Engine{chars: []string{"", "H", "e", "l", "o", "我", " "}}
+	const classes = 7
+	// Each step's likeliest class, at 0.6, and the space's odds.
+	decode := func(read []int, space []float32, gap bool) string {
+		probs := make([]float32, len(read)*classes)
+		for t, c := range read {
+			probs[t*classes+c] = 0.6
+			probs[t*classes+classes-1] = space[t]
+		}
+		return e.decode(probs, len(read), classes, func(int, int) bool { return gap }).text
+	}
+	for _, c := range []struct {
+		read  []int
+		space []float32
+		gap   bool
+		want  string
+	}{
+		{[]int{1, 2, 0, 3, 4}, []float32{0, 0.05, 0.45, 0, 0}, false, "He lo"},
+		{[]int{1, 2, 0, 3, 4}, []float32{0, 0.05, 0.15, 0, 0}, true, "He lo"},
+		{[]int{1, 2, 0, 3, 4}, []float32{0, 0.05, 0.15, 0, 0}, false, "Helo"},
+		{[]int{1, 2, 0, 3, 4}, []float32{0, 0.001, 0.01, 0, 0}, true, "Helo"},
+		{[]int{1, 2, 0, 5, 4}, []float32{0, 0.05, 0.45, 0, 0}, true, "He我o"},
+	} {
+		if got := decode(c.read, c.space, c.gap); got != c.want {
+			t.Errorf("decode(%v, %v, gap %v) = %q, want %q", c.read, c.space, c.gap, got, c.want)
+		}
+	}
+}
+
+// TestBlankAt tells where a line's pixels part as words do: a gap of
+// blank columns an eighth of the line high or wider, on a page of any
+// paper, not a narrower one between letters.
+func TestBlankAt(t *testing.T) {
+	const width, w = 64, 60
+	input := make([]float32, 3*recHeight*width)
+	plane := recHeight * width
+	for i := range 3 * plane {
+		input[i] = 0.6 // yellowed paper
+	}
+	// Ink in columns 0-19, 22-39 and 46-59: a 2-column gap, then a 6-column one.
+	for x := range w {
+		if x >= 20 && x < 22 || x >= 40 && x < 46 {
+			continue
+		}
+		for y := 10; y < 38; y++ {
+			for k := range 3 {
+				input[k*plane+y*width+x] = -0.8
+			}
+		}
+	}
+	gap := blankAt(input, w, width, 4) // steps of 4 columns
+	if gap(4, 5) {
+		t.Error("a gap of 2 columns parts the line")
+	}
+	if !gap(9, 11) {
+		t.Error("a gap of 6 columns does not part the line")
+	}
+}

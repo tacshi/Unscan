@@ -40,6 +40,15 @@ adds none.
    order they read in, from the page squeezed to 800×800. It takes about
    half a second on the CPU.
 3. **Detection and recognition**, PP-OCRv6's, find and read the lines.
+   The recognizer's output is read greedily, its likeliest character at
+   each step, but for the spaces between Latin words, which it often
+   finds less likely than the letters it reads there, and drops, as in
+   "Heloves me" or "CanIgo": a space is read between two Latin letters
+   where it finds one 0.3 likely or more, or 0.1 where the line's pixels
+   part between them by a run of blank columns an eighth of the line high,
+   as a word's space does (6 to 16 pixels of 48 in a grammar book's
+   examples) and its letters' gaps do not (4 at most). Within words it
+   finds a space 0.001 likely or less.
 4. **Reading order.** Each line goes in the block that covers most of
    it, or the smallest of those it is all but inside, as a column inside
    a block the model drew round two; the blocks read in the model's
@@ -287,7 +296,12 @@ For each scanned page, at the resolution it was read at:
    label, a paragraph of a line or two, that leans to serif less than
    surely, where most of the document's lines are sans-serif: a
    sans-serif face's bold has more contrast than its regular, and leans a
-   little to serif. A word of two letters or more is set bold, against
+   little to serif; and so does a line or two of Latin leaning to
+   sans-serif by less than 0.02 where most of them are serif, as small
+   lowercase Latin, blurred, leans to sans-serif more than its face does:
+   a grammar book's "a mess" in Times by 0.011. A line's script is told
+   by its characters, not the spaces between its words. A word of two
+   letters or more is set bold, against
    its own glyphs in its kind's regular face, where it is a fifth heavier
    than the lines of its kind on its page are, its upright strokes too,
    which a bold face thickens most, as a verb set bold in a caption is:
