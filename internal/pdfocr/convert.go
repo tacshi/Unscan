@@ -44,7 +44,9 @@ type Options struct {
 	MaxPixels int
 	// SkipTextChars leaves pages alone that already have at least this
 	// many characters of text, as born-digital pages do; 0 means 20, and
-	// -1 OCRs every page.
+	// -1 OCRs every page. A page whose text is all invisible, as OCR lays
+	// it over a scan, is read all the same for a text PDF (see
+	// Page.Layered).
 	SkipTextChars int
 }
 
@@ -70,6 +72,12 @@ type Page struct {
 	Text    string
 	Lines   int  // lines OCR found
 	Skipped bool // the page had text of its own, which Text is
+	// Layered is whether the page is a scan under a text layer of its
+	// own, all its text invisible, as a scan read by OCR before is: it
+	// was read again for the text PDF, which redraws it, and Text is what
+	// was read, while the searchable PDF keeps the page as it was, its
+	// layer alone.
+	Layered bool
 	// Turns is how far the scan was found turned clockwise from upright,
 	// in quarter turns, 0 to 3: it was read upright, the searchable PDF
 	// shows it upright, and the text PDF has it redrawn upright.
@@ -235,6 +243,9 @@ func (c *Converter) Convert(ctx context.Context, input io.ReadSeeker, out Output
 	for i, r := range read {
 		pages[i], layer[i], origins[i] = r.page, r.layer, r.origin
 		layer[i].turns = r.page.Turns
+		if r.page.Layered {
+			layer[i] = layerPage{} // its own layer is enough
+		}
 		if r.text != nil {
 			text.pages = append(text.pages, r.text)
 			redrawn[i] = true
@@ -396,13 +407,18 @@ func (c *Converter) readPages(ctx context.Context, inst pdfium.Pdfium, input io.
 				}
 			}
 			page := requests.Page{ByIndex: &requests.PageByIndex{Document: doc, Index: i}}
+			layered := false
 			if opts.SkipTextChars > 0 {
 				own, err := inst.GetPageText(&requests.GetPageText{Page: page})
 				if err == nil && len([]rune(strings.TrimSpace(own.Text))) >= opts.SkipTextChars {
-					if !send(reads, pageRead{index: i, page: Page{Index: i, Text: own.Text, Skipped: true}}) {
-						return
+					// A scan under invisible text is read for the text PDF.
+					if text == nil || drawsText(inst, page) {
+						if !send(reads, pageRead{index: i, page: Page{Index: i, Text: own.Text, Skipped: true}}) {
+							return
+						}
+						continue
 					}
-					continue
+					layered = true
 				}
 			}
 			r, err := renderPage(inst, page, opts)
@@ -410,7 +426,7 @@ func (c *Converter) readPages(ctx context.Context, inst pdfium.Pdfium, input io.
 				fail(i, err)
 				return
 			}
-			r.index = i
+			r.index, r.layered = i, layered
 			select {
 			case renders <- r:
 			case <-ctx.Done():
@@ -427,10 +443,11 @@ func (c *Converter) readPages(ctx context.Context, inst pdfium.Pdfium, input io.
 				fail(r.index, err)
 				return
 			}
+			layered := r.layered
 			r = r.upright(page.Turns)
 			lines := traditionalForms(page.Lines)
 			read := r.layout(lines)
-			read.page.Turns = page.Turns
+			read.page.Turns, read.page.Layered = page.Turns, layered
 			if text == nil {
 				if !send(reads, read) {
 					return
@@ -482,9 +499,57 @@ func (c *Converter) readPages(ctx context.Context, inst pdfium.Pdfium, input io.
 
 // rendered is a page rendered for OCR.
 type rendered struct {
-	index  int
-	img    *image.RGBA
-	toPage affine // from img's pixels to the page's coordinates
+	index   int
+	img     *image.RGBA
+	toPage  affine // from img's pixels to the page's coordinates
+	layered bool   // the page has a text layer of its own (see Page.Layered)
+}
+
+// drawsText reports whether a page draws any of its text, or might: text
+// drawn invisibly (render mode 3), as OCR lays it over a scan, or only to
+// clip what is drawn after it (mode 7), draws nothing. Text in forms the
+// page draws counts too. A page PDFium cannot tell of draws its text.
+func drawsText(inst pdfium.Pdfium, page requests.Page) bool {
+	n, err := inst.FPDFPage_CountObjects(&requests.FPDFPage_CountObjects{Page: page})
+	if err != nil {
+		return true
+	}
+	var objects []references.FPDF_PAGEOBJECT
+	for k := range n.Count {
+		o, err := inst.FPDFPage_GetObject(&requests.FPDFPage_GetObject{Page: page, Index: k})
+		if err != nil {
+			return true
+		}
+		objects = append(objects, o.PageObject)
+	}
+	for len(objects) > 0 {
+		o := objects[len(objects)-1]
+		objects = objects[:len(objects)-1]
+		t, err := inst.FPDFPageObj_GetType(&requests.FPDFPageObj_GetType{PageObject: o})
+		if err != nil {
+			return true
+		}
+		switch t.Type {
+		case enums.FPDF_PAGEOBJ_TEXT:
+			m, err := inst.FPDFTextObj_GetTextRenderMode(&requests.FPDFTextObj_GetTextRenderMode{PageObject: o})
+			if err != nil || m.TextRenderMode != enums.FPDF_TEXTRENDERMODE_INVISIBLE && m.TextRenderMode != enums.FPDF_TEXTRENDERMODE_CLIP {
+				return true
+			}
+		case enums.FPDF_PAGEOBJ_FORM:
+			c, err := inst.FPDFFormObj_CountObjects(&requests.FPDFFormObj_CountObjects{PageObject: o})
+			if err != nil {
+				return true
+			}
+			for k := range c.Count {
+				f, err := inst.FPDFFormObj_GetObject(&requests.FPDFFormObj_GetObject{PageObject: o, Index: uint64(k)})
+				if err != nil {
+					return true
+				}
+				objects = append(objects, f.PageObject)
+			}
+		}
+	}
+	return false
 }
 
 // renderPage renders a page for OCR, at opts.DPI, or less for a big page, into

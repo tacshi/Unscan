@@ -62,43 +62,62 @@ var (
 
 	// Noto Serif SC and Noto Sans SC, Regular and Bold, TrueType builds from
 	// Google Fonts, with Noto Serif TC and Noto Sans TC, in traditional
-	// Chinese's forms, and LXGW WenKai Regular, a Kai face, from its
-	// release v1.522 (all SIL Open Font License 1.1); and their licenses,
-	// which go with them, from the google/fonts repository and LXGW
-	// WenKai's.
+	// Chinese's forms, LXGW WenKai Regular, a Kai face, from its release
+	// v1.522, Zhuque Fangsong Regular (朱雀仿宋), a FangSong face, from its
+	// release v0.212, which zips it, and Source Code Pro, Regular and Bold,
+	// a monospaced face, from its release 2.042, which zips them (all SIL
+	// Open Font License 1.1); and their licenses, which go with them, from
+	// the google/fonts repository, LXGW WenKai's, Zhuque Fangsong's and
+	// Source Code Pro's.
 	textFonts = []struct {
 		r    remote
 		name string
+		// member is the font's name in the zip r is, and its SHA-256, or
+		// empty for a font downloaded as it is.
+		member, memberSHA256 string
 	}{
 		{remote{"https://fonts.gstatic.com/s/notoserifsc/v36/H4cyBXePl9DZ0Xe7gG9cyOj7uK2-n-D2rd4FY7SCqyWv847hdDWC.ttf",
-			"c358a69de3df5f423a8946a7b03e3126fb6ba116f1130a463455b4e39e1f0742"}, "NotoSerifSC-Regular.ttf"},
+			"c358a69de3df5f423a8946a7b03e3126fb6ba116f1130a463455b4e39e1f0742"}, "NotoSerifSC-Regular.ttf", "", ""},
 		{remote{"https://fonts.gstatic.com/s/notoserifsc/v36/H4cyBXePl9DZ0Xe7gG9cyOj7uK2-n-D2rd4FY7RlrCWv847hdDWC.ttf",
-			"9c6a2ba736e4b499c84f65ce366bd3625c0401885fd3e585ace50fb738b96ff6"}, "NotoSerifSC-Bold.ttf"},
+			"9c6a2ba736e4b499c84f65ce366bd3625c0401885fd3e585ace50fb738b96ff6"}, "NotoSerifSC-Bold.ttf", "", ""},
 		{remote{"https://fonts.gstatic.com/s/notosanssc/v41/k3kCo84MPvpLmixcA63oeAL7Iqp5IZJF9bmaG9_FnYxNbPzS5HE.ttf",
-			"d45f67f0a7c0ca3f256950777ce6a61cc7ce5f9696d02900cbbaac25f8aa7d16"}, "NotoSansSC-Regular.ttf"},
+			"d45f67f0a7c0ca3f256950777ce6a61cc7ce5f9696d02900cbbaac25f8aa7d16"}, "NotoSansSC-Regular.ttf", "", ""},
 		{remote{"https://fonts.gstatic.com/s/notosanssc/v41/k3kCo84MPvpLmixcA63oeAL7Iqp5IZJF9bmaGzjCnYxNbPzS5HE.ttf",
-			"9a38ae0ab28cd5a256f9ea8e00dedc688aac17f7915fcb000572990afa956b96"}, "NotoSansSC-Bold.ttf"},
+			"9a38ae0ab28cd5a256f9ea8e00dedc688aac17f7915fcb000572990afa956b96"}, "NotoSansSC-Bold.ttf", "", ""},
 		{remote{"https://raw.githubusercontent.com/google/fonts/8b0a1d0f5983c89bc2b93f1b5fb55f9e252744b5/ofl/notoserifsc/OFL.txt",
-			"5e0da210fb04058a8c0087985d2d456b931c2579811a49655721d3cf0c36b6d6"}, "NotoSerifSC-OFL.txt"},
+			"5e0da210fb04058a8c0087985d2d456b931c2579811a49655721d3cf0c36b6d6"}, "NotoSerifSC-OFL.txt", "", ""},
 		{remote{"https://raw.githubusercontent.com/google/fonts/a85815a42757630ce188fdad368c2dfc444d4773/ofl/notosanssc/OFL.txt",
-			"1c05c68c34f9708415aada51f17e1b0092d2cea709bf4a94cd38114f9e73d7d9"}, "NotoSansSC-OFL.txt"},
+			"1c05c68c34f9708415aada51f17e1b0092d2cea709bf4a94cd38114f9e73d7d9"}, "NotoSansSC-OFL.txt", "", ""},
 		{remote{"https://fonts.gstatic.com/s/notoseriftc/v37/XLYzIZb5bJNDGYxLBibeHZ0BnHwmuanx8cUaGX9aMOpD.ttf",
-			"2aa67c20b8cc8b929cc2ace9c0896cee033abbdfe11fe65306a5caede1cdc6ac"}, "NotoSerifTC-Regular.ttf"},
+			"2aa67c20b8cc8b929cc2ace9c0896cee033abbdfe11fe65306a5caede1cdc6ac"}, "NotoSerifTC-Regular.ttf", "", ""},
 		{remote{"https://fonts.gstatic.com/s/notoseriftc/v37/XLYzIZb5bJNDGYxLBibeHZ0BnHwmuanx8cUaGX-9N-pD.ttf",
-			"3e2b71256bf380d8aaf7b7fee13aa7690b3f20326dc8815a4e6beead3f1a23e1"}, "NotoSerifTC-Bold.ttf"},
+			"3e2b71256bf380d8aaf7b7fee13aa7690b3f20326dc8815a4e6beead3f1a23e1"}, "NotoSerifTC-Bold.ttf", "", ""},
 		{remote{"https://fonts.gstatic.com/s/notosanstc/v40/-nFuOG829Oofr2wohFbTp9ifNAn722rq0MXz76Cy_Co.ttf",
-			"619662a0583f38311e92666927e5edbfd30f2a1fbe8593685660bd11bdd46a10"}, "NotoSansTC-Regular.ttf"},
+			"619662a0583f38311e92666927e5edbfd30f2a1fbe8593685660bd11bdd46a10"}, "NotoSansTC-Regular.ttf", "", ""},
 		{remote{"https://fonts.gstatic.com/s/notosanstc/v40/-nFuOG829Oofr2wohFbTp9ifNAn722rq0MXz70e1_Co.ttf",
-			"33e8464f3432fd9eba5fa6ff74f5fb9ee612cad703877bd71c36e6f167c0a7e3"}, "NotoSansTC-Bold.ttf"},
+			"33e8464f3432fd9eba5fa6ff74f5fb9ee612cad703877bd71c36e6f167c0a7e3"}, "NotoSansTC-Bold.ttf", "", ""},
 		{remote{"https://raw.githubusercontent.com/google/fonts/beff1d8226e598dfaf06f9f8312c01021f70e9d2/ofl/notoseriftc/OFL.txt",
-			"5e0da210fb04058a8c0087985d2d456b931c2579811a49655721d3cf0c36b6d6"}, "NotoSerifTC-OFL.txt"},
+			"5e0da210fb04058a8c0087985d2d456b931c2579811a49655721d3cf0c36b6d6"}, "NotoSerifTC-OFL.txt", "", ""},
 		{remote{"https://raw.githubusercontent.com/google/fonts/b950a7257470b900078f2bf3223823a8602de7e1/ofl/notosanstc/OFL.txt",
-			"1c05c68c34f9708415aada51f17e1b0092d2cea709bf4a94cd38114f9e73d7d9"}, "NotoSansTC-OFL.txt"},
+			"1c05c68c34f9708415aada51f17e1b0092d2cea709bf4a94cd38114f9e73d7d9"}, "NotoSansTC-OFL.txt", "", ""},
 		{remote{"https://github.com/lxgw/LxgwWenKai/releases/download/v1.522/LXGWWenKai-Regular.ttf",
-			"39ad71264b588165b469e35e6afb162a378dacd1f95348160240ba9038ac3009"}, "LXGWWenKai-Regular.ttf"},
+			"39ad71264b588165b469e35e6afb162a378dacd1f95348160240ba9038ac3009"}, "LXGWWenKai-Regular.ttf", "", ""},
 		{remote{"https://raw.githubusercontent.com/lxgw/LxgwWenKai/e8b5b48b79f19f29aa68b0a178eab3472ea9f7e8/OFL.txt",
-			"c38b1994a5e48ac30ac7d1da7d0409fd8fd8127dfe28a13d6e787d5b1ef34a5e"}, "LXGWWenKai-OFL.txt"},
+			"c38b1994a5e48ac30ac7d1da7d0409fd8fd8127dfe28a13d6e787d5b1ef34a5e"}, "LXGWWenKai-OFL.txt", "", ""},
+		{remote{"https://github.com/TrionesType/zhuque/releases/download/v0.212/ZhuqueFangsong-v0.212.zip",
+			"bb8b661a7643d2296a72d9d10530a00949419c4e527fb61783f73c2ba1a8c062"}, "ZhuqueFangsong-Regular.ttf",
+			"ZhuqueFangsong-Regular.ttf", "558c62730844fe54ba220146ed62f859d4e2880188d92d985f8921c6e3743bc4"},
+		{remote{"https://raw.githubusercontent.com/TrionesType/zhuque/803217b9663d1c6e1402e91acc94e4f572713d73/LICENSE.txt",
+			"66cc01ad4df62fca6936431a426104cb32a52ce8da49de9a7d643e02d7659043"}, "ZhuqueFangsong-OFL.txt", "", ""},
+		{sourceCodePro, "SourceCodePro-Regular.ttf",
+			"SourceCodePro-Regular.ttf", "74bd80d3e42a08517cd7e1108ba3d86f2da29ac0f3065be95e0357956ab9db37"},
+		{sourceCodePro, "SourceCodePro-Bold.ttf",
+			"SourceCodePro-Bold.ttf", "b2095e0d657e6d28dc32444a9dacabab0c9241d0bf39d96371756cc9bdbc3a5f"},
+		{remote{"https://raw.githubusercontent.com/adobe-fonts/source-code-pro/d3f1a5962cde503f9409c21e58527611d4a19ef1/LICENSE.md",
+			"7c940e28a5388e9bba866cf0e408edda45fe0899ba98665b8f6ab31dc5e4b8ff"}, "SourceCodePro-OFL.txt", "", ""},
 	}
+	sourceCodePro = remote{"https://github.com/adobe-fonts/source-code-pro/releases/download/2.042R-u/1.062R-i/1.026R-vf/TTF-source-code-pro-2.042R-u_1.062R-i.zip",
+		"0c85bac90d15c040b82939aa92bc8404420fccc02e37bbcb9c93a7f21abb52c6"}
 )
 
 // ONNX Runtime 1.27.1, the version onnxruntime_purego is built against.
@@ -165,7 +184,14 @@ func main() {
 	}
 	fonts := filepath.Join(*dir, "fonts")
 	for _, f := range textFonts {
-		if err := fetchFile(f.r, filepath.Join(fonts, f.name)); err != nil {
+		dst := filepath.Join(fonts, f.name)
+		var err error
+		if f.member != "" {
+			err = fetchMember(f.r, f.member, f.memberSHA256, dst)
+		} else {
+			err = fetchFile(f.r, dst)
+		}
+		if err != nil {
 			log.Fatal(err)
 		}
 	}
@@ -202,6 +228,28 @@ func fetchFile(r remote, dst string) error {
 	}
 	log.Printf("fetched  %s (%.1f MB)", dst, float64(len(data))/1e6)
 	return writeFile(dst, data)
+}
+
+// fetchMember extracts member, whose SHA-256 is sum, from the zip r to
+// dst, unless dst already has its contents.
+func fetchMember(r remote, member, sum, dst string) error {
+	if got, err := fileSHA256(dst); err == nil && got == sum {
+		log.Printf("ok       %s", dst)
+		return nil
+	}
+	data, err := download(r)
+	if err != nil {
+		return err
+	}
+	file, err := fromZip(data, member)
+	if err != nil {
+		return fmt.Errorf("%s: %w", path.Base(r.url), err)
+	}
+	if got := sha256.Sum256(file); hex.EncodeToString(got[:]) != sum {
+		return fmt.Errorf("%s in %s: SHA-256 %x, want %s", member, path.Base(r.url), got, sum)
+	}
+	log.Printf("fetched  %s (%.1f MB)", dst, float64(len(file))/1e6)
+	return writeFile(dst, file)
 }
 
 // fetchDict writes the recognizer's characters, one per line, from the
@@ -267,10 +315,11 @@ func fetchRuntime(b runtimeBuild, dst string) error {
 	return writeFile(dst, lib)
 }
 
-// Archives hold their files under a top-level directory named after them.
+// Archives hold their files under a top-level directory named after them,
+// or at their top.
 func memberMatches(name, member string) bool {
 	_, rest, ok := strings.Cut(name, "/")
-	return ok && rest == member
+	return ok && rest == member || name == member
 }
 
 func fromTarGz(data []byte, member string) ([]byte, error) {

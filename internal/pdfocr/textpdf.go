@@ -17,11 +17,13 @@ import (
 	"unscan/internal/ttf"
 )
 
-// The text PDF's faces: a serif one, a sans-serif one and a Kai one, the
-// brush-written face of Chinese prefaces and quotations, each regular and
-// bold, which lines are set in as they were printed (see style). A face
-// and its bold are next to each other, the regular first; a kind is its
-// regular face.
+// The text PDF's faces: a serif one, a sans-serif one, a Kai one, the
+// brush-written face of Chinese prefaces and quotations, a FangSong one
+// (仿宋), the thin, slanting face of Chinese documents and of books set in
+// it, and a monospaced one, of Latin alone, as books set code in, each
+// regular and bold, which lines and words are set in as they were printed
+// (see style). A face and its bold are next to each other, the regular
+// first; a kind is its regular face.
 const (
 	serif = iota
 	serifBold
@@ -29,6 +31,10 @@ const (
 	sansBold
 	kai
 	kaiBold
+	fangsong
+	fangsongBold
+	mono
+	monoBold
 	faces
 	// Fallback+fi is the text font behind face fi where that is one of
 	// the user's, which sets the characters it lacks (see textDoc.font).
@@ -45,12 +51,14 @@ type Font struct {
 }
 
 // TextFonts are the fonts that text PDFs are set in: a serif face and a
-// sans-serif one, each regular and bold, and a Kai face, such as Noto
-// Serif SC, Noto Sans SC and LXGW WenKai. Lines set in Kai take their
-// Latin letters, digits and narrow punctuation from the serif face, as
-// books set them. A face left out has no Data.
+// sans-serif one, each regular and bold, a Kai face and a FangSong one,
+// and a monospaced face of Latin, regular and bold, such as Noto Serif SC,
+// Noto Sans SC, LXGW WenKai, Zhuque Fangsong and Source Code Pro. Lines
+// set in Kai or FangSong take their Latin letters, digits and narrow
+// punctuation from the serif face, as books set them. A face left out has
+// no Data.
 type TextFonts struct {
-	Serif, SerifBold, Sans, SansBold, Kai Font
+	Serif, SerifBold, Sans, SansBold, Kai, FangSong, Mono, MonoBold Font
 	// The serif and sans-serif faces in traditional Chinese's forms, as
 	// Noto Serif TC and Noto Sans TC, which a document in it is set in
 	// instead (see isTraditional), where they are given.
@@ -59,12 +67,12 @@ type TextFonts struct {
 
 // fonts lists the fonts by face.
 func (f TextFonts) fonts() [faces]Font {
-	return [faces]Font{f.Serif, f.SerifBold, f.Sans, f.SansBold, f.Kai, {}}
+	return [faces]Font{f.Serif, f.SerifBold, f.Sans, f.SansBold, f.Kai, {}, f.FangSong, {}, f.Mono, f.MonoBold}
 }
 
 // traditionalFonts lists the fonts in traditional Chinese's forms by face.
 func (f TextFonts) traditionalFonts() [faces]Font {
-	return [faces]Font{f.SerifTC, f.SerifBoldTC, f.SansTC, f.SansBoldTC, {}, {}}
+	return [faces]Font{f.SerifTC, f.SerifBoldTC, f.SansTC, f.SansBoldTC, {}, {}, {}, {}, {}, {}}
 }
 
 // FontNames names the fonts in a font file by their full names, as "Songti
@@ -140,23 +148,25 @@ func ReadFont(path string, i int, bold bool) (Font, []string, error) {
 var (
 	textFontFiles = [faces]string{
 		"NotoSerifSC-Regular.ttf", "NotoSerifSC-Bold.ttf", "NotoSansSC-Regular.ttf", "NotoSansSC-Bold.ttf",
-		"LXGWWenKai-Regular.ttf", "",
+		"LXGWWenKai-Regular.ttf", "", "ZhuqueFangsong-Regular.ttf", "",
+		"SourceCodePro-Regular.ttf", "SourceCodePro-Bold.ttf",
 	}
 	traditionalFontFiles = [faces]string{
-		"NotoSerifTC-Regular.ttf", "NotoSerifTC-Bold.ttf", "NotoSansTC-Regular.ttf", "NotoSansTC-Bold.ttf", "", "",
+		"NotoSerifTC-Regular.ttf", "NotoSerifTC-Bold.ttf", "NotoSansTC-Regular.ttf", "NotoSansTC-Bold.ttf", "", "", "", "", "", "",
 	}
 )
 
 // LoadTextFonts reads the text fonts from where cmd/fetchdeps puts them in
-// an app's resources directory. Those in traditional Chinese's forms are
-// left out where they are missing, as from resources fetched before
-// cmd/fetchdeps fetched them.
+// an app's resources directory. Those in traditional Chinese's forms, and
+// the FangSong and monospaced ones, are left out where they are missing,
+// as from resources fetched before cmd/fetchdeps fetched them: FangSong is
+// set in Kai then, and no word is told monospaced.
 func LoadTextFonts(resources string) (TextFonts, error) {
 	var data, tc [faces][]byte
 	for i := range faces {
 		if name := textFontFiles[i]; name != "" {
 			b, err := os.ReadFile(filepath.Join(resources, "fonts", name)) // #nosec G304 -- the app's resources
-			if err != nil {
+			if err != nil && (i < fangsong || !errors.Is(err, fs.ErrNotExist)) {
 				return TextFonts{}, err
 			}
 			data[i] = b
@@ -169,17 +179,21 @@ func LoadTextFonts(resources string) (TextFonts, error) {
 			tc[i] = b
 		}
 	}
-	return TextFonts{Font{Data: data[serif]}, Font{Data: data[serifBold]}, Font{Data: data[sans]},
-		Font{Data: data[sansBold]}, Font{Data: data[kai]},
-		Font{Data: tc[serif]}, Font{Data: tc[serifBold]}, Font{Data: tc[sans]}, Font{Data: tc[sansBold]}}, nil
+	return TextFonts{Serif: Font{Data: data[serif]}, SerifBold: Font{Data: data[serifBold]},
+		Sans: Font{Data: data[sans]}, SansBold: Font{Data: data[sansBold]},
+		Kai: Font{Data: data[kai]}, FangSong: Font{Data: data[fangsong]},
+		Mono: Font{Data: data[mono]}, MonoBold: Font{Data: data[monoBold]},
+		SerifTC: Font{Data: tc[serif]}, SerifBoldTC: Font{Data: tc[serifBold]},
+		SansTC: Font{Data: tc[sans]}, SansBoldTC: Font{Data: tc[sansBold]}}, nil
 }
 
 // latin is the face that a line set in fi takes its Latin letters, digits
-// and narrow punctuation from: the serif face of its weight for Kai,
-// whose own are a casual hand, and fi itself for the others.
+// and narrow punctuation from: the serif face of its weight for Kai, whose
+// own are a casual hand, and for FangSong, as books set them in Times
+// beside it, and fi itself for the others.
 func latin(fi int) int {
-	if fi == kai || fi == kaiBold {
-		return fi - kai + serif
+	if fi >= kai && fi <= fangsongBold {
+		return serif + fi%2
 	}
 	return fi
 }
@@ -191,6 +205,7 @@ type face struct {
 	outline *sfnt.Font // nil for the user's fonts
 	bold    bool
 	serif   bool
+	fixed   bool // monospaced
 }
 
 // parseFace parses the font for face fi, with its outlines if outlines.
@@ -199,7 +214,8 @@ func parseFace(f Font, fi int, outlines bool) (*face, error) {
 	if err != nil {
 		return nil, err
 	}
-	fc := &face{ttf: t, bold: fi == serifBold || fi == sansBold, serif: fi == serif || fi == serifBold}
+	fc := &face{ttf: t, bold: fi == serifBold || fi == sansBold || fi == monoBold, serif: fi == serif || fi == serifBold,
+		fixed: fi == mono || fi == monoBold}
 	if outlines {
 		c, err := sfnt.ParseCollection(f.Data)
 		if err != nil {
@@ -246,9 +262,10 @@ func parseFaces(f TextFonts) ([faces]*face, error) {
 		return out, errors.New("text fonts: no serif face")
 	}
 	// A face left out is set in the one nearest it: the other weight of
-	// its kind, or the serif one of its weight.
+	// its kind, or the serif one of its weight, or Kai for FangSong.
 	for _, fill := range [][2]int{{serifBold, serif}, {sans, serif}, {sansBold, sans}, {sansBold, serifBold},
-		{kai, serif}, {kaiBold, kai}} {
+		{kai, serif}, {kaiBold, kai}, {fangsong, kai}, {fangsongBold, fangsong},
+		{monoBold, mono}, {mono, serif}, {monoBold, serifBold}} {
 		if out[fill[0]] == nil && out[fill[1]] != nil {
 			out[fill[0]] = out[fill[1]]
 		}
@@ -257,7 +274,8 @@ func parseFaces(f TextFonts) ([faces]*face, error) {
 }
 
 // faceNames name the faces in errors.
-var faceNames = [faces]string{"serif", "serif bold", "sans-serif", "sans-serif bold", "Kai", "Kai bold"}
+var faceNames = [faces]string{"serif", "serif bold", "sans-serif", "sans-serif bold", "Kai", "Kai bold", "FangSong", "FangSong bold",
+	"monospaced", "monospaced bold"}
 
 // errNotEmbeddable is the error for a font whose license does not let text
 // PDFs embed it.
@@ -299,9 +317,12 @@ type textDoc struct {
 	// measured and judged in (see styles), whatever fonts they are set
 	// in: those are the faces the judging is tuned to, and the user's
 	// may be of any kind. It is the document itself where they are.
-	ref   *textDoc
-	sets  []*cidSet // what the pages' characters are numbered in
-	pages []*textPage
+	ref *textDoc
+	// MonoSize is how large the monospaced faces are set beside a line's
+	// others, as wide as the scan's code is, 0 until styles tells it.
+	monoSize float64
+	sets     []*cidSet // what the pages' characters are numbered in
+	pages    []*textPage
 }
 
 // cidSet numbers the characters that the lines of some pages set, in CIDs
@@ -319,11 +340,13 @@ var maxCIDs = 0xFFFE
 
 // code is a character as a line sets it: its glyph in a face, advanced by
 // width font units, which is the glyph's own advance or more, to space the
-// line out.
+// line out; or, set upright down a column, vertical, drawn in its
+// vertical form (see verticalGlyph) and advanced by width down it.
 type code struct {
-	face  int
-	r     rune
-	width int
+	face     int
+	r        rune
+	width    int
+	vertical bool
 }
 
 // textPage is a redrawn page, width×height points with its origin at the
@@ -331,6 +354,7 @@ type code struct {
 type textPage struct {
 	width, height float64
 	images        []pageImage
+	paths         []pagePath // line art traced, drawn over the images
 	lines         []textLine
 	// What redraw measured, in the rendered page's pixels, which are sx by
 	// sy points, until setLines sets it as lines.
@@ -354,8 +378,14 @@ type measuredLine struct {
 	// it is on color, its ink is framed, or squeezed, or the recognizer
 	// was unsure of it (see redrawPage).
 	printed bool
-	refs    lineRefs // what styles judges it against, unless printed
-	face    int      // the face it was printed in, once styles has judged it
+	// stacked is whether the line is a column of characters set upright,
+	// one under the other (see stacked).
+	stacked bool
+	// source is which of its page's lines the recognizer read it in, as
+	// part of it where it was set apart (see apart).
+	source int
+	refs   lineRefs // what styles judges it against, unless printed
+	face   int      // the face it was printed in, once styles has judged it
 }
 
 // pageImage is an image drawn at x, y, w points by h.
@@ -384,6 +414,11 @@ type textLine struct {
 	slanted     []bool
 	slant, back float64
 	offsets     []float64
+	// Vertical says the line is a column set upright in the fonts'
+	// vertical writing mode, its characters one under the other: x, y is
+	// where its first em box's top lies on its axis, and dx, dy the
+	// direction across it, to the right of its characters.
+	vertical bool
 }
 
 // newTextDoc starts a document set in the text fonts, but for the faces the
@@ -431,6 +466,19 @@ func (d *textDoc) setTraditional() {
 	d.traditional = [faces]*face{}
 }
 
+// faceSize is how large face fi's glyphs are set, or the face behind it's
+// for fallback+fi, in a line set at size 1: the monospaced faces' at
+// monoSize, where it is known, and the others' at 1.
+func (d *textDoc) faceSize(fi int) float64 {
+	if fi >= fallback {
+		fi -= fallback
+	}
+	if (fi == mono || fi == monoBold) && d.monoSize > 0 {
+		return d.monoSize
+	}
+	return 1
+}
+
 // font is the document's face i, or for fallback+i, the text font behind
 // face i (see fallbacks).
 func (d *textDoc) font(i int) *face {
@@ -449,15 +497,24 @@ func (d *textDoc) font(i int) *face {
 // were not read. SetLines starts a new set for a page whose characters
 // might not fit in the last.
 func (d *textDoc) cid(s *cidSet, f int, r rune, width int) uint16 {
-	k := code{f, r, width}
+	return d.cidIn(s, code{face: f, r: r, width: width})
+}
+
+// cidIn numbers k as cid numbers a character.
+func (d *textDoc) cidIn(s *cidSet, k code) uint16 {
 	if c, ok := s.cids[k]; ok {
 		return c
 	}
 	if len(s.codes) >= maxCIDs {
 		// Out of CIDs, on a page of more characters than a set numbers: the
 		// character at its own advance, if it has one.
-		font := d.font(f).ttf
-		if c, ok := s.cids[code{f, r, font.Advance(font.Glyph(r))}]; ok {
+		font := d.font(k.face).ttf
+		own := k
+		own.width = font.Advance(font.Glyph(k.r))
+		if k.vertical {
+			own.width = font.UnitsPerEm
+		}
+		if c, ok := s.cids[own]; ok {
 			return c
 		}
 		return 0
@@ -483,8 +540,9 @@ func (d *textDoc) build() []byte {
 		sets = []*cidSet{{}} // no text, but a ToUnicode map all the same
 	}
 	// The faces each set's pages set text in, by what the pages call them:
-	// F1 to F12 in the first set, F13 to F24 in the next, and so on, the
-	// fallbacks after the faces.
+	// F1 to F20 in the first set, F21 to F40 in the next, and so on, the
+	// fallbacks after the faces; and V1 to V20 and on, those set upright in
+	// columns, in the vertical writing mode.
 	fontNames := make([]string, len(sets))
 	for si, s := range sets {
 		tu := toUnicode
@@ -508,7 +566,11 @@ func (d *textDoc) build() []byte {
 			if len(cids) == 0 {
 				continue
 			}
-			fmt.Fprintf(&names, " /F%d %d 0 R", si*allFaces+fi+1, d.writeFont(w, s, fi, cids, tu))
+			h, v := d.writeFont(w, s, fi, cids, tu)
+			fmt.Fprintf(&names, " /F%d %d 0 R", si*allFaces+fi+1, h)
+			if v != 0 {
+				fmt.Fprintf(&names, " /V%d %d 0 R", si*allFaces+fi+1, v)
+			}
 		}
 		fontNames[si] = names.String()
 	}
@@ -533,15 +595,18 @@ func (d *textDoc) build() []byte {
 		w.object(pageID, fmt.Sprintf("<< /Type /Page /Parent %d 0 R /MediaBox [0 0 %s %s] "+
 			"/Resources << /Font <<%s >> /XObject <<%s >> >> /Contents %d 0 R >>",
 			pageTree, num(p.width), num(p.height), fontNames[p.set], xobjects.String(), contentID))
-		w.stream(contentID, "", p.content(sets[p.set]))
+		w.stream(contentID, "", p.content(sets[p.set], d.faceSize))
 	}
 	w.object(pageTree, fmt.Sprintf("<< /Type /Pages /Kids [%s] /Count %d >>", strings.Join(kids, " "), len(d.pages)))
 	return w.finish(catalog)
 }
 
 // writeFont writes face fi, subset to the glyphs of cids in set s, as a
-// Type 0 font and returns its object's ID.
-func (d *textDoc) writeFont(w *pdfWriter, s *cidSet, fi int, cids []int, toUnicode int) int {
+// Type 0 font and returns its object's ID, and, where some of cids are
+// set upright down columns, the ID of another, in the vertical writing
+// mode, of the same glyphs, else 0. A column's characters advance down it
+// by their codes' widths, their em boxes centered across it (see emTop).
+func (d *textDoc) writeFont(w *pdfWriter, s *cidSet, fi int, cids []int, toUnicode int) (font, vertical int) {
 	fc := d.font(fi)
 	f := fc.ttf
 	font, cidFont, descriptor, fontFile, cidToGID := w.nextID, w.nextID+1, w.nextID+2, w.nextID+3, w.nextID+4
@@ -551,11 +616,25 @@ func (d *textDoc) writeFont(w *pdfWriter, s *cidSet, fi int, cids []int, toUnico
 
 	glyphs := make([]uint16, 0, len(cids))
 	gidMap := make([]byte, 2*(len(s.codes)+1))
-	// Widths in runs of consecutive CIDs: c [w w ...].
-	var widths strings.Builder
+	// Widths in runs of consecutive CIDs: c [w w ...], and those of the
+	// characters set upright: c [w1y v1x v1y ...].
+	var widths, heights strings.Builder
 	for k, cid := range cids {
 		c := s.codes[cid-1]
-		g := f.Glyph(c.r)
+		g, width := f.Glyph(c.r), c.width
+		if c.vertical {
+			g = verticalGlyph(f, c.r)
+			width = f.Advance(g)
+			if heights.Len() > 0 && cid >= 2 && s.codes[cid-2].vertical && s.codes[cid-2].face == fi {
+				heights.WriteByte(' ')
+			} else {
+				if heights.Len() > 0 {
+					heights.WriteString("] ")
+				}
+				fmt.Fprintf(&heights, "%d [", cid)
+			}
+			fmt.Fprintf(&heights, "%s %s %s", scale(-c.width), scale(width/2), num(emTop(f)*1000/em))
+		}
 		glyphs = append(glyphs, g)
 		gidMap[2*cid], gidMap[2*cid+1] = byte(g>>8), byte(g)
 		if k == 0 || cids[k-1] != cid-1 {
@@ -566,9 +645,16 @@ func (d *textDoc) writeFont(w *pdfWriter, s *cidSet, fi int, cids []int, toUnico
 		} else {
 			widths.WriteByte(' ')
 		}
-		widths.WriteString(scale(c.width))
+		widths.WriteString(scale(width))
 	}
 	widths.WriteString("]")
+	w2 := ""
+	if heights.Len() > 0 {
+		heights.WriteString("]")
+		vertical = w.nextID
+		w.nextID++
+		w2 = " /W2 [" + heights.String() + "]"
+	}
 	// A subset's name starts with a tag of six capitals, unique to it.
 	sum := sha256.Sum256(append([]byte(f.PostScriptName), gidMap...))
 	tag := make([]byte, 6)
@@ -579,15 +665,23 @@ func (d *textDoc) writeFont(w *pdfWriter, s *cidSet, fi int, cids []int, toUnico
 
 	w.object(font, fmt.Sprintf("<< /Type /Font /Subtype /Type0 /BaseFont /%s /Encoding /Identity-H "+
 		"/DescendantFonts [%d 0 R] /ToUnicode %d 0 R >>", name, cidFont, toUnicode))
+	if vertical != 0 {
+		w.object(vertical, fmt.Sprintf("<< /Type /Font /Subtype /Type0 /BaseFont /%s /Encoding /Identity-V "+
+			"/DescendantFonts [%d 0 R] /ToUnicode %d 0 R >>", name, cidFont, toUnicode))
+	}
 	w.object(cidFont, fmt.Sprintf("<< /Type /Font /Subtype /CIDFontType2 /BaseFont /%s "+
 		"/CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> "+
-		"/FontDescriptor %d 0 R /CIDToGIDMap %d 0 R /DW 1000 /W [%s] >>",
-		name, descriptor, cidToGID, widths.String()))
+		"/FontDescriptor %d 0 R /CIDToGIDMap %d 0 R /DW 1000 /W [%s]%s >>",
+		name, descriptor, cidToGID, widths.String(), w2))
 	// Flags: symbolic, as fonts beyond the standard Latin characters are,
-	// and serif (2) for the serif faces.
+	// serif (2) for the serif faces, and fixed-pitch (1) for the
+	// monospaced ones.
 	flags, stem := 4, 80
 	if fc.serif {
 		flags |= 2
+	}
+	if fc.fixed {
+		flags |= 1
 	}
 	if fc.bold {
 		stem = 140
@@ -599,15 +693,26 @@ func (d *textDoc) writeFont(w *pdfWriter, s *cidSet, fi int, cids []int, toUnico
 	sub := f.Subset(glyphs)
 	w.stream(fontFile, fmt.Sprintf("/Length1 %d", len(sub)), sub)
 	w.stream(cidToGID, "", gidMap)
-	return font
+	return font, vertical
 }
 
-// content draws the page's pictures, then its lines over them, each
-// stretch of a line in the face its characters are numbered in, in s.
-func (p *textPage) content(s *cidSet) []byte {
+// content draws the page's pictures and its line art, then its lines over
+// them, each stretch of a line in the face its characters are numbered in,
+// in s, at the line's size times what faceSize gives the face.
+func (p *textPage) content(s *cidSet, faceSize func(fi int) float64) []byte {
 	var b bytes.Buffer
 	for i, img := range p.images {
 		fmt.Fprintf(&b, "q %s 0 0 %s %s %s cm /Im%d Do Q\n", num(img.w), num(img.h), num(img.x), num(img.y), i)
+	}
+	if len(p.paths) > 0 {
+		// Line art is drawn in the rendered page's pixels, y down.
+		fmt.Fprintf(&b, "q %s 0 0 %s 0 %s cm\n", num(p.sx), num(-p.sy), num(p.height))
+		for _, a := range p.paths {
+			fmt.Fprintf(&b, "%s rg\n", rg(a.color))
+			b.Write(a.ops)
+			b.WriteString("f\n")
+		}
+		b.WriteString("Q\n")
 	}
 	for _, l := range p.lines {
 		if len(l.cids) == 0 {
@@ -660,7 +765,11 @@ func (p *textPage) content(s *cidSet) []byte {
 					fmt.Fprintf(&b, "%s rg\n", rg(color))
 				}
 				if f != in {
-					fmt.Fprintf(&b, "/F%d %s Tf\n", p.set*allFaces+f+1, num(l.size))
+					prefix := "F"
+					if l.vertical {
+						prefix = "V"
+					}
+					fmt.Fprintf(&b, "/%s%d %s Tf\n", prefix, p.set*allFaces+f+1, num(l.size*faceSize(f)))
 					in = f
 				}
 				b.WriteString("<")

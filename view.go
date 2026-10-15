@@ -309,6 +309,8 @@ func (a *app) document(c *ui.Context, dragging bool) {
 	switch {
 	case page.Skipped:
 		note = "This page already had text, so it was left as it was."
+	case page.Layered && a.form == searchable:
+		note = "This page already had searchable text, so it was left as it was."
 	case a.form == searchable:
 		note = "Looks just like the scan, with text you can search, select and copy."
 	case a.form == retyped:

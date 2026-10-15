@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"image"
 	"math"
+	"regexp"
 	"slices"
 	"strings"
 	"unicode"
@@ -171,10 +172,10 @@ func (d *textDoc) draw(sh shape, size float64) (w, h int, cover func(x, y int) f
 	var buf sfnt.Buffer
 	pen := pad - float64(sh.left)*k
 	base := pad + float64(sh.yMax)*k
-	ppem := fixed.Int26_6(math.Round(size * 64))
 	for _, g := range sh.glyphs {
 		if g.inked {
 			fc := d.font(g.face)
+			ppem := fixed.Int26_6(math.Round(size * d.faceSize(g.face) * 64))
 			segs, err := fc.outline.LoadGlyph(&buf, sfnt.GlyphIndex(fc.ttf.Glyph(g.r)), ppem, nil)
 			if err == nil {
 				at := func(p fixed.Point26_6) (float32, float32) {
@@ -220,21 +221,40 @@ type lineRefs struct {
 	// judges the weight of too, setting each's face, as a verb set bold
 	// in a caption is, or nil.
 	words []wordInk
+	// hanBrush is how much more of the edges of the line's Chinese
+	// characters run aslant than the serif face's set in them, its Latin
+	// left out, and hans how many there are, 0 where unmeasured (see
+	// hanBrush).
+	hanBrush float64
+	hans     int
 }
 
 // wordInk is a word of a line's: a run of its glyphs, from from to to
 // (not included), between spaces or CJK characters, with letters letters
 // or digits. Ink is its ink's strokes, refs its strokes set in the serif
 // and sans-serif regular faces at the size the line's ink gives each, and
-// slant how far its upright strokes lean to the right, the tangent of
+// in the monospaced one at monoSize, and slant how far its upright
+// strokes lean to the right, the tangent of
 // their angle (see slant), beyond how far its letters lean set upright,
 // as a y's long stroke and a W's do. Face is the face styles sets it in.
 type wordInk struct {
 	from, to, letters int
 	ink               strokes
-	refs              [2]strokes
+	refs              [3]strokes
 	slant             float64
 	face              int
+	// mono is how much better its ink matches it set in the monospaced
+	// face than in the serif or sans-serif one, and monoSize how large
+	// that face would be set to span it, for its line's size 1 (see
+	// monoMatch), 0 where unmeasured.
+	mono, monoSize float64
+	// phrase is how far the run of words that spaces alone part it from
+	// leans, as slant does, measured over their ink together, and
+	// phraseLetters how many letters or digits they have, 0 for a word
+	// alone; s0 and s1 are where its ink lies along the line.
+	phrase        float64
+	phraseLetters int
+	s0, s1        float64
 }
 
 // refs sets a line's text in each face, at the size its ink gives it,
@@ -242,7 +262,16 @@ type wordInk struct {
 // needs none of the document's other lines, so it is done as each page is
 // redrawn, while the next pages are read.
 func (d *textDoc) refs(text string, f frame, in ink) lineRefs {
-	if !in.found || in.strokes.across == 0 || in.strokes.down == 0 || letters(text) < 2 {
+	if letters(text) < 2 {
+		return lineRefs{}
+	}
+	return d.refsOf(text, f, in)
+}
+
+// refsOf sets a line's text in each face as refs does, however few its
+// letters.
+func (d *textDoc) refsOf(text string, f frame, in ink) lineRefs {
+	if !in.found || in.strokes.across == 0 || in.strokes.down == 0 {
 		return lineRefs{}
 	}
 	var l lineRefs
@@ -261,6 +290,72 @@ func (d *textDoc) refs(text string, f frame, in ink) lineRefs {
 	}
 	l.ok = true
 	return l
+}
+
+// minHans is how many Chinese characters a line part Latin must have to
+// be told Kai by them alone (see hanBrush).
+const minHans = 4
+
+// hanBrush measures how much more of the edges of a line's Chinese
+// characters run aslant than the serif face's set in them, set in the
+// serif face as sh, tl and origins place it, each run of them over its
+// ink, their Latin left out, as styles judges a line by its whole ink
+// (see strokes): it returns that and how many Chinese characters there
+// are, or 0, 0 where fewer than minHans.
+func (d *textDoc) hanBrush(p *pixels, f frame, in ink, sh shape, tl textLine, origins []float64) (float64, int) {
+	if !in.found {
+		return 0, 0
+	}
+	// The runs of Chinese characters, by glyph.
+	var runs [][2]int
+	var text []rune
+	for i := 0; i < len(sh.glyphs); {
+		if !isHan(sh.glyphs[i].r) {
+			i++
+			continue
+		}
+		j := i
+		for j < len(sh.glyphs) && isHan(sh.glyphs[j].r) {
+			text = append(text, sh.glyphs[j].r)
+			j++
+		}
+		runs = append(runs, [2]int{i, j})
+		i = j
+	}
+	if len(text) < minHans {
+		return 0, 0
+	}
+	// Their ink, a column a pixel, run after run, three blank columns
+	// apart, up the line's ink with a row each way.
+	rows := int(math.Ceil(in.t1-in.t0)) + 2
+	contrast := float64(max(1, diff(in.fg, in.bg)))
+	var cols [][]float64
+	em := float64(d.fonts[sh.face].ttf.UnitsPerEm)
+	for _, r := range runs {
+		// From the first character's outline to the last's, with a pixel
+		// each way, not the punctuation's ink beside them, as a quote's.
+		first, last := sh.glyphs[r[0]], sh.glyphs[r[1]-1]
+		s0 := tl.x + (origins[r[0]]+float64(first.bounds[0])/em*tl.size)*tl.scale - 1
+		s1 := tl.x + (origins[r[1]-1]+float64(last.bounds[2])/em*tl.size)*tl.scale + 1
+		for s := math.Floor(s0); s < s1; s++ {
+			col := make([]float64, rows)
+			for y := range rows {
+				pt := f.point(s+0.5, in.t1+1-float64(y)-0.5)
+				if c := float64(diff(p.at(int(math.Floor(pt.X)), int(math.Floor(pt.Y))), in.bg)) / contrast; c >= 0.08 {
+					col[y] = min(1, c)
+				}
+			}
+			cols = append(cols, col)
+		}
+		cols = append(cols, make([]float64, rows), make([]float64, rows), make([]float64, rows))
+	}
+	if len(cols) < 3 || rows < 3 {
+		return 0, 0
+	}
+	ink := strokeStats(len(cols), rows, func(x, y int) float64 { return cols[x][y] }, true)
+	hsh := d.shape(string(text), serif)
+	ref := d.strokes(hsh, d.size(hsh, f, in), true)
+	return ink.oblique - ref.oblique, len(text)
 }
 
 // styles picks the face each line of a document was printed in, from its
@@ -286,8 +381,10 @@ func (d *textDoc) refs(text string, f frame, in ink) lineRefs {
 // Its weight is how much thicker its strokes, upright and level, are than
 // its kind's regular face's, against how much thicker they are in the
 // lines of its kind on its page, or in the document if its page has a few
-// such lines only: most are body text, which is set regular, though the
-// pages of a scan print a little darker or lighter than each other. A
+// such lines only, or they are mostly far heavier than the document's, as
+// on a cover set in bold (see pageHeavy): most are body text, which is set
+// regular, though the pages of a scan print a little darker or lighter
+// than each other. A
 // line is bold where its strokes are 13% thicker, as a medium weight is:
 // the fonts have no weight between, and headings set heavier than the
 // body, as they are in medium faces as often as in bold ones, read best
@@ -333,13 +430,14 @@ func (d *textDoc) styles(texts []string, frames []frame, inks []ink, lines []lin
 	geoms := make([]lineGeom, len(texts))
 	for i, l := range lines {
 		f, in := frames[i], inks[i]
-		geoms[i].cjk = d.shape(texts[i], serif).cjk()
+		// Its script by its characters, not the spaces between its words.
+		geoms[i].cjk = d.shape(strings.ReplaceAll(texts[i], " ", ""), serif).cjk()
 		if !in.found {
 			continue
 		}
 		top, bottom := f.point(in.s0, in.t1), f.point(in.s0, in.t0)
 		geoms[i] = lineGeom{ok: true, judged: l.ok, top: top.Y, bottom: bottom.Y, height: in.t1 - in.t0,
-			cjk: geoms[i].cjk, han: strings.ContainsFunc(texts[i], isHan), letters: letters(texts[i])}
+			width: in.s1 - in.s0, cjk: geoms[i].cjk, han: strings.ContainsFunc(texts[i], isHan), letters: letters(texts[i])}
 		if pages != nil {
 			geoms[i].page = pages[i]
 		}
@@ -358,18 +456,25 @@ func (d *textDoc) styles(texts []string, frames []frame, inks []ink, lines []lin
 		}
 		geoms[i].lean = nearest[1] - nearest[0]
 		geoms[i].brush = in.strokes.oblique - l.refs[serif].oblique
+		// A line mostly of Latin, as an example and its translation, is
+		// told Kai by its Chinese alone: its Latin, set in another face,
+		// slants as that face does, as much as Kai at times.
+		if l.hans >= minHans && !geoms[i].cjk {
+			geoms[i].brush, geoms[i].hanBrushed = l.hanBrush, true
+		}
 	}
-	// Kai is told only where there is a Kai face to set it in.
-	kindOf, paras := kinds(geoms, d.fonts[kai] != d.fonts[serif])
+	// Kai is told only where there is a Kai face to set it in, and
+	// FangSong from it where there is a FangSong one.
+	kindOf, paras := kinds(geoms, d.fonts[kai] != d.fonts[serif], d.fonts[fangsong] != d.fonts[kai])
 	for i, kind := range kindOf {
 		out[i] = kind
-		if kind == kai && lines[i].ok {
-			// Kai's strokes, which only its lines are weighed against.
-			sh := d.shape(texts[i], kai)
+		if (kind == kai || kind == fangsong) && lines[i].ok {
+			// The face's strokes, which only its lines are weighed against.
+			sh := d.shape(texts[i], kind)
 			if st := d.strokes(sh, d.size(sh, frames[i], inks[i]), false); st.across > 0 && st.down > 0 {
-				lines[i].refs[kai], lines[i].refs[kaiBold] = st, st
+				lines[i].refs[kind], lines[i].refs[kind+1] = st, st
 			} else {
-				lines[i].refs[kai], lines[i].refs[kaiBold] = lines[i].refs[serif], lines[i].refs[serifBold]
+				lines[i].refs[kind], lines[i].refs[kind+1] = lines[i].refs[serif], lines[i].refs[serifBold]
 			}
 		}
 	}
@@ -416,40 +521,63 @@ func (d *textDoc) styles(texts []string, frames []frame, inks []ink, lines []lin
 		// are more heavy than not.
 		own := byPage[key{page(i), out[i]}]
 		most := true
-		for _, k := range []int{serif, sans, kai} {
+		for _, k := range []int{serif, sans, kai, fangsong} {
 			most = most && len(own) >= len(byPage[key{page(i), k}])
 		}
 		b, ok := 0.0, false
 		if most {
 			b, ok = base(own)
 		}
+		// But a page whose lines of the kind are mostly heavier than the
+		// document's, by pageHeavy, as a cover set in bold type, is
+		// weighed against the document's: a page printed darker is no more
+		// than a fifth heavier.
+		if doc, dok := base(byDoc[out[i]]); ok && dok && b >= pageHeavy*doc {
+			b = doc
+		}
 		if !ok {
 			if b, ok = base(byDoc[out[i]]); !ok {
 				b = 1
 			}
 		}
-		if weights[i]/b >= 1.15 {
+		// A line told Kai or FangSong by its Chinese alone is weighed on
+		// its Latin too, printed in a face proportioned unlike the text
+		// fonts': it is bold only where surely heavier.
+		bold := 1.15
+		if geoms[i].hanBrushed && (out[i] == kai || out[i] == fangsong) {
+			bold = 1.3
+		}
+		if weights[i]/b >= bold {
 			out[i]++ // the kind's bold face
 		}
 		heavier[i] = weights[i] / b
 		bases[i] = b
 	}
 	paragraphWeights(paras, out, heavier)
+	d.alone(texts, frames, inks, lines, out, paras, gain, func(kind int) float64 {
+		if b, ok := base(byDoc[kind]); ok {
+			return b
+		}
+		return 1
+	})
 
 	// A word is set in its line's face but where it is surely heavier, by
 	// a fifth, than the lines of its kind are, in a line set regular, as
-	// a verb set bold in a caption is, or no more than a tenth heavier in
-	// one set bold. A word of a letter is in the face of the word after it,
-	// or before it, as "a" is in "Take a seat", but for a line's first, as
-	// "A", which is the line's, or a label's, as "A:", which is judged as
-	// words are, but surely heavier, by three tenths.
+	// a verb set bold in a caption is, its upright strokes too, which a
+	// bold face thickens most, where the blur of a small word's round
+	// letters thickens its level ones, as of "not" or "How" set regular;
+	// or no more than a tenth heavier in one set bold. A word of a letter
+	// is in the face of the word after it, or before it, as "a" is in
+	// "Take a seat", but for a line's first, as "A", which is the line's,
+	// or a label's, as "A:", which is judged as words are, but surely
+	// heavier, by three tenths.
 	for i, l := range lines {
 		kind := out[i] &^ 1
 		for k := range l.words {
 			w := &l.words[k]
 			w.face = out[i]
 			label := k == 0 && w.letters == 1 && w.to-w.from > 1 // as "A:", not "A"
-			if !l.ok || kind == kai || w.letters < 2 && !label || w.refs[kind/2].across == 0 || w.refs[kind/2].down == 0 {
+			if !l.ok || kind == kai || kind == fangsong || w.letters < 2 && !label || w.refs[kind/2].across == 0 || w.refs[kind/2].down == 0 {
 				continue
 			}
 			bold := 1.2
@@ -457,8 +585,9 @@ func (d *textDoc) styles(texts []string, frames []frame, inks []ink, lines []lin
 				bold = 1.3 // a label's letter, which tells less surely
 			}
 			across, down := max(w.ink.across-gain, 1.0/3), max(w.ink.down-gain, 1.0/3)
+			stems := across / w.refs[kind/2].across / bases[i]
 			switch h := math.Sqrt(across/w.refs[kind/2].across*down/w.refs[kind/2].down) / bases[i]; {
-			case out[i] == kind && h >= bold:
+			case out[i] == kind && h >= bold && stems >= bold:
 				w.face = kind + 1
 			case out[i] == kind+1 && h < 1.1:
 				w.face = kind
@@ -473,8 +602,242 @@ func (d *textDoc) styles(texts []string, frames []frame, inks []ink, lines []lin
 			}
 		}
 	}
+	d.monoSize = 0
+	if d.fonts[mono] != d.fonts[serif] {
+		d.monoWords(texts, lines, out, paras, bases, gain)
+	}
 	return out
 }
+
+// monoBetter is how much better a word's ink must match it set in the
+// monospaced face than in the serif or sans-serif one, by monoMatch, for
+// it to be told printed so by its ink alone: on a book on Linux, whose
+// code is set in a monospaced face, words of three glyphs or more that
+// match so measure up to 0.6, and English words in a grammar book and a
+// picture dictionary, none of it monospaced, 0.29 at most. MinMonoWords
+// is how many a document must have for any of its words to be set so.
+const (
+	monoBetter   = 0.35
+	minMonoWords = 3
+)
+
+// monoWords sets the words of lines printed in a monospaced face, as code
+// is, in the monospaced face, in a document that has minMonoWords words of
+// three glyphs or more, a letter among them, whose ink matches them set so
+// better than in the text faces, by monoBetter, or more. A word is so
+// where it is such a word, or reads as one does, or reads as code, with an
+// underscore, a pair of parentheses after it, as the recognizer may read
+// in the CJK punctuation after it too, or as a number in hexadecimal,
+// unless its line is set bold, where a book may set code in the line's
+// face, or its ink matches it set in the text faces surely better, by
+// monoBetter; and
+// every word of a paragraph of Latin, as code set apart, where most of
+// those it tells are, and a word too short to tell, as "cr3" or "=", where
+// the words beside it in its run of Latin are, each side or the side it
+// has one. A word is bold where it is surely heavier than the face's
+// regular, as words are weighed in their line's face (see styles), against
+// bases, its line's, its strokes less the scan's gain. The face is set as
+// large as the words told so by their ink in lines of Chinese are, by
+// their median, or where fewer than three are, all the words set so in
+// them, as their ink spans them: the Chinese gives a line its size, and
+// in lines of Latin alone, the line's size is the monospaced face's.
+func (d *textDoc) monoWords(texts []string, lines []lineRefs, out []int, paras [][]int, bases []float64, gain float64) {
+	// A word of three glyphs or more, a letter among them, as a number's
+	// digits are as far apart in a text face.
+	told := func(w wordInk) bool { return w.to-w.from >= 3 && w.letters >= 1 && w.monoSize > 0 }
+	runes := make([][]rune, len(texts))
+	for i, t := range texts {
+		runes[i] = []rune(strings.TrimSpace(t))
+	}
+	word := func(i int, w wordInk) string { return strings.Trim(string(runes[i][w.from:w.to]), ",;:.") }
+	monos := make([][]bool, len(lines))
+	sure := map[string]bool{}
+	for i, l := range lines {
+		monos[i] = make([]bool, len(l.words))
+		for k, w := range l.words {
+			if told(w) && w.mono >= monoBetter {
+				monos[i][k] = true
+				sure[word(i, w)] = true
+			}
+		}
+	}
+	n := 0
+	for _, m := range monos {
+		for _, yes := range m {
+			if yes {
+				n++
+			}
+		}
+	}
+	if n < minMonoWords {
+		return
+	}
+	for i, l := range lines {
+		for k, w := range l.words {
+			text := word(i, w)
+			switch {
+			case monos[i][k] || w.to-w.from < 2:
+			case sure[text]:
+				monos[i][k] = true
+			case (codeLike.MatchString(text) || strings.HasPrefix(string(runes[i][w.to:]), "（）")) &&
+				out[i]%2 == 0 && (w.monoSize == 0 || w.mono > -monoBetter):
+				monos[i][k] = true
+			}
+		}
+	}
+	cjk := func(i int) bool { return slices.ContainsFunc(runes[i], cjkRune) }
+	for _, para := range paras {
+		if slices.ContainsFunc(para, cjk) {
+			continue
+		}
+		yes, no := 0, 0
+		for _, i := range para {
+			for k, w := range lines[i].words {
+				switch {
+				case monos[i][k]:
+					yes++
+				case told(w):
+					no++
+				}
+			}
+		}
+		if yes >= 2 && yes > no {
+			for _, i := range para {
+				for k := range monos[i] {
+					monos[i][k] = true
+				}
+			}
+		}
+	}
+	for i, l := range lines {
+		// Whether a CJK character parts words a and b, which are in one
+		// run of Latin else.
+		apart := func(a, b wordInk) bool {
+			return a.to > b.from || slices.ContainsFunc(runes[i][a.to:b.from], cjkRune)
+		}
+		for k, w := range l.words {
+			if told(w) || monos[i][k] {
+				continue
+			}
+			prev := k > 0 && !apart(l.words[k-1], w)
+			next := k+1 < len(l.words) && !apart(w, l.words[k+1])
+			monos[i][k] = (prev || next) && (!prev || monos[i][k-1]) && (!next || monos[i][k+1])
+		}
+	}
+	var sizes, all []float64
+	for i, l := range lines {
+		for k := range l.words {
+			if !monos[i][k] {
+				continue
+			}
+			w := &l.words[k]
+			w.face = mono
+			if ref := w.refs[2]; w.letters >= 2 && ref.across > 0 && ref.down > 0 {
+				across, down := max(w.ink.across-gain, 1.0/3), max(w.ink.down-gain, 1.0/3)
+				if h := math.Sqrt(across/ref.across*down/ref.down) / bases[i]; h >= 1.2 && across/ref.across/bases[i] >= 1.2 {
+					w.face = monoBold
+				}
+			}
+			if w.monoSize > 0 && cjk(i) {
+				all = append(all, w.monoSize)
+				if told(*w) && w.mono >= monoBetter {
+					sizes = append(sizes, w.monoSize)
+				}
+			}
+		}
+	}
+	if len(sizes) < 3 {
+		sizes = all
+	}
+	if len(sizes) > 0 {
+		slices.Sort(sizes)
+		d.monoSize = sizes[len(sizes)/2]
+	}
+}
+
+// codeLike matches a word that reads as code: with an underscore, a pair
+// of parentheses after it, or a number in hexadecimal, as 0xc0000000, or
+// as the recognizer reads it, Oxc0000000.
+var codeLike = regexp.MustCompile(`_|[A-Za-z0-9]\(\)$|^[0O][xX][0-9A-Fa-f]+$`)
+
+// alone sets the kind and weight of a paragraph whose lines are each a
+// Chinese character alone, set large, as a cover's title down a column,
+// read a character a line, which have too few letters to be judged as
+// lines are (see styles), by its characters: the paragraph is sans-serif
+// where their strokes lean to it, by their median, and serif else, and
+// each character bold where its strokes are 15% thicker than its glyph's
+// in its kind's regular face, at the size its ink gives it, against base,
+// the weight of the document's lines of the kind, its strokes less gain,
+// the scan's thickening. Large is twice as high as the document's judged
+// lines' ink, by their median, or more: the grammar book's cover sets 思
+// and 维 eight times as high. A character alone at the size of the text,
+// as a colophon's or a picture dictionary's label, has too few strokes to
+// tell its kind or weight by, measuring a fifth heavier and leaning to
+// either kind by chance, and a paragraph's last line of a character is in
+// its paragraph: they are set as their paragraph is.
+func (d *textDoc) alone(texts []string, frames []frame, inks []ink, lines []lineRefs, out []int, paras [][]int, gain float64, base func(kind int) float64) {
+	var heights []float64
+	for i, l := range lines {
+		if l.ok {
+			heights = append(heights, inks[i].t1-inks[i].t0)
+		}
+	}
+	if len(heights) == 0 {
+		return
+	}
+	slices.Sort(heights)
+	large := 2 * heights[len(heights)/2]
+	one := func(i int) bool {
+		rs := []rune(strings.TrimSpace(texts[i]))
+		return !lines[i].ok && len(rs) == 1 && isHan(rs[0]) && inks[i].found && inks[i].t1-inks[i].t0 >= large
+	}
+	for _, para := range paras {
+		if !slices.ContainsFunc(para, one) || slices.ContainsFunc(para, func(i int) bool { return !one(i) }) {
+			continue
+		}
+		var leans []float64
+		refs := make([]lineRefs, len(para))
+		for k, i := range para {
+			refs[k] = d.refsOf(texts[i], frames[i], inks[i])
+			if !refs[k].ok {
+				continue
+			}
+			across := max(inks[i].strokes.across-gain, 1.0/3)
+			down := max(inks[i].strokes.down-gain, 1.0/3)
+			nearest := [2]float64{math.Inf(1), math.Inf(1)} // serif, sans
+			for fi, ref := range refs[k].refs[:kai] {
+				nearest[fi/2] = min(nearest[fi/2], math.Abs(math.Log(across/down*ref.down/ref.across)))
+			}
+			leans = append(leans, nearest[1]-nearest[0])
+		}
+		if len(leans) == 0 {
+			continue
+		}
+		slices.Sort(leans)
+		kind := serif
+		if leans[len(leans)/2] < 0 {
+			kind = sans
+		}
+		for k, i := range para {
+			out[i] = kind
+			if reg := refs[k].refs[kind]; refs[k].ok && reg.across > 0 && reg.down > 0 {
+				across := max(inks[i].strokes.across-gain, 1.0/3)
+				down := max(inks[i].strokes.down-gain, 1.0/3)
+				w := math.Sqrt(across / reg.across * down / reg.down)
+				if w/base(kind) >= 1.15 {
+					out[i] = kind + 1
+				}
+			}
+		}
+	}
+}
+
+// pageHeavy is how many times as heavy as the lines of its kind in the
+// document the lines of a kind on a page must be, by their median, for the
+// page to be weighed against the document's rather than its own (see
+// styles): a book's pages of body text print within a fifth of each other,
+// 0.94 to 1.24 times, and a cover set mostly in bold type 1.4.
+const pageHeavy = 1.3
 
 // paragraphWeights votes on the weight of paragraphs' lines, as kinds
 // returns them: out has each line in its kind's bold face where it is 15%
@@ -495,7 +858,7 @@ func paragraphWeights(paras [][]int, out []int, heavier []float64) {
 			count[out[i]]++
 		}
 		kind := serif
-		for _, k := range []int{sans, kai} {
+		for _, k := range []int{sans, kai, fangsong} {
 			if count[k]+count[k+1] > count[kind]+count[kind+1] {
 				kind = k
 			}
@@ -520,16 +883,36 @@ type lineGeom struct {
 	page        int
 	top, bottom float64 // in the page's pixels, y down
 	height      float64
-	cjk         bool // mostly CJK characters
-	han         bool // some Chinese characters
+	width       float64 // its ink's, along it
+	cjk         bool    // mostly CJK characters
+	han         bool    // some Chinese characters
 	letters     int
 	lean        float64
 	brush       float64
+	// hanBrushed is whether brush is its Chinese characters' alone, as
+	// of a line part Latin (see styles).
+	hanBrushed bool
 }
 
 // sure is how far a CJK line's strokes must lean to a kind for the line to
-// be set in it against its paragraph: as far as a heading's do.
-const sure = 0.15
+// be set in it against its paragraph: as far as a heading's do. A heading
+// run into the paragraph below it, as its first line, three quarters as
+// wide as the paragraph's other lines or narrower, must lean headingSure:
+// a book's sans-serif headings above serif text lean to sans-serif by
+// 0.084 to 0.14 at least, and the body's first lines, a measure wide, by
+// 0.087 at most.
+const (
+	sure        = 0.15
+	headingSure = 0.08
+)
+
+// tie is how far a paragraph of a line or two of Latin must lean to
+// sans-serif for it to be set so where most of the document's Latin lines
+// lean to serif: small lowercase Latin, blurred, leans to sans-serif more
+// than its face does, and a grammar book's short lines in Times, as "a
+// mess", lean so by 0.011 and 0.016, and a cartoon's casual "don't" by
+// 0.027.
+const tie = 0.02
 
 // brushy is how much more of a CJK paragraph's edges must run aslant than
 // the serif face's, set in its text, for it to be Kai. In scans of 24 to
@@ -542,12 +925,41 @@ const sure = 0.15
 // of its size on its page are, by their median, as a preface's first line.
 const brushy, brushyAlone = 0.09, 0.12
 
-// kinds picks each line's kind, serif, sans-serif or Kai, by its
+// brushyEven is how much more of a CJK paragraph's edges must run aslant
+// than the serif face's for it to be Kai or FangSong where its strokes
+// lean to sans-serif, as FangSong's even ones do, and Song's never: a pale
+// scan's blur straightens them, as it does a book's FangSong preface's to
+// 0.084 to 0.10 by paragraph, its Song chapters' to 0.07 or less. And
+// brushyNear is how much a paragraph's must for it to be either where the
+// CJK lines of its size on its page are.
+const brushyEven, brushyNear = 0.08, 0.07
+
+// hanAlone is how much more of the edges of a line's Chinese characters,
+// measured alone, as of a line mostly of Latin (see hanBrush), must run
+// aslant than the serif face's for the line alone to be Kai: in a book's
+// pages, its Song lines' run 0.05 to 0.085 more, a few up to 0.13, as a
+// footnote's small type, and its Kai examples' translations 0.12 to 0.22,
+// 0.15 by their median.
+const hanAlone = 0.14
+
+// kaiBrush is how much more of a paragraph's edges run aslant than the
+// serif face's, by their median, for it to be Kai rather than FangSong,
+// where it is either: a brush's strokes slant and curve more than
+// FangSong's, whose level strokes rise straight. In scans of 36 to 64
+// pixels an em, lines of Kai (Kaiti SC, FZKai) run 0.134 to 0.168 more,
+// 0.15 by their mean, and lines of FangSong (STFangsong, Zhuque Fangsong)
+// 0.091 to 0.137, 0.11; at 24 pixels, where blur straightens them, 0.112
+// to 0.145 and 0.096 to 0.140, which a paragraph's median tells apart
+// better than a line alone.
+const kaiBrush = 0.13
+
+// kinds picks each line's kind, serif, sans-serif, Kai or FangSong, by its
 // paragraph: the lines that follow each other down a page, about as high
 // as each other and no further apart than lines of text are, in the same
 // script. A paragraph with Chinese in it is Kai where its lines' edges run
 // aslant by brushy or more, by their median, if withKai, and a line alone
-// or a paragraph mostly of Latin as isKai says. Else each line's strokes
+// or a paragraph mostly of Latin as isKai says; FangSong rather, if
+// withFangSong, where they run aslant less than kaiBrush. Else each line's strokes
 // lean to serif or sans-serif, a few far enough to be wrong: lowercase
 // Latin, small and blurred, leans to sans-serif more than its face does.
 // The paragraph's kind is where its lines lean, by their median, of those
@@ -556,12 +968,13 @@ const brushy, brushyAlone = 0.09, 0.12
 // a line or two, as a heading or a label, leaning to serif less than
 // surely, is sans-serif where most of the document's lines of its script
 // lean to it: a sans-serif face's bold has more contrast than its regular,
-// and leans a little to serif. A paragraph it cannot judge at all is of
+// and leans a little to serif; and one of Latin leaning to sans-serif by
+// less than tie is serif where most of them lean to that. A paragraph it cannot judge at all is of
 // the kind most of the document's lines of its script lean to. Lines it
 // cannot judge take their paragraph's kind, and lines it knows nothing of,
 // whose ink was not found, the document's. It returns the paragraphs too,
 // as lists of lines.
-func kinds(lines []lineGeom, withKai bool) ([]int, [][]int) {
+func kinds(lines []lineGeom, withKai, withFangSong bool) ([]int, [][]int) {
 	order := make([]int, 0, len(lines))
 	for i, l := range lines {
 		if l.ok {
@@ -605,30 +1018,71 @@ each:
 	// A paragraph mostly of Chinese tells by its own edges. A line alone
 	// does unless it slants less than brushyAlone, and one mostly of Latin,
 	// as an English title quoted in Chinese, whose Latin slants no more than
-	// the serif face's, never does: they are Kai where the CJK lines of
-	// their size on their page are.
-	isKai := func(para []int, brushes []float64) bool {
+	// the serif face's, is Kai where the CJK lines of its size on its page
+	// are, and else by its lines with Chinese enough to tell by, their
+	// Chinese alone (see styles), as an English example and its Kai
+	// translation.
+	// It returns how far, by the median, the edges it was told by run
+	// aslant, which tells Kai from FangSong (see kaiBrush).
+	// A paragraph whose strokes lean to sans-serif, as FangSong's even ones
+	// do, Song's never, is so from brushyEven; and one a little short of
+	// either, as one whose lines are a good part Latin, whose letters slant
+	// less, where the CJK lines of its size on its page are.
+	brushed := func(brushes, leans []float64) bool {
+		b := median(slices.Clone(brushes))
+		return b >= brushy || b >= brushyEven && median(slices.Clone(leans)) < 0
+	}
+	isKai := func(para []int, brushes, leans []float64) (bool, float64) {
 		if !withKai || !slices.ContainsFunc(para, func(i int) bool { return lines[i].judged && lines[i].han }) {
-			return false
+			return false, 0
 		}
 		l := lines[para[0]]
 		if l.cjk {
-			switch b := median(brushes); {
-			case b < brushy:
-				return false
-			case len(brushes) >= 2 || b >= brushyAlone:
-				return true
+			b, many := median(slices.Clone(brushes)), len(brushes) >= 2
+			switch {
+			case many && brushed(brushes, leans), !many && b >= brushyAlone:
+				return true, b
+			case b < brushy && !(many && b >= brushyNear):
+				return false, 0
 			}
 		}
-		var around []float64 // the CJK lines of its size on its page
+		var around, aroundLeans []float64 // the CJK lines of its size on its page
 		for _, j := range byPage[l.page] {
 			m := lines[j]
 			if !slices.Contains(para, j) && m.judged && m.cjk && m.letters >= 4 &&
 				math.Abs(m.height-l.height) <= 0.15*max(m.height, l.height) {
-				around = append(around, m.brush)
+				around, aroundLeans = append(around, m.brush), append(aroundLeans, m.lean)
 			}
 		}
-		return len(around) >= 2 && median(around) >= brushy
+		if len(around) >= 2 && brushed(around, aroundLeans) {
+			return true, median(around)
+		}
+		if l.cjk {
+			return false, 0
+		}
+		// A paragraph mostly of Latin whose lines have Chinese enough to
+		// tell by, by their Chinese alone (see styles), as surely as a line
+		// alone, by their lower median, and a line alone more surely, from
+		// hanAlone: a few characters' edges tell less than a paragraph's,
+		// nor Kai from FangSong, which the CJK lines about it, where they
+		// are either, have told; so it is Kai.
+		var hb []float64
+		for _, i := range para {
+			if m := lines[i]; m.judged && m.hanBrushed {
+				hb = append(hb, m.brush)
+			}
+		}
+		least := brushyAlone
+		if len(hb) == 1 {
+			least = hanAlone
+		}
+		if len(hb) > 0 {
+			v := slices.Sorted(slices.Values(hb))
+			if b := v[(len(v)-1)/2]; b >= least {
+				return true, max(b, kaiBrush)
+			}
+		}
+		return false, 0
 	}
 	// The kind most of the document's lines of a script lean to, by their
 	// median, of those with a few letters to judge by, or of all its lines
@@ -677,21 +1131,41 @@ each:
 			}
 			continue
 		}
-		if isKai(para, brushes) {
+		if ok, brush := isKai(para, brushes, leans); ok {
+			kind := kai
+			if withFangSong && brush < kaiBrush {
+				kind = fangsong
+			}
 			for _, i := range para {
-				out[i] = kai
+				out[i] = kind
 			}
 			continue
 		}
 		slices.Sort(leans)
 		lean := leans[len(leans)/2]
 		kind := serif
-		if lean < 0 || len(leans) < 3 && lean < sure && prevail[lines[para[0]].cjk] == sans {
+		short, cjk := len(leans) < 3, lines[para[0]].cjk
+		switch {
+		case short && lean < sure && prevail[cjk] == sans:
+			kind = sans
+		case short && !cjk && lean > -tie && prevail[cjk] == serif:
+		case lean < 0:
 			kind = sans
 		}
-		for _, i := range para {
+		// A heading run into the paragraph, its first line, much shorter
+		// than the lines after it, leans the other way less surely.
+		var widths []float64
+		for _, i := range para[1:] {
+			widths = append(widths, lines[i].width)
+		}
+		heading := len(widths) > 0 && lines[para[0]].width <= 0.75*median(widths)
+		for k, i := range para {
 			out[i] = kind
-			if l := lines[i]; l.judged && l.cjk && (kind == serif && l.lean <= -sure || kind == sans && l.lean >= sure) {
+			least := sure
+			if k == 0 && heading {
+				least = headingSure
+			}
+			if l := lines[i]; l.judged && l.cjk && (kind == serif && l.lean <= -least || kind == sans && l.lean >= least) {
 				out[i] = kind ^ sans // the other kind
 			}
 		}

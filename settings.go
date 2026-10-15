@@ -28,22 +28,28 @@ func (a *app) updatesChanged() { a.fx.setUpdates(a.updates) }
 func (a *app) settingsDialog(c *ui.Context) {
 	t := c.Theme()
 	ui.Modal(c, &a.settingsOpen, func() {
-		ui.Column(c).Width(560).MaxWidthPercent(100).Gap(16).Children(func() {
+		// The fonts and updates scroll where the window is too short for
+		// them, between the title and Done.
+		ui.Column(c).Width(560).MaxWidthPercent(100).MinHeight(0).Shrink(1).Gap(16).Children(func() {
 			ui.Text(c, "Settings").FontSize(17).Bold()
-			ui.Column(c).Gap(4).Children(func() {
-				ui.Text(c, "Fonts").Bold()
-				ui.Text(c, "Retyped PDFs set each line in a font of the kind and weight it was printed in. "+
-					"Choose TrueType fonts (.ttf or .ttc) to use instead; the built-in fonts set the characters they lack. "+
-					"Fonts apply to the PDFs read from now on.").
-					TextColor(t.TextMuted)
-			})
-			// One form, so that the labels of both line up.
-			ui.Form(c, func() {
-				for i := range fontFaces {
-					a.fontField(c, i)
-				}
-				ui.Divider(c)
-				a.updatesField(c)
+			ui.Scroll(c.Key("settings")).MinHeight(0).Shrink(1).Children(func() {
+				ui.Column(c).Gap(16).Children(func() {
+					ui.Column(c).Gap(4).Children(func() {
+						ui.Text(c, "Fonts").Bold()
+						ui.Text(c, "Retyped PDFs set each line in a font of the kind and weight it was printed in. "+
+							"Choose TrueType fonts (.ttf or .ttc) to use instead; the built-in fonts set the characters they lack. "+
+							"Fonts apply to the PDFs read from now on.").
+							TextColor(t.TextMuted)
+					})
+					// One form, so that the labels of both line up.
+					ui.Form(c, func() {
+						for i := range fontFaces {
+							a.fontField(c, i)
+						}
+						ui.Divider(c)
+						a.updatesField(c)
+					})
+				})
 			})
 			ui.Row(c).Justify(ui.End).Children(func() {
 				ui.PrimaryButton(c, "Done").OnClick(func() { a.settingsOpen = false })

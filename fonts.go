@@ -28,6 +28,9 @@ var fontFaces = [...]struct {
 	{"sans", "Sans-serif", "Noto Sans SC", false},
 	{"sans-bold", "Sans-serif bold", "Noto Sans SC Bold", true},
 	{"kai", "Kai (楷体)", "LXGW WenKai", false},
+	{"fangsong", "FangSong (仿宋)", "Zhuque Fangsong", false},
+	{"mono", "Monospaced", "Source Code Pro", false},
+	{"mono-bold", "Monospaced bold", "Source Code Pro Bold", true},
 }
 
 // fontChoice is a font file the user chose for a face, and which of the
@@ -133,7 +136,8 @@ func useFonts(conv *pdfocr.Converter, fonts fontChoices) fontChoices {
 		}
 		use[i] = font
 	}
-	err := conv.SetUserFonts(pdfocr.TextFonts{Serif: use[0], SerifBold: use[1], Sans: use[2], SansBold: use[3], Kai: use[4]})
+	err := conv.SetUserFonts(pdfocr.TextFonts{Serif: use[0], SerifBold: use[1], Sans: use[2], SansBold: use[3], Kai: use[4], FangSong: use[5],
+		Mono: use[6], MonoBold: use[7]})
 	for i := range fonts {
 		if err != nil && use[i].Data != nil {
 			fonts[i].err = fontError(err)

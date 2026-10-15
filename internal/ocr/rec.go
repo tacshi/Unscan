@@ -3,6 +3,7 @@ package ocr
 import (
 	"fmt"
 	"math"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -78,18 +79,93 @@ func (e *Engine) recognize(crops []*rgbImage) ([]recognized, error) {
 	steps, classes := int(shape[1]), int(shape[2])
 	res := make([]recognized, len(crops))
 	parallel(len(crops), func(i int) {
-		res[i] = e.decode(probs[i*steps*classes:][:steps*classes], steps, classes)
+		c := crops[i]
+		w := min(int(math.Ceil(recHeight*float64(c.w)/float64(c.h))), width)
+		gap := blankAt(input[i*3*plane:][:3*plane], w, width, float64(width)/float64(steps))
+		res[i] = e.decode(probs[i*steps*classes:][:steps*classes], steps, classes, gap)
 	})
 	return res, nil
 }
 
+// minSpace is how likely the recognizer must find a space between two
+// Latin letters, though it finds what it reads there likelier, for the
+// space to be read where the line's pixels part there as words do (see
+// decode): most of the spaces it drops between words, as in "Heloves me"
+// or "CanIgo", it finds 0.1 to 0.5 likely, and most of a word's letters'
+// gaps 0.001 likely or less; but a few up to 0.5, in code set in a
+// monospaced face, whose narrow letters stand apart in their cells.
+const minSpace = 0.1
+
+// blankAt reports, for a crop resized into a recognizer's input, w of its
+// width columns drawn, each step of its output stepWidth columns wide, how
+// many blank columns run from step t0 to step t1 at most. A column is
+// blank where none of its pixels is darker than halfway from the crop's
+// paper, its lightest fifth, as a dense line inks half of it, to its ink,
+// its darkest fiftieth.
+func blankAt(input []float32, w, width int, stepWidth float64) func(t0, t1 int) int {
+	plane := recHeight * width
+	lum := func(x, y int) float32 {
+		i := y*width + x
+		return input[i] + input[plane+i] + input[2*plane+i]
+	}
+	values := make([]float32, 0, recHeight*w)
+	for y := range recHeight {
+		for x := range w {
+			values = append(values, lum(x, y))
+		}
+	}
+	if len(values) == 0 {
+		return func(int, int) int { return 0 }
+	}
+	slices.Sort(values)
+	paper, ink := values[len(values)*4/5], values[len(values)/50]
+	limit := (paper + ink) / 2
+	blank := make([]bool, w)
+	for x := range w {
+		blank[x] = true
+		for y := range recHeight {
+			if lum(x, y) < limit {
+				blank[x] = false
+				break
+			}
+		}
+	}
+	return func(t0, t1 int) int {
+		run, longest := 0, 0
+		for x := max(0, int(float64(t0)*stepWidth)); x < min(w, int(float64(t1+1)*stepWidth)); x++ {
+			if !blank[x] {
+				run = 0
+			} else {
+				run++
+				longest = max(longest, run)
+			}
+		}
+		return longest
+	}
+}
+
 // decode reads CTC output greedily: the likeliest class of each step,
 // without repeats and blanks; the score is the mean probability of the
-// characters kept.
-func (e *Engine) decode(probs []float32, steps, classes int) recognized {
-	var b strings.Builder
+// characters kept. A space between two Latin letters is read where the
+// recognizer finds it likely though less than what it reads, as likely as
+// minSpace at a step from the first's to the second's, and the line's
+// pixels part between them as words do: by as many blank columns, from the
+// first's last step to the second's first (see blankAt), as an eighth of
+// the line's height or more, and twice as many as part the other letters
+// of their run of letters and digits, by their median, or more. In the
+// grammar book and the book on Linux, a space it drops parts its run 2.3
+// to 11 times as widely as its letters; in code set in a monospaced face,
+// its narrow letters stand apart in their cells 0.8 to 1.6 times as widely
+// as the rest, and twice in PMD_SHIFT: a run that reads as code, with an
+// underscore or as a number in hexadecimal, is not parted. Nor is a run of
+// two letters, which has no others to measure the gap against.
+func (e *Engine) decode(probs []float32, steps, classes int, gap func(t0, t1 int) int) recognized {
+	type read struct {
+		c           int // its class
+		first, last int // the steps it is read at
+	}
+	var chars []read
 	var sum float32
-	var n int
 	prev := -1
 	for t := range steps {
 		row := probs[t*classes:][:classes]
@@ -99,18 +175,72 @@ func (e *Engine) decode(probs []float32, steps, classes int) recognized {
 				best = c
 			}
 		}
-		if best != 0 && best != prev {
-			b.WriteString(e.chars[best])
+		switch {
+		case best != 0 && best != prev:
+			chars = append(chars, read{best, t, t})
 			sum += row[best]
-			n++
+		case best != 0:
+			chars[len(chars)-1].last = t
 		}
 		prev = best
 	}
-	if n == 0 {
+	if len(chars) == 0 {
 		return recognized{}
 	}
-	return recognized{text: b.String(), score: sum / float32(n)}
+	space := classes - 1
+	latin := func(c int) bool {
+		s := e.chars[c]
+		return len(s) == 1 && (s[0] >= 'a' && s[0] <= 'z' || s[0] >= 'A' && s[0] <= 'Z')
+	}
+	word := func(c int) bool { // a letter, a digit or an underscore
+		s := e.chars[c]
+		return latin(c) || len(s) == 1 && (s[0] >= '0' && s[0] <= '9' || s[0] == '_')
+	}
+	// parts reports whether a space parts chars k-1 and k.
+	parts := func(k int) bool {
+		var most float32
+		for t := chars[k-1].first; t <= chars[k].last; t++ {
+			most = max(most, probs[t*classes+space])
+		}
+		run := gap(chars[k-1].last, chars[k].first)
+		if most < minSpace || run < max(3, recHeight/8) {
+			return false
+		}
+		lo, hi := k-1, k // the run of letters and digits
+		for lo > 0 && word(chars[lo-1].c) {
+			lo--
+		}
+		for hi+1 < len(chars) && word(chars[hi+1].c) {
+			hi++
+		}
+		var text strings.Builder
+		var others []int
+		for q := lo; q <= hi; q++ {
+			text.WriteString(e.chars[chars[q].c])
+			if q > lo && q != k {
+				others = append(others, gap(chars[q-1].last, chars[q].first))
+			}
+		}
+		if len(others) == 0 || codeLike.MatchString(text.String()) {
+			return false
+		}
+		slices.Sort(others)
+		return run >= 2*others[len(others)/2]
+	}
+	var b strings.Builder
+	for k, ch := range chars {
+		if k > 0 && latin(chars[k-1].c) && latin(ch.c) && parts(k) {
+			b.WriteByte(' ')
+		}
+		b.WriteString(e.chars[ch.c])
+	}
+	return recognized{text: b.String(), score: sum / float32(len(chars))}
 }
+
+// codeLike matches a run of letters and digits that reads as code: with an
+// underscore, or as a number in hexadecimal, as 0xc0000000, or as the
+// recognizer reads it, Oxc0000000.
+var codeLike = regexp.MustCompile(`_|^[0O][xX][0-9A-Fa-f]`)
 
 // resizeRecInto resizes the crop to w×recHeight into the first w columns
 // of a 3×recHeight×width tensor, in BGR, normalized to [-1, 1].

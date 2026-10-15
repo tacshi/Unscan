@@ -48,12 +48,17 @@ The retyped PDF sets text in Noto Serif SC or Noto Sans SC, regular or
 bold, or Noto Serif TC and Noto Sans TC for a document in traditional
 Chinese, whose punctuation they center as it is printed, or in LXGW
 WenKai for Kai (楷体), the brush-written face of Chinese prefaces and
-running heads, or in [fonts of your own](#your-own-fonts).
-Pictures, rules and logos are kept as images under the text. Text printed
-on color or over a picture, such as a cover's title, stays as printed,
-since retyping it would deface the design, with invisible text over it
-that keeps it searchable; and so does text that type would not match,
-such as handwriting in an illustration or a letter in a box.
+running heads, or in Zhuque Fangsong for FangSong (仿宋), the even,
+slanting face of prefaces and quotations, with code printed in a
+monospaced face set in Source Code Pro, or in
+[fonts of your own](#your-own-fonts).
+Line art, such as a figure's boxes, arrows and rules, is traced into
+outlines that stay as sharp as the type at any zoom; photos and shading
+are kept as images under the text. Text printed on color or over a
+picture, such as a cover's title, stays as printed, since retyping it
+would deface the design, with invisible text over it that keeps it
+searchable; and so does text that type would not match, such as
+handwriting in an illustration or a letter in a box.
 
 Each pair below is a scanned page, on the left, and its retyped PDF, on
 the right, as **Compare with Original** shows them:
@@ -78,7 +83,9 @@ the right, as **Compare with Original** shows them:
   app's only connection is its daily check for updates, which Settings
   turns off.
 - **Leaves digital pages alone.** Pages that already have text, such as
-  born-digital ones, are kept as they are, in both PDFs.
+  born-digital ones, are kept as they are, in both PDFs. A scan read by
+  OCR before, whose text is an invisible layer over its pages, is read
+  again for the retyped PDF, while the searchable PDF keeps its layer.
 - **Reads columns in order.** A layout model finds each page's blocks,
   its columns, headings, captions and page numbers, and the order they
   read in, so the text of a page of two columns reads down one, then
@@ -88,11 +95,17 @@ the right, as **Compare with Original** shows them:
   retyped one. A classifier tells how each page is turned, and a page it
   finds turned is read each way it might be and kept the way it reads
   best, as it takes about one upright page in a hundred for turned.
-- **Matches the typeface.** Each line's kind (serif, sans-serif or Kai)
-  and weight are judged from its strokes, and its size and spacing from
-  its ink, so retyped lines land where they were printed. Words set bold
-  or italic within a line are set so too, titles tracked out are tracked
-  as printed, and underlines are kept.
+- **Matches the typeface.** Each line's kind (serif, sans-serif, Kai or
+  FangSong) and weight are judged from its strokes, and its size and
+  spacing from its ink, so retyped lines land where they were printed.
+  Words set bold or italic within a line are set so too, and code
+  printed in a monospaced face, as a book on programming sets it, is set
+  in one; titles tracked out are tracked as printed, and underlines are
+  kept.
+- **Sets vertical text upright.** Columns of Chinese characters, as a
+  cover sets them, are set one character under the other, upright, in
+  the fonts' vertical writing mode, their punctuation and arrows in their
+  vertical forms, and copy out in reading order.
 - **Your own fonts.** Set the retyped PDF in any embeddable TrueType font
   or collection, such as macOS's Songti SC or Times.
 - **Fast on a Mac.** The text models run on the GPU and the Neural
@@ -144,10 +157,11 @@ and a click on the page's number, or **View › Go to Page…** (⌥⌘G), goes
 to the page whose number is typed there. **Save…** (⌘S) saves the one
 shown.
 
-**Comparing.** The button beside **Save…**, or **View › Compare with
-Original**, shows the scanned page beside the retyped page or its text,
-to check what was read; drag the line between them to resize them. The searchable PDF looks just like the scan, so it
-shows alone.
+**Comparing.** The retyped page and its text show beside the scanned
+page, to check what was read; drag the line between them to resize
+them. The button beside **Save…**, or **View › Compare with Original**,
+shows them alone, or beside it again. The searchable PDF looks just like
+the scan, so it shows alone.
 
 **History.** Every PDF read stays in the sidebar (**View › Hide
 Sidebar**, ⌥⌘S), newest first, to open again without reading it again.
@@ -206,7 +220,7 @@ written when asked for.
 | `-dpi` | `300` | The resolution pages are read at |
 | `-force` | `false` | Read pages that already have text too |
 | `-cpu` | `false` | Run every model on the CPU, not the text models on the GPU through Core ML |
-| `-serif`, `-serif-bold`, `-sans`, `-sans-bold`, `-kai` | built-in fonts | Font files to set the retyped PDF in (see below) |
+| `-serif`, `-serif-bold`, `-sans`, `-sans-bold`, `-kai`, `-fangsong`, `-mono`, `-mono-bold` | built-in fonts | Font files to set the retyped PDF in (see below) |
 
 ### Your own fonts
 
@@ -215,8 +229,9 @@ built-in ones: a `.ttf` file, or one font of a `.ttc` collection, of any
 units per em.
 
 - **In the app,** **Unscan › Settings…** (⌘,) chooses a font file for
-  each face: serif and sans-serif, regular and bold, and Kai (on Linux and
-  Windows, **File › Settings…**). For a collection, the font named Regular
+  each face: serif and sans-serif, regular and bold, Kai and FangSong,
+  and monospaced, regular and bold (on Linux and Windows,
+  **File › Settings…**). For a collection, the font named Regular
   or Bold, to match the face, is picked, and a menu picks another. The
   choice is kept in `fonts.json` in the app's user data folder, and
   applies to the PDFs read from then on.
@@ -282,6 +297,8 @@ resources/
 ├── fonts/NotoSerifTC-{Regular,Bold}.ttf  in traditional Chinese's forms (10 MB each, OFL-1.1)
 ├── fonts/NotoSansTC-{Regular,Bold}.ttf   (7.1 MB each, OFL-1.1)
 ├── fonts/LXGWWenKai-Regular.ttf          and its Kai face, v1.522 (26 MB, OFL-1.1)
+├── fonts/ZhuqueFangsong-Regular.ttf      and its FangSong face, v0.212 (8.8 MB, OFL-1.1)
+├── fonts/SourceCodePro-{Regular,Bold}.ttf  and its monospaced faces, 2.042 (0.2 MB each, OFL-1.1)
 ├── fonts/*-OFL.txt                       their licenses
 └── darwin-arm64/libonnxruntime.dylib  (or linux-*/libonnxruntime.so, windows-*/onnxruntime.dll)
 ```
@@ -373,10 +390,12 @@ about 6 GB, mostly the models, or 3.5 GB on the CPU.
 To retype a page, Unscan maps the paper's color to white, measures each
 line's ink to a fraction of a pixel, judges its face from its strokes
 (voted by paragraph), and sets it so that its glyphs' outlines cover the
-ink, spaced out as books are set. What is left that is not white
-(pictures, rules, dot leaders) is kept as images; dust and the marks the
-scan's edges leave are dropped. Each face is subset to the glyphs used,
-and a `ToUnicode` map makes the text copy out as it was read.
+ink, spaced out as books are set. What is left that is not white is
+traced into outlines where it is line art of one color (rules, boxes,
+arrows, dot leaders), or kept as images (photos, shading); dust and the
+marks the scan's edges leave are dropped. Each face is subset to the
+glyphs used, and a `ToUnicode` map makes the text copy out as it was
+read.
 
 [docs/how-it-works.md](docs/how-it-works.md) has the details, step by
 step.
@@ -436,18 +455,35 @@ docs/                    how it works, in depth, the app icon's source (icon.svg
     comes out as its line is. Italics are the upright face slanted, as
     the fonts have no italic.
   - Medium weights come out bold, and display faces, such as a title's
-    condensed one, are squeezed into the nearest of the five. FangSong
-    comes out Kai, and bold Kai, which LXGW WenKai has no face for,
-    regular. Calligraphic lettering on covers,
-    such as a publisher's name, often comes out Kai.
+    condensed one, are squeezed into the nearest of the six. Labels in
+    a condensed bold face, as a book's figures have them, often come out
+    in the serif face, regular, as their strokes' contrast reads as a
+    serif face's. Kai and FangSong are told apart by how far their strokes
+    slant, so a paragraph of either a few lines long may come out in the
+    other, more often in a pale or blurred scan. Bold Kai and FangSong,
+    which LXGW WenKai and Zhuque Fangsong have no faces for, come out
+    regular. Calligraphic lettering on covers, such as a publisher's name,
+    often comes out Kai.
   - A face used only for bold lines in a document, with none of its lines
     regular, comes out regular, as there is no body text of its kind to
     judge them against.
+  - Code is told monospaced by where its letters lie, evenly apart, and
+    only in a document with a few words of it that surely are, so a
+    document with little code sets it in the text faces; and in a book
+    that sets code so, a word told by little, as one a reader's pen ran
+    through, may come out in the text face, or one that reads as code but
+    was printed in the text face, in the monospaced one.
+  - Line art is traced as it was scanned: sharper, but no straighter,
+    so a box whose edges the scan left uneven keeps them so; and shading
+    that a black-and-white scan broke into specks, with whatever was
+    printed on it, stays as the scan has it.
   - OCR mistakes show, where the searchable PDF hides them under the
     scan, and characters the recognizer misses (such as some dashes) are
     erased with their line.
-  - Vertical text is set rotated, not stacked. Covers and other designed
-    pages come out mostly as images, since their text is on color.
+  - Columns of Latin text, as a spine's title, are set along the column,
+    lying as they were printed; only columns mostly of Chinese are set
+    upright. Covers and other designed pages come out mostly as images,
+    since their text is on color.
 - **Your own fonts:** fonts of PostScript outlines (CFF) cannot be used,
   as `internal/ttf` subsets TrueType outlines only; a CFF subsetter, with
   `FontFile3`, would take them. Fonts chosen apply to the PDFs read
@@ -465,11 +501,13 @@ Unscan builds on these projects, under their own licenses:
 | [ONNX Runtime](https://onnxruntime.ai) | MIT |
 | [PDFium](https://pdfium.googlesource.com/pdfium/) | Apache-2.0 / BSD |
 | [go-pdfium](https://github.com/klippa-app/go-pdfium), [onnxruntime_purego](https://github.com/getcharzp/onnxruntime_purego), [purego](https://github.com/ebitengine/purego) | MIT / Apache-2.0 |
-| [Noto Serif SC](https://fonts.google.com/noto/specimen/Noto+Serif+SC), [Noto Sans SC](https://fonts.google.com/noto/specimen/Noto+Sans+SC), [Noto Serif TC](https://fonts.google.com/noto/specimen/Noto+Serif+TC), [Noto Sans TC](https://fonts.google.com/noto/specimen/Noto+Sans+TC), [LXGW WenKai](https://github.com/lxgw/LxgwWenKai) | SIL Open Font License 1.1 |
+| [Noto Serif SC](https://fonts.google.com/noto/specimen/Noto+Serif+SC), [Noto Sans SC](https://fonts.google.com/noto/specimen/Noto+Sans+SC), [Noto Serif TC](https://fonts.google.com/noto/specimen/Noto+Serif+TC), [Noto Sans TC](https://fonts.google.com/noto/specimen/Noto+Sans+TC), [LXGW WenKai](https://github.com/lxgw/LxgwWenKai), [Zhuque Fangsong](https://github.com/TrionesType/zhuque), [Source Code Pro](https://github.com/adobe-fonts/source-code-pro) | SIL Open Font License 1.1 |
 
 The app carries the fonts' licenses in `fonts/NotoSerifSC-OFL.txt`,
 `fonts/NotoSansSC-OFL.txt`, `fonts/NotoSerifTC-OFL.txt`,
-`fonts/NotoSansTC-OFL.txt` and `fonts/LXGWWenKai-OFL.txt`, and embeds
+`fonts/NotoSansTC-OFL.txt`, `fonts/LXGWWenKai-OFL.txt`,
+`fonts/ZhuqueFangsong-OFL.txt` and `fonts/SourceCodePro-OFL.txt`, and
+embeds
 subsets of the fonts in retyped PDFs, as the license allows. Subsets of
 your own fonts are embedded under those fonts' licenses, which are yours
 to comply with; fonts that forbid embedding are refused. Check the

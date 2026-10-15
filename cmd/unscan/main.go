@@ -93,15 +93,18 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	lines, skipped := 0, 0
+	lines, skipped, layered := 0, 0, 0
 	for _, p := range pages {
 		lines += p.Lines
 		if p.Skipped {
 			skipped++
 		}
+		if p.Layered {
+			layered++
+		}
 	}
-	log.Printf("%d pages (%d had text already), %d lines in %.1fs → %s",
-		len(pages), skipped, lines, time.Since(start).Seconds(), *out)
+	log.Printf("%d pages (%d had text already, %d a scan's text layer, read again for the text PDF), %d lines in %.1fs → %s",
+		len(pages), skipped, layered, lines, time.Since(start).Seconds(), *out)
 	if *txt != "" {
 		if err := os.WriteFile(*txt, []byte(pdfocr.Text(pages)), 0o644); err != nil { // #nosec G306 -- the user's document
 			log.Fatal(err)
@@ -123,6 +126,9 @@ var userFonts = [...]struct {
 	{"sans", "sans-serif", "Noto Sans SC", false},
 	{"sans-bold", "bold sans-serif", "Noto Sans SC Bold", true},
 	{"kai", "Kai (楷体)", "LXGW WenKai", false},
+	{"fangsong", "FangSong (仿宋)", "Zhuque Fangsong", false},
+	{"mono", "monospaced", "Source Code Pro", false},
+	{"mono-bold", "bold monospaced", "Source Code Pro Bold", true},
 }
 
 // readUserFonts reads the font files given by flag, each a path, or a
@@ -152,7 +158,8 @@ func readUserFonts(files [len(userFonts)]string) (pdfocr.TextFonts, error) {
 		}
 		fonts[i] = f
 	}
-	return pdfocr.TextFonts{Serif: fonts[0], SerifBold: fonts[1], Sans: fonts[2], SansBold: fonts[3], Kai: fonts[4]}, nil
+	return pdfocr.TextFonts{Serif: fonts[0], SerifBold: fonts[1], Sans: fonts[2], SansBold: fonts[3], Kai: fonts[4], FangSong: fonts[5],
+		Mono: fonts[6], MonoBold: fonts[7]}, nil
 }
 
 // convert converts the PDF at in, writing the searchable PDF to out and,
