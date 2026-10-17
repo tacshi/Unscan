@@ -401,6 +401,7 @@ func (d *textDoc) hanBrush(p *pixels, f frame, in ink, sh shape, tl textLine, or
 // the lines it judges Kai, and with the faces of their words, and pages
 // its page, or is nil for one page.
 func (d *textDoc) styles(texts []string, frames []frame, inks []ink, lines []lineRefs, pages []int) []int {
+	lineGains := make([]float64, len(texts)) // each line's, against the text face it matches best
 	var gains []float64
 	for i, l := range lines {
 		if !l.ok {
@@ -414,6 +415,7 @@ func (d *textDoc) styles(texts []string, frames []frame, inks []ink, lines []lin
 				gain, even = (ga+gd)/2, math.Abs(ga-gd)
 			}
 		}
+		lineGains[i] = gain
 		gains = append(gains, gain)
 	}
 	out := make([]int, len(texts))
@@ -432,6 +434,9 @@ func (d *textDoc) styles(texts []string, frames []frame, inks []ink, lines []lin
 		f, in := frames[i], inks[i]
 		// Its script by its characters, not the spaces between its words.
 		geoms[i].cjk = d.shape(strings.ReplaceAll(texts[i], " ", ""), serif).cjk()
+		if pages != nil {
+			geoms[i].page = pages[i] // that a line not found is set as its page is
+		}
 		if !in.found {
 			continue
 		}
@@ -478,6 +483,33 @@ func (d *textDoc) styles(texts []string, frames []frame, inks []ink, lines []lin
 			}
 		}
 	}
+	// The thickening again where lines are told Kai or FangSong, against
+	// their own face: set in neither text face, they match one of them
+	// thickened or thinned as they are not, as a grammar book's pale
+	// FangSong preface measures 1.35 pixels thinner than its Song chapters
+	// do, which would leave small type, as its footnotes, heavier by
+	// a fifth.
+	if slices.ContainsFunc(out, func(k int) bool { return k == kai || k == fangsong }) {
+		gains = gains[:0]
+		for i, l := range lines {
+			if !l.ok {
+				continue
+			}
+			if kind := out[i]; kind == kai || kind == fangsong {
+				reg, in := l.refs[kind], inks[i].strokes
+				lineGains[i] = (in.across - reg.across + in.down - reg.down) / 2
+			}
+			gains = append(gains, lineGains[i])
+		}
+		slices.Sort(gains)
+		gain = gains[len(gains)/3]
+		for i, l := range lines {
+			if l.ok {
+				in := inks[i].strokes
+				strokesOf[i] = [2]float64{max(in.across-gain, 1.0/3), max(in.down-gain, 1.0/3)}
+			}
+		}
+	}
 	weights := make([]float64, len(texts))
 	for i, l := range lines {
 		if l.ok {
@@ -510,6 +542,47 @@ func (d *textDoc) styles(texts []string, frames []frame, inks []ink, lines []lin
 		ws = slices.Sorted(slices.Values(ws))
 		return ws[len(ws)/2], true
 	}
+	// Small type, as footnotes, prints and scans heavier than the body's
+	// for its size, as its strokes thicken by as much: a grammar book's
+	// footnotes, two thirds as high as its body, measure a fifth heavier.
+	// So a line smaller than most of the document's, by a sixth or more,
+	// is weighed against the document's lines of its kind and about its
+	// height, by their median, where there are enough and they are not so
+	// heavy as bold type is (see pageHeavy): if they are, they are set
+	// bold, and weighed as the body is.
+	var heights []float64
+	for i, l := range lines {
+		if l.ok {
+			heights = append(heights, geoms[i].height)
+		}
+	}
+	slices.Sort(heights)
+	small := func(i int) bool { return geoms[i].height < 0.85*heights[len(heights)/2] }
+	type sized struct {
+		kind int
+		step int // the height's, in steps of 2%, as a picture dictionary's many labels share a few
+	}
+	type sizedBase struct {
+		b  float64
+		ok bool
+	}
+	smallBases := map[sized]sizedBase{}
+	smallBase := func(i int) (float64, bool) {
+		k := sized{out[i], int(math.Round(math.Log(geoms[i].height) / math.Log(1.02)))}
+		if sb, ok := smallBases[k]; ok {
+			return sb.b, sb.ok
+		}
+		var ws []float64
+		h := math.Pow(1.02, float64(k.step))
+		for j, l := range lines {
+			if l.ok && out[j] == k.kind && math.Abs(geoms[j].height-h) <= 0.15*max(h, geoms[j].height) {
+				ws = append(ws, weights[j])
+			}
+		}
+		b, ok := base(ws)
+		smallBases[k] = sizedBase{b, ok}
+		return b, ok
+	}
 	heavier := make([]float64, len(texts)) // than the lines of its kind, as below
 	bases := make([]float64, len(texts))
 	for i, l := range lines {
@@ -538,6 +611,11 @@ func (d *textDoc) styles(texts []string, frames []frame, inks []ink, lines []lin
 		if !ok {
 			if b, ok = base(byDoc[out[i]]); !ok {
 				b = 1
+			}
+		}
+		if small(i) {
+			if sb, ok := smallBase(i); ok && sb > b && sb < pageHeavy*b {
+				b = sb
 			}
 		}
 		// A line told Kai or FangSong by its Chinese alone is weighed on
@@ -989,18 +1067,38 @@ func kinds(lines []lineGeom, withKai, withFangSong bool) ([]int, [][]int) {
 	})
 	// Each paragraph's lines, in order.
 	var paras [][]int
+	pos := make([]int, len(lines)) // each line's place in order
+	for k, i := range order {
+		pos[i] = k
+	}
+	// Whether line b follows line a down the page as a paragraph's lines
+	// follow each other, a line of h high.
+	follows := func(a, b lineGeom, h float64) bool {
+		return a.page == b.page && math.Abs(b.height-a.height) <= 0.15*h &&
+			b.top >= a.top+0.5*h && b.top-a.bottom <= 1.5*h
+	}
 each:
-	for _, i := range order {
+	for k, i := range order {
 		l := lines[i]
 		// The paragraph of the same script whose last line this one
 		// follows: another script's lines may come between, as an
-		// English line among Chinese ones.
+		// English line among Chinese ones, each following the one above
+		// it, as a paragraph's lines do.
 		for p := len(paras) - 1; p >= 0 && p >= len(paras)-3; p-- {
-			prev := lines[paras[p][len(paras[p])-1]]
+			last := paras[p][len(paras[p])-1]
+			prev := lines[last]
 			h := max(l.height, prev.height)
-			if prev.page == l.page && prev.cjk == l.cjk &&
-				math.Abs(l.height-prev.height) <= 0.15*h &&
-				l.top >= prev.top+0.5*h && l.top-prev.bottom <= 1.5*h {
+			if prev.cjk != l.cjk {
+				continue
+			}
+			between := order[pos[last]+1 : k]
+			ok := !slices.ContainsFunc(between, func(j int) bool { return lines[j].cjk == l.cjk })
+			above := prev
+			for _, j := range between {
+				ok = ok && follows(above, lines[j], h)
+				above = lines[j]
+			}
+			if follows(prev, l, h) || ok && follows(above, l, h) && math.Abs(l.height-prev.height) <= 0.15*h {
 				paras[p] = append(paras[p], i)
 				continue each
 			}
@@ -1084,15 +1182,70 @@ each:
 		}
 		return false, 0
 	}
+	bodies := pageBodies(lines, paras, withKai, withFangSong)
+	// The body of para's page, where para is set at its height.
+	bodyOf := func(para []int) (pageBody, bool) {
+		l := lines[para[0]]
+		b, ok := bodies[l.page]
+		return b, ok && math.Abs(l.height-b.height) <= 0.15*max(l.height, b.height)
+	}
+
+	// Each paragraph's evidence: the leans and brushes of its lines with a
+	// few letters to judge by, or else of all it can judge; and whether it
+	// is Kai or FangSong, by its own lines, or by its page's body but where
+	// its own run aslant surely more or less than the body's.
+	leansOf, brushesOf := make([][]float64, len(paras)), make([][]float64, len(paras))
+	brushKind := make([]int, len(paras)) // Kai or FangSong, or -1
+	for p, para := range paras {
+		for _, i := range para {
+			if lines[i].judged && lines[i].letters >= 4 {
+				leansOf[p], brushesOf[p] = append(leansOf[p], lines[i].lean), append(brushesOf[p], lines[i].brush)
+			}
+		}
+		if len(leansOf[p]) == 0 {
+			for _, i := range para {
+				if lines[i].judged {
+					leansOf[p], brushesOf[p] = append(leansOf[p], lines[i].lean), append(brushesOf[p], lines[i].brush)
+				}
+			}
+		}
+		brushKind[p] = -1
+		if len(leansOf[p]) == 0 {
+			continue
+		}
+		ok, brush := isKai(para, brushesOf[p], leansOf[p])
+		if !ok {
+			brush = median(slices.Clone(brushesOf[p]))
+		}
+		b, inBody := bodyOf(para)
+		bodyBrushed := b.kind == kai || b.kind == fangsong
+		switch {
+		case inBody && ok && bodyBrushed:
+			brushKind[p] = b.kind // which of the two the body tells better
+		case inBody && ok != bodyBrushed:
+			if ok && brush >= b.brush+brushApart {
+				brushKind[p] = kaiOrFangSong(brush, withFangSong)
+			} else if !ok && brush > b.brush-brushApart && slices.ContainsFunc(para, func(i int) bool { return lines[i].han }) {
+				brushKind[p] = b.kind
+			}
+		case ok:
+			brushKind[p] = kaiOrFangSong(brush, withFangSong)
+		}
+	}
+
 	// The kind most of the document's lines of a script lean to, by their
 	// median, of those with a few letters to judge by, or of all its lines
-	// where fewer than five are of the script; serif where none are.
+	// where fewer than five are of the script; serif where none are. Lines
+	// in Kai or FangSong lean as their brush does, not as Song or Hei, and
+	// are left out.
 	byScript := map[bool][]float64{}
 	var all []float64
-	for _, i := range order {
-		if l := lines[i]; l.judged && l.letters >= 4 {
-			byScript[l.cjk] = append(byScript[l.cjk], l.lean)
-			all = append(all, l.lean)
+	for p, para := range paras {
+		for _, i := range para {
+			if l := lines[i]; brushKind[p] < 0 && l.judged && l.letters >= 4 {
+				byScript[l.cjk] = append(byScript[l.cjk], l.lean)
+				all = append(all, l.lean)
+			}
 		}
 	}
 	prevail := map[bool]int{}
@@ -1105,37 +1258,29 @@ each:
 			prevail[cjk] = sans
 		}
 	}
+	// What a line with nothing to judge it by is set in: its page's body's
+	// kind, or the document's.
+	fallback := func(l lineGeom) int {
+		if b, ok := bodies[l.page]; ok {
+			return b.kind
+		}
+		return prevail[l.cjk]
+	}
 	out := make([]int, len(lines))
 	for i, l := range lines {
 		if !l.ok {
-			out[i] = prevail[l.cjk]
+			out[i] = fallback(l)
 		}
 	}
-	for _, para := range paras {
-		var leans, brushes []float64
-		for _, i := range para {
-			if lines[i].judged && lines[i].letters >= 4 {
-				leans, brushes = append(leans, lines[i].lean), append(brushes, lines[i].brush)
-			}
-		}
+	for p, para := range paras {
+		leans := leansOf[p]
 		if len(leans) == 0 {
 			for _, i := range para {
-				if lines[i].judged {
-					leans, brushes = append(leans, lines[i].lean), append(brushes, lines[i].brush)
-				}
-			}
-		}
-		if len(leans) == 0 {
-			for _, i := range para {
-				out[i] = prevail[lines[i].cjk] // nothing to judge it by
+				out[i] = fallback(lines[i]) // nothing to judge it by
 			}
 			continue
 		}
-		if ok, brush := isKai(para, brushes, leans); ok {
-			kind := kai
-			if withFangSong && brush < kaiBrush {
-				kind = fangsong
-			}
+		if kind := brushKind[p]; kind >= 0 {
 			for _, i := range para {
 				out[i] = kind
 			}
@@ -1151,6 +1296,30 @@ each:
 		case short && !cjk && lean > -tie && prevail[cjk] == serif:
 		case lean < 0:
 			kind = sans
+		}
+		// A paragraph in its page's body is set as the body is, but where
+		// it leans surely the other way, as a box of Hei on a page of Song.
+		// One with Chinese on a page of Kai or FangSong runs aslant surely
+		// less than the body, as above, and is its own; one of Latin alone
+		// is set as the body is, its Latin in the serif face, but where it
+		// leans surely to sans-serif.
+		if b, ok := bodyOf(para); ok && kind != b.kind {
+			han := slices.ContainsFunc(para, func(i int) bool { return lines[i].han })
+			switch {
+			case b.kind == kai || b.kind == fangsong:
+				if !han && !(kind == sans && lean <= -sure) {
+					kind = b.kind
+				}
+			case kind == sans && lean <= -sure, kind == serif && lean >= sure:
+			default:
+				kind = b.kind
+			}
+		}
+		if kind == kai || kind == fangsong {
+			for _, i := range para {
+				out[i] = kind
+			}
+			continue
 		}
 		// A heading run into the paragraph, its first line, much shorter
 		// than the lines after it, leans the other way less surely.
@@ -1171,6 +1340,152 @@ each:
 		}
 	}
 	return out, paras
+}
+
+// kaiOrFangSong is the face of a paragraph whose edges run aslant by
+// brush, by their median, as Kai's or FangSong's do (see kaiBrush).
+func kaiOrFangSong(brush float64, withFangSong bool) int {
+	if withFangSong && brush < kaiBrush {
+		return fangsong
+	}
+	return kai
+}
+
+// A page's body is told by minBody lines or more, of the page's and of
+// pages beside it set alike (see pageBodies), minBodyOwn of them its own:
+// a page of body text has a dozen or more, and a heading's or a caption's
+// few cannot tell a page's face.
+const minBody, minBodyOwn = 8, 3
+
+// bodyLeanApart and bodyBrushApart are how near to each other paragraphs,
+// or pages' bodies, must lean and run aslant, by their medians, to be told
+// as one body, as a chapter's paragraphs and pages are set alike: a
+// grammar book's FangSong preface and its Song chapters lean -0.24 and
+// 0.11 by page, its FangSong examples among Song paragraphs -0.13 and
+// 0.08; its Hei contents pages run aslant 0.01 to 0.02 more than the serif
+// face's, its FangSong pages 0.07 to 0.09, and their paragraphs 0.061 to
+// 0.093.
+const bodyLeanApart, bodyBrushApart = 0.1, 0.03
+
+// brushApart is how much more or less than its page's body's a paragraph's
+// edges must run aslant, by their median, for it to be set in Kai or
+// FangSong apart from the body, or apart from a body set so: a paragraph's
+// few lines run aslant by the body's, give or take 0.02, as a grammar
+// book's FangSong preface's 0.061 to 0.093 by paragraph, while Kai's run
+// 0.09 to 0.16 more than Song's 0.06.
+const brushApart = 0.03
+
+// pageBody is what the lines of a page's body tell: their height, how they
+// lean and run aslant, by their medians, and so their kind.
+type pageBody struct {
+	height, lean, brush float64
+	kind                int
+}
+
+// pageBodies tells each page's body: the most lines of its CJK paragraphs
+// at the height most of its CJK lines are that lean and run aslant about
+// alike, by each paragraph's median, as a chapter's paragraphs are set,
+// apart from examples set in another face at their size; with the bodies
+// of the pages before and after it that lean and run aslant about as its
+// own does, as a chapter's pages are set alike. So a page, whose
+// paragraphs' few lines each tell its face less surely than all of them,
+// is set as its neighbors are where it tells little else. Only lines with
+// a few letters to judge by count. Its kind is Kai or FangSong, if
+// withKai, where they run aslant by brushy or more, or by brushyNear where
+// they lean to sans-serif, as FangSong's even strokes do, and Song's
+// never: a grammar book's FangSong preface's pages, pale, run 0.068 to
+// 0.093 more aslant than the serif face's, and its Hei contents pages 0.01
+// to 0.02. Else it is serif or sans-serif as they lean. Pages with too few
+// lines to tell by have none.
+func pageBodies(lines []lineGeom, paras [][]int, withKai, withFangSong bool) map[int]pageBody {
+	median := func(v []float64) float64 {
+		v = slices.Sorted(slices.Values(v))
+		return v[len(v)/2]
+	}
+	near := func(a, b float64) bool { return math.Abs(a-b) <= 0.15*max(a, b) }
+	counts := func(i int) bool { l := lines[i]; return l.judged && l.cjk && l.letters >= 4 }
+	heights := map[int][]float64{}
+	for _, para := range paras {
+		for _, i := range para {
+			if counts(i) {
+				heights[lines[i].page] = append(heights[lines[i].page], lines[i].height)
+			}
+		}
+	}
+	height := map[int]float64{} // each page's body's, the median of its lines'
+	for page, hs := range heights {
+		height[page] = median(hs)
+	}
+	// Each page's own body: its paragraphs at its height gathered, the
+	// longest first, each into the first group whose lines, by their
+	// medians, lean and run aslant about as its own do.
+	type group struct {
+		lines          []int
+		leans, brushes []float64
+	}
+	alike := func(lean, brush float64, leans, brushes []float64) bool {
+		return math.Abs(lean-median(leans)) <= bodyLeanApart && math.Abs(brush-median(brushes)) <= bodyBrushApart
+	}
+	byPage := map[int][][]int{}
+	for _, para := range paras {
+		if l := lines[para[0]]; l.cjk && height[l.page] > 0 && near(l.height, height[l.page]) &&
+			slices.ContainsFunc(para, counts) {
+			byPage[l.page] = append(byPage[l.page], para)
+		}
+	}
+	own := map[int]pageBody{}
+	ownGroup := map[int]group{}
+	for page, ps := range byPage {
+		slices.SortStableFunc(ps, func(a, b []int) int { return len(b) - len(a) })
+		var groups []group
+	each:
+		for _, para := range ps {
+			var g group
+			for _, i := range para {
+				if counts(i) {
+					g.lines = append(g.lines, i)
+					g.leans, g.brushes = append(g.leans, lines[i].lean), append(g.brushes, lines[i].brush)
+				}
+			}
+			for k := range groups {
+				if alike(median(g.leans), median(g.brushes), groups[k].leans, groups[k].brushes) {
+					groups[k].lines = append(groups[k].lines, g.lines...)
+					groups[k].leans = append(groups[k].leans, g.leans...)
+					groups[k].brushes = append(groups[k].brushes, g.brushes...)
+					continue each
+				}
+			}
+			groups = append(groups, g)
+		}
+		best := slices.MaxFunc(groups, func(a, b group) int { return len(a.lines) - len(b.lines) })
+		if len(best.lines) >= minBodyOwn {
+			own[page] = pageBody{height: height[page], lean: median(best.leans), brush: median(best.brushes)}
+			ownGroup[page] = best
+		}
+	}
+	bodies := map[int]pageBody{}
+	for page, b := range own {
+		var leans, brushes []float64
+		for _, q := range []int{page - 1, page, page + 1} {
+			if o, ok := own[q]; ok && near(o.height, b.height) && alike(o.lean, o.brush, []float64{b.lean}, []float64{b.brush}) {
+				leans, brushes = append(leans, ownGroup[q].leans...), append(brushes, ownGroup[q].brushes...)
+			}
+		}
+		if len(leans) < minBody {
+			continue
+		}
+		b.lean, b.brush = median(leans), median(brushes)
+		switch {
+		case withKai && (b.brush >= brushy || b.brush >= brushyNear && b.lean < 0):
+			b.kind = kaiOrFangSong(b.brush, withFangSong)
+		case b.lean < 0:
+			b.kind = sans
+		default:
+			b.kind = serif
+		}
+		bodies[page] = b
+	}
+	return bodies
 }
 
 // isHan reports whether r is a Chinese character.
