@@ -177,8 +177,22 @@ For each scanned page, at the resolution it was read at:
    angle, by half a degree to 15, as the recognizer draws round a heading
    whose last characters stand taller than its first, is turned level with
    them where the line's ink stands a tenth shorter or more in it, as
-   level text does in a level frame; on a page scanned askew, whose lines
-   tilt alike, a line keeps its tilt. A column's box, as round a title set
+   level text does in a level frame, or, for a line on plain paper whose
+   box tilts by 1.5° or more, where its feet, the lowest ink of its
+   columns, lie level in it, by the median of each half's, within a third
+   of how far text run along the box would rise, and closer together than
+   along the box: measured along the tilted box, a chapter opener's
+   "Chapter 01" ran on into the line below or stopped short of its feet
+   as the box's edge lay, a pixel apart, and was set level on one run,
+   tilted on the next. A page scanned askew, whose lines
+   tilt alike, by their median, a tenth of a degree to 15, is turned level
+   first, its lines' boxes with it, so that its text, pictures and rules
+   all come out level: a tenth of a degree moves the end of a line across
+   the page by 4 pixels, about as much as a box round a level line tilts,
+   and a grammar book's pages tilt by up to a third of a degree. Each pixel
+   is sampled from the four about where it lay, which keeps the ink a
+   stroke sums to, so the page's faces and weights are judged as they were
+   printed. A column's box, as round a title set
    down a cover, is turned to run across them, down the page, where its
    ink stands a fiftieth narrower or more: its characters are as wide
    across it as they are high, which a few degrees' tilt widens by a few
@@ -196,7 +210,12 @@ For each scanned page, at the resolution it was read at:
    quarter of its height, are the leaders', or by a tenth after a Chinese
    character or before a digit, which a sentence's period does not follow
    or precede; and dots read that have no ink of their own, too faint
-   beside the line's, are dropped. Rules along a line, as an underline,
+   beside the line's, are dropped. A footnote's reference printed raised
+   over a line's text, as the ① of 英语人①, is left out of the line's
+   height, where the columns of ink about where it lies reach higher
+   than the rest by a tenth: it made a grammar book's line a fifth
+   taller than its paragraph's, which set it larger and in another kind.
+   Rules along a line, as an underline,
    are told from its text's ink: bands of rows no thicker than an eighth
    of its box's height with a run of ink a fifth longer than the box is
    high, longer than a glyph's stroke. They are kept as printed, and the
@@ -264,7 +283,10 @@ For each scanned page, at the resolution it was read at:
    strokes, against each face's glyphs drawn at the line's size.
    Printing and scanning thicken every stroke by about as much, which
    blurs thick against thin; that thickening, which the document's body
-   text shows over the regular faces, is taken off first. The kind is
+   text shows over the regular faces, is taken off first, and measured
+   again against their own face where lines are told Kai or FangSong,
+   set in neither text face: a grammar book's pale FangSong preface
+   measures thinner than either, as its Song chapters do not. The kind is
    then that of the face whose upright strokes are as many times thicker
    than its level ones (a serif face's clearly are, a sans-serif face's
    are about as thick). Kai, whose brush gives its strokes every
@@ -295,17 +317,40 @@ For each scanned page, at the resolution it was read at:
    document, for a kind few of the page's lines are, or one whose lines
    on the page are mostly 1.3 times as heavy as the document's or more,
    as a cover set in bold type, while a book's pages print within a
-   fifth of each other), as headings set in medium or bold faces are. Both are voted by paragraph (lines that
-   follow each other down a page, as high as each other, in one script):
+   fifth of each other), as headings set in medium or bold faces are; and
+   a line smaller than most of the document's by a sixth or more, as a
+   footnote, against the document's lines of its kind about its height,
+   where they are not as heavy as bold type is, as small type prints and
+   scans heavier for its size: a grammar book's footnotes by a fifth.
+   Both are voted by paragraph (lines that follow each other down a page,
+   as high as each other, in one script, across lines of the other script
+   between them, as a line mostly of English in a paragraph of Chinese):
    a paragraph is set in the kind most of its lines lean to, and regular
    if most of them are, but for a CJK line leaning surely to the other
    kind, as a heading does, or a paragraph's first line, three quarters as
    wide as the rest or narrower, leaning to it by 0.08 or more, as a
    heading run into the paragraph below it does, or a line surely heavier, or a first line a
-   fifth heavier, as a heading run into its paragraph is. A line too short to
+   fifth heavier, as a heading run into its paragraph is. And kinds are
+   told by page too: a page's body, the most of its CJK lines at the
+   height most of them are whose paragraphs lean and run aslant alike, by
+   their medians, with those of the pages beside it whose bodies do as
+   its own does, as a chapter's pages are set, is told by all its lines at
+   once, Kai or FangSong from a little less slant than a paragraph's,
+   0.07, where it leans to sans-serif. A paragraph at its height is set in
+   its kind but where it runs aslant 0.03 more or less, by its median, as
+   FangSong examples among Song paragraphs do, or leans surely the other
+   way, as a box of Hei on a page of Song: a grammar book's pale FangSong
+   preface, its paragraphs running aslant 0.061 to 0.093 more than the
+   serif face's, about FangSong's least, was set in FangSong and Hei
+   paragraph by paragraph, and is FangSong throughout, its pages 0.068 to
+   0.093 and its Hei contents pages 0.01 to 0.02. A line too short to
    judge, as a paragraph's last of one character, takes its paragraph's,
-   and a paragraph of such lines, as a page number alone, the kind most
-   of the document's lines of its script lean to; but a paragraph of
+   and a paragraph of such lines, as a page number alone, or a line whose
+   ink was not found, its page's body's kind, or else the kind most of the
+   document's lines of its script lean to, but for Kai's and FangSong's,
+   which lean as their brush does: a grammar book's FangSong preface,
+   leaning to sans-serif, set its Song chapters' page numbers and short
+   paragraphs in Hei. But a paragraph of
    Chinese characters alone, a character a line, set twice as high as the
    document's lines or more, as a cover's title down a column, is judged
    by its characters, whose strokes are many at that size: sans-serif
@@ -474,7 +519,12 @@ For each scanned page, at the resolution it was read at:
    box is; one whose glyphs, at the size its ink gives them, would have
    to be squeezed to less than four fifths of their width, and squeezed
    so would not match it, as handwriting or lettering in a picture would
-   not; and one the recognizer read with less than 85% confidence. Type
+   not; and one the recognizer read with less than 85% confidence, but
+   for a line of four characters or more read with 75% or more between
+   two lines set of its paragraph, about as high, overlapping it along
+   for half the shorter's length, a line and a half apart at most, as a
+   line with two characters misread, read with 84%: kept as printed, it
+   stood out in the scan's face and gray among the set lines. Type
    squeezed matches where the text, set in each text face and stretched
    over the ink, thickened or thinned a pixel at a time to cover as much
    as the ink, correlates with it by 0.72 or more, both blurred by a
@@ -491,7 +541,12 @@ For each scanned page, at the resolution it was read at:
    columns the recognizer read with 81% confidence, the lines of its size
    running its way alongside it, half its height away or nearer, are kept
    too, as set in the text faces beside the scan's face the title would
-   mix two. A line of the text's size keeps no other. A line is erased
+   mix two. A line of the text's size keeps no other, but on a pale gray,
+   so near white that it is taken for paper, a line beside one kept as
+   printed on a gray as pale, within 16 levels, no further away than the
+   taller box is high, is kept too, and so on: a grammar book's table
+   shades its cells 210 to 220, and one of them, paler, was set on white
+   among the others. A line is erased
    with its box, but for the ink in it of a line kept as printed, as a
    title's column the recognizer was unsure of, whose ink the box of the
    column beside it takes in: the pieces of ink that lie deeper in the
@@ -658,8 +713,9 @@ CGO_ENABLED=0 go test ./...
   a line of its own, the first's box taking in the end of the line beside
   it and overlapping the next's, are each measured within 3 pixels of
   its own ink and set at its size. A heading printed level whose box the
-  recognizer tilted is set level, within a slope of 0.005, while on a
-  page scanned askew it keeps the page's tilt; so is a column of two
+  recognizer tilted is set level, within a slope of 0.005, and a page
+  scanned askew either way is turned level, its lines within a slope of
+  0.002, a heading's box tilted off them too; so is a column of two
   characters whose box it tilted 4.7°, upright, and erasing it leaves a
   smaller column kept as printed beside it, whose ink its box takes in,
   whole; a title's two columns at one size, one read with too little
@@ -707,7 +763,14 @@ CGO_ENABLED=0 go test ./...
   their English in the serif face, while the same examples with Song
   translations stay in the serif face; and of paragraphs mostly of
   English, a single line's Chinese must slant further than a paragraph's,
-  and on a FangSong page they are FangSong. A cover set mostly in bold,
+  and on a FangSong page they are FangSong. Pages of FangSong whose
+  paragraphs run aslant a little short of FangSong's least are FangSong
+  throughout, as their page tells, a line mostly of English among a
+  paragraph's lines too, and a page of Song after them has its short
+  paragraphs and its number in the serif face; FangSong examples among a
+  Song page's paragraphs are FangSong, and a box of Hei on it
+  sans-serif. Footnotes printed a sixth heavier than the body are set
+  regular, and a bold one bold. A cover set mostly in bold,
   with two lines regular, among pages of regular body text in the same
   face, has its bold lines set bold and its regular ones regular.
   In a

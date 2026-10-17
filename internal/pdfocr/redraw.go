@@ -202,6 +202,56 @@ func pageAngle(frames []frame) (float64, bool) {
 	return angles[len(angles)/2], true
 }
 
+// minSkew and maxSkew are the least and most the lines of a page scanned
+// askew may tilt, by their median, for it to be turned level: a tilt of a
+// tenth of a degree moves the end of a line across a page 300 pixels an
+// inch wide by 4 pixels, a fiftieth of its height, about as much as a box
+// the recognizer draws round a level line tilts, while a page tilted
+// further than 15 degrees was not scanned askew, but photographed so, or
+// is set at an angle.
+const (
+	minSkew = 0.1 * math.Pi / 180
+	maxSkew = 15 * math.Pi / 180
+)
+
+// deskew turns p about its middle by angle less, so that lines running at
+// angle, the tangent of their slope down the image, run level, and turns
+// the boxes of lines with it, in a copy: lines are the searchable PDF's
+// too. Each pixel is sampled from the four about where it lay, by how
+// near each is, which keeps the ink a stroke sums to; what lay outside the
+// page is white, as its paper, whitened, is.
+func (p *pixels) deskew(lines []ocr.Line, angle float64) (*pixels, []ocr.Line) {
+	sin, cos := math.Sincos(angle)
+	cx, cy := float64(p.w)/2, float64(p.h)/2
+	q := &pixels{pix: make([]uint8, len(p.pix)), w: p.w, h: p.h}
+	for y := range q.h {
+		for x := range q.w {
+			// Where the middle of pixel x, y lay, from the middle of the
+			// pixel above and left of it.
+			dx, dy := float64(x)+0.5-cx, float64(y)+0.5-cy
+			sx, sy := cx+dx*cos-dy*sin-0.5, cy+dx*sin+dy*cos-0.5
+			x0, y0 := int(math.Floor(sx)), int(math.Floor(sy))
+			fx, fy := sx-float64(x0), sy-float64(y0)
+			a, b, c, e := p.at(x0, y0), p.at(x0+1, y0), p.at(x0, y0+1), p.at(x0+1, y0+1)
+			i := 3 * (y*q.w + x)
+			for k := range 3 {
+				top := float64(a[k])*(1-fx) + float64(b[k])*fx
+				bottom := float64(c[k])*(1-fx) + float64(e[k])*fx
+				q.pix[i+k] = uint8(math.Round(top*(1-fy) + bottom*fy))
+			}
+		}
+	}
+	turned := slices.Clone(lines)
+	for i, l := range turned {
+		for k, pt := range l.Box {
+			dx, dy := pt.X-cx, pt.Y-cy
+			l.Box[k] = ocr.Point{X: cx + dx*cos + dy*sin, Y: cy - dx*sin + dy*cos}
+		}
+		turned[i] = l
+	}
+	return q, turned
+}
+
 // level is a frame f turned about its middle to run at angle, as the
 // page's lines do, or across them, down the page, for a turned one, a
 // column's, where it runs off that by half a degree to 15, and is a
@@ -224,6 +274,80 @@ func level(f frame, angle float64) (frame, bool) {
 	g.u, g.v = rot(f.u), rot(f.v)
 	g.o = ocr.Point{X: mid.X - g.u.X*f.length/2 - g.v.X*f.height/2, Y: mid.Y - g.u.Y*f.length/2 - g.v.Y*f.height/2}
 	return g, true
+}
+
+// levelFeet reports whether a line's ink on plain paper, as a line to be
+// set is, runs level in g, its box f turned level by turn, by feetTilt or
+// more: measured as level in g and along f in alongF, its feet,
+// the lowest ink of each of its columns, lie as low in either half of it in
+// g, by their median, within a third of how far apart its text run along
+// the box would put them, which must be 4 pixels or more to tell, and lie
+// closer together in g than along f, by their interquartile range, as
+// level text's feet do along its baseline, while text run along the box
+// has its feet rise across g, and the ink of the lines beside it, in a
+// picture printed at an angle, in g's columns. The box drawn round a
+// heading whose last characters stand taller than its first, as "Chapter
+// 01", tilts, and the ink measured along it runs on into the line below or
+// stops short of its feet, as the box's edge happens to lie, a pixel's
+// difference; its feet, along the baseline, do not.
+func (p *pixels) levelFeet(f frame, alongF ink, g frame, level ink, turn float64) bool {
+	if math.Abs(turn) < feetTilt || !alongF.plain || !level.plain {
+		return false
+	}
+	gs, gFeet := p.feet(g, level)
+	_, fFeet := p.feet(f, alongF)
+	if len(gFeet) < 10 || len(fFeet) < 10 {
+		return false
+	}
+	mid := (level.s0 + level.s1) / 2
+	var halves [2][]float64
+	var at [2]float64 // the halves' columns' sum, along the ink
+	for k, t := range gFeet {
+		half := 0
+		if gs[k] >= mid {
+			half = 1
+		}
+		halves[half] = append(halves[half], t)
+		at[half] += gs[k]
+	}
+	if len(halves[0]) < 5 || len(halves[1]) < 5 {
+		return false
+	}
+	for _, h := range halves {
+		slices.Sort(h)
+	}
+	slices.Sort(gFeet)
+	slices.Sort(fFeet)
+	spread := func(v []float64) float64 { return v[3*len(v)/4] - v[len(v)/4] }
+	apart := (at[1]/float64(len(halves[1])) - at[0]/float64(len(halves[0]))) * math.Abs(math.Tan(turn))
+	return apart >= 4 && math.Abs(halves[1][len(halves[1])/2]-halves[0][len(halves[0])/2]) <= apart/3 &&
+		spread(gFeet) < spread(fFeet)
+}
+
+// feetTilt is the least a box must tilt off the page's lines for its feet
+// to tell it level (see levelFeet): a tilt the eye sees, 18 pixels across
+// a heading 700 long, as a chapter opener's of 2.4°, where boxes tilted
+// less, as round a line of a book's examples by 0.54°, are leveled where
+// their ink stands shorter so only, as before.
+const feetTilt = 1.5 * math.Pi / 180
+
+// feet are where along f each column of a line's ink, in, lies, its middle,
+// and how far up f its lowest ink is, for the columns that have any.
+func (p *pixels) feet(f frame, in ink) (at, feet []float64) {
+	if !in.found || in.t1 <= in.t0 {
+		return nil, nil
+	}
+	thr := max(32, diff(in.fg, in.bg)/2)
+	for s := math.Floor(in.s0); s < in.s1; s++ {
+		for t := math.Floor(in.t0); t < in.t1; t++ {
+			pt := f.point(s+0.5, t+0.5)
+			if diff(p.at(int(math.Floor(pt.X)), int(math.Floor(pt.Y))), in.bg) > thr {
+				at, feet = append(at, s+0.5), append(feet, t)
+				break
+			}
+		}
+	}
+	return at, feet
 }
 
 // point is the image point s pixels along the line from its origin and t
@@ -269,6 +393,12 @@ type ink struct {
 	// from s0 to s1 along it and t0 to t1 up it, apart from its text's ink
 	// (see measureRules), which are kept as printed.
 	rules [][4]float64
+	// mark is how high up the line a footnote's reference raised over its
+	// text reaches, which t1 leaves out (see raisedMark), or 0.
+	mark float64
+	// edge is the color round the box's edge, as bg is but where bg takes
+	// it, near white, for the paper (see keepShaded).
+	edge rgb
 }
 
 // foreignInk says which of a line's samples of ink, ns×nt from its
@@ -532,6 +662,7 @@ func (p *pixels) measureRules(f frame, aspect float64, rules bool, others []fram
 	for k := range 3 {
 		in.bg[k] = uint8(percentile(hist[k][:], border, 0.5))
 	}
+	in.edge = in.bg
 	if diff(in.bg, white) <= 40 && !tint(in.bg) {
 		in.bg = white
 	}
@@ -1052,6 +1183,72 @@ func (in ink) strays(last bool) (edge, gap float64, ok bool) {
 	return in.inFrom(j, last), float64(j - g), true
 }
 
+// footnoteMark is whether r is what a footnote's reference is printed as,
+// raised over the text it follows: a circled number.
+func footnoteMark(r rune) bool { return r >= '①' && r <= '⑳' }
+
+// raisedMark leaves a footnote's reference, printed raised over a line's
+// text, as the ① of 英语人①, out of the height of the line's ink, which it
+// would else make a fifth taller, as on a grammar book's page: set so much
+// larger than its paragraph's lines, and told apart from them, in another
+// kind. The mark is where the text has one after its first character, as
+// a footnote's own line starts with its number, printed level, and the
+// columns of ink whose tops reach highest, no wider together than three
+// quarters of the rest's height, lie within two of its heights of where
+// the mark is, its text set in sh, and reach higher than all the others
+// do by a tenth of that height or more; a mark set level with the text,
+// as in a list, reaches no higher than its characters. The line is erased
+// up to the mark's top still (see ink.mark).
+func raisedMark(text string, sh shape, in ink) ink {
+	if !in.found || len(in.tops) == 0 || sh.advance <= 0 {
+		return in
+	}
+	var at []float64 // where each mark lies, along the ink
+	pos := 0
+	for k, g := range sh.glyphs {
+		if k > 0 && footnoteMark(g.r) {
+			at = append(at, in.s0+(float64(pos)+float64(g.advance)/2)/float64(sh.advance)*(in.s1-in.s0))
+		}
+		pos += g.advance
+	}
+	if at == nil {
+		return in
+	}
+	var cols []int
+	for i, top := range in.tops {
+		if top != none {
+			cols = append(cols, i)
+		}
+	}
+	if len(cols) < 2 {
+		return in
+	}
+	slices.SortStableFunc(cols, func(a, b int) int { return cmp.Compare(in.tops[b], in.tops[a]) })
+	// The most of the highest columns that are narrow enough, and how high
+	// the rest reach.
+	n, lo, hi := 0, cols[0], cols[0]
+	for k := 1; k < len(cols); k++ {
+		l, h := min(lo, cols[k-1]), max(hi, cols[k-1])
+		if float64(h+1-l) > 0.75*(float64(in.tops[cols[k]])-in.t0) {
+			break
+		}
+		n, lo, hi = k, l, h
+	}
+	if n == 0 {
+		return in
+	}
+	rest := float64(in.tops[cols[n]])
+	high := rest - in.t0
+	rise := float64(in.tops[cols[0]]) - rest
+	mid := in.topsFrom + float64(lo+hi+1)/2
+	if high <= 0 || rise < 0.1*high || !slices.ContainsFunc(at, func(s float64) bool { return math.Abs(mid-s) <= 2*high }) {
+		return in
+	}
+	in.mark = in.t1
+	in.t1 -= rise
+	return in
+}
+
 // trimLeaders takes the dot leaders off the ends of a line, as a contents
 // page runs them from a heading to its page number. The recognizer reads
 // some of the dots, a dot at times as 。, which set in the line's face
@@ -1230,6 +1427,52 @@ func keepTitles(lines []measuredLine) {
 				if !lines[j].printed && big(lines[j]) && beside(lines[i], lines[j]) {
 					lines[j].printed, lines[j].refs = true, lineRefs{}
 					changed = true
+				}
+			}
+		}
+	}
+}
+
+// keepShaded keeps as printed the lines on paper shaded a pale gray, so
+// near white that it is taken for the paper (see measure), beside lines
+// kept as printed on color about as gray, within 16 levels: as a table's
+// cells shaded alike, whose shade lies on either side of where paper
+// ends, as a grammar book's, 210 to 220 each, of which one, set on white,
+// would stand out among the others, kept as printed. Beside is no
+// further apart, across or along, than the taller line's box is high;
+// and so on, line by line. Paper is within 8 levels of white, as the
+// page's, whitened, is.
+func keepShaded(lines []measuredLine) {
+	type box struct{ x0, y0, x1, y1 float64 }
+	boxes := make([]box, len(lines))
+	for i, m := range lines {
+		f, b := m.frame, box{math.Inf(1), math.Inf(1), math.Inf(-1), math.Inf(-1)}
+		for _, c := range [][2]float64{{0, 0}, {f.length, 0}, {0, f.height}, {f.length, f.height}} {
+			pt := f.point(c[0], c[1])
+			b = box{min(b.x0, pt.X), min(b.y0, pt.Y), max(b.x1, pt.X), max(b.y1, pt.Y)}
+		}
+		boxes[i] = b
+	}
+	shaded := func(m measuredLine) bool { return m.ink.found && diff(m.ink.edge, white) > 8 }
+	beside := func(i, j int) bool {
+		a, b := boxes[i], boxes[j]
+		h := max(lines[i].frame.height, lines[j].frame.height)
+		return max(a.x0-b.x1, b.x0-a.x1) <= h && max(a.y0-b.y1, b.y0-a.y1) <= h
+	}
+	onColor := make([]bool, len(lines)) // kept as printed, on color
+	for i, m := range lines {
+		onColor[i] = m.printed && !m.ink.plain
+	}
+	for changed := true; changed; {
+		changed = false
+		for i := range lines {
+			if !onColor[i] || !shaded(lines[i]) {
+				continue
+			}
+			for j := range lines {
+				if !lines[j].printed && shaded(lines[j]) && diff(lines[i].ink.edge, lines[j].ink.edge) <= 16 && beside(i, j) {
+					lines[j].printed, lines[j].refs = true, lineRefs{}
+					onColor[j], changed = true, true
 				}
 			}
 		}
@@ -2099,8 +2342,56 @@ func partsAt(runes []rune, b int) bool {
 // minScore is the least confidence the recognizer reads a line with for it
 // to be set: lines of text read with less, as a lettered box read as 向 or
 // a picture's scribbles as a word, stay as printed. Lines of text score
-// 0.9 and more.
-const minScore = 0.85
+// 0.9 and more. But a line of a paragraph, between two of its lines set,
+// is set from unsureScore, as one with a character or two misread, as
+// 英语語法根本沒有那么复杂 scores 0.84: kept as printed, its paragraph would
+// mix the scan's face with the text faces (see setUnsure).
+const minScore, unsureScore = 0.85, 0.75
+
+// setUnsure sets the lines kept as printed only for the recognizer being
+// unsure of them, unsure says which, read with unsureScore or more, of
+// four characters or more, that lie between two lines set of their
+// paragraph: lines running their way, about as high as they are, within a
+// sixth, one above and one below each, no further apart than half again
+// their height, alongside them for half the shorter one's length at least.
+// Picture's labels and scribbles stand alone, or among lines kept so.
+func setUnsure(lines []measuredLine, unsure []bool, scores []float32, refs func(m measuredLine) lineRefs) {
+	type box struct{ x0, y0, x1, y1 float64 }
+	inkBox := func(m measuredLine) box {
+		f, in, b := m.frame, m.ink, box{math.Inf(1), math.Inf(1), math.Inf(-1), math.Inf(-1)}
+		for _, c := range [][2]float64{{in.s0, in.t0}, {in.s1, in.t0}, {in.s0, in.t1}, {in.s1, in.t1}} {
+			pt := f.point(c[0], c[1])
+			b = box{min(b.x0, pt.X), min(b.y0, pt.Y), max(b.x1, pt.X), max(b.y1, pt.Y)}
+		}
+		return b
+	}
+	set := make([]bool, len(lines))
+	for i, m := range lines {
+		set[i] = !m.printed && m.ink.found && !m.stacked && !m.frame.turned
+	}
+	for i, m := range lines {
+		if !unsure[i] || scores[i] < unsureScore || !m.ink.found || m.stacked || m.frame.turned ||
+			len([]rune(strings.TrimSpace(m.text))) < 4 {
+			continue
+		}
+		a, h := inkBox(m), m.ink.t1-m.ink.t0
+		var above, below bool
+		for j, o := range lines {
+			if !set[j] || m.frame.u.X*o.frame.u.X+m.frame.u.Y*o.frame.u.Y < math.Cos(10*math.Pi/180) {
+				continue
+			}
+			b, hb := inkBox(o), o.ink.t1-o.ink.t0
+			if math.Abs(h-hb) > max(h, hb)/6 || min(a.x1, b.x1)-max(a.x0, b.x0) < 0.5*min(a.x1-a.x0, b.x1-b.x0) {
+				continue
+			}
+			above = above || a.y0-b.y1 >= 0 && a.y0-b.y1 <= 1.5*h
+			below = below || b.y0-a.y1 >= 0 && b.y0-a.y1 <= 1.5*h
+		}
+		if above && below {
+			lines[i].printed, lines[i].refs = false, refs(m)
+		}
+	}
+}
 
 // squeezed reports whether a line's glyphs, at the size its ink gives
 // them, would have to be squeezed to less than four fifths of their width
@@ -2218,6 +2509,14 @@ func (d *textDoc) redrawPage(img image.Image, lines []ocr.Line, width, height fl
 	for i, l := range lines {
 		frames[i] = lineFrame(l.Box)
 	}
+	// A page scanned askew is turned level first, its lines' boxes with
+	// it, so that its text, pictures and rules all come out level.
+	if angle, ok := pageAngle(frames); ok && math.Abs(angle) >= minSkew && math.Abs(angle) <= maxSkew {
+		p, lines = p.deskew(lines, angle)
+		for i, l := range lines {
+			frames[i] = lineFrame(l.Box)
+		}
+	}
 	// A box tilted off the page's lines, as round a heading whose last
 	// characters stand taller than its first, or a column's off upright, as
 	// round a cover's title set down it, is set level with them where its
@@ -2239,11 +2538,14 @@ func (d *textDoc) redrawPage(img image.Image, lines []ocr.Line, width, height fl
 			if frames[i].turned {
 				shorter = 0.98
 			}
-			if a.found && b.found && b.t1-b.t0 <= shorter*(a.t1-a.t0) {
+			turn := math.Atan2(alt.u.Y, alt.u.X) - math.Atan2(frames[i].u.Y, frames[i].u.X)
+			if a.found && b.found && (b.t1-b.t0 <= shorter*(a.t1-a.t0) || !frames[i].turned && p.levelFeet(frames[i], a, alt, b, turn)) {
 				frames[i] = alt
 			}
 		}
 	}
+	var unsure []bool    // each measured line's, kept as printed only for the recognizer being unsure of it
+	var scores []float32 // and how sure it was
 	for i, l := range lines {
 		// The other lines' boxes, whose ink is theirs, but for those the
 		// recognizer was unsure of, as of a picture's scribbles, whose
@@ -2266,6 +2568,9 @@ func (d *textDoc) redrawPage(img image.Image, lines []ocr.Line, width, height fl
 			}
 			text, in, keep := trimLeaders(text, in)
 			text = ref.enDashes(text, f, in)
+			if !f.turned {
+				in = raisedMark(text, ref.shape(text, serif), in)
+			}
 			in.tops = nil // for trimLeaders only: kept, a long document's would fill memory
 			// A column's characters stand upright, across the frame: its
 			// strokes upright on the page run along the frame, which its
@@ -2279,16 +2584,20 @@ func (d *textDoc) redrawPage(img image.Image, lines []ocr.Line, width, height fl
 				in, keep = stackedIn, append(keep, stray...)
 				in.strokes.across, in.strokes.down = in.strokes.down, in.strokes.across
 			}
+			printed := !in.plain || in.framed || !stacked && ref.squeezed(p, text, f, in) || ref.drawn(text, f, in)
 			m := measuredLine{text: text, frame: f, ink: in, keep: keep, stacked: stacked, source: i,
-				printed: !in.plain || in.framed || l.Score < minScore || !stacked && ref.squeezed(p, text, f, in) ||
-					ref.drawn(text, f, in)}
+				printed: printed || l.Score < minScore}
+			unsure = append(unsure, !printed && l.Score < minScore)
+			scores = append(scores, l.Score)
 			if !m.printed {
 				m.refs = ref.refs(text, f, in)
 			}
 			page.measured = append(page.measured, m)
 		}
 	}
+	setUnsure(page.measured, unsure, scores, func(m measuredLine) lineRefs { return ref.refs(m.text, m.frame, m.ink) })
 	keepTitles(page.measured)
+	keepShaded(page.measured)
 	// Erase the lines to set, set provisionally in the serif face to find
 	// the ink no character is matched to (see place), which stays.
 	shapes := make([]shape, len(page.measured))
@@ -2360,7 +2669,7 @@ func (d *textDoc) redrawPage(img image.Image, lines []ocr.Line, width, height fl
 		// the lines kept as printed.
 		s0, s1, t0, t1 := 0.0, f.length, 0.0, f.height
 		if in.found {
-			s0, s1, t0, t1 = min(s0, in.s0), max(s1, in.s1), min(t0, in.t0), max(t1, in.t1)
+			s0, s1, t0, t1 = min(s0, in.s0), max(s1, in.s1), min(t0, in.t0), max(t1, in.t1, in.mark)
 		}
 		theirs := p.keptInk(f, in, s0-1, s1+1, t0-1, t1+1, kept)
 		fill := func(from, to float64) {

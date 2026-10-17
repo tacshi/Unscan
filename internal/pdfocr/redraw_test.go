@@ -1380,6 +1380,73 @@ func TestCondensed(t *testing.T) {
 	}
 }
 
+// TestKindsBody sets the paragraphs of a page's body as the body is, as
+// told by all its lines and those of the pages beside it set alike, where
+// each paragraph's few lines tell its face less surely: a grammar book's
+// FangSong preface, pale, its paragraphs running aslant 0.061 to 0.093
+// more than the serif face's, about the least FangSong's do, was set in
+// FangSong and Hei paragraph by paragraph, and its Song chapters' short
+// paragraphs and page numbers in Hei, as its FangSong lines, leaning to
+// sans-serif, made the document's Chinese lean so. A paragraph surely
+// unlike the body, as FangSong examples among Song paragraphs or a box of
+// Hei, is its own.
+func TestKindsBody(t *testing.T) {
+	line := func(page int, top float64, cjk bool, lean, brush float64) lineGeom {
+		return lineGeom{ok: true, judged: true, page: page, top: top, bottom: top + 34, height: 34,
+			cjk: cjk, han: true, letters: 20, lean: lean, brush: brush, hanBrushed: !cjk}
+	}
+	// para is n lines of a paragraph from top down, every few running
+	// aslant a little more or less than its brush, as a scan's do.
+	para := func(page int, top float64, n int, lean, brush float64) []lineGeom {
+		var lines []lineGeom
+		for k := range n {
+			lines = append(lines, line(page, top+54*float64(k), true, lean, brush+0.01*float64(k%3-1)))
+		}
+		return lines
+	}
+	var lines []lineGeom
+	var want []int
+	add := func(kind int, ls ...lineGeom) {
+		lines = append(lines, ls...)
+		for range ls {
+			want = append(want, kind)
+		}
+	}
+	// Three pages of a FangSong preface, a paragraph of each a little
+	// short of FangSong's least, and one a line mostly of English between
+	// its lines; then a page of Song with two paragraphs of a line or two,
+	// and its number.
+	for page := range 3 {
+		add(fangsong, para(page, 100, 6, -0.24, 0.067)...)
+		add(fangsong, para(page, 500, 2, -0.23, 0.085)...)
+		add(fangsong, line(page, 608, false, -0.1, 0.1))
+		add(fangsong, para(page, 662, 3, -0.23, 0.085)...)
+	}
+	add(serif, para(3, 100, 2, 0.05, 0.06)...)
+	add(serif, para(3, 300, 6, 0.11, 0.06)...)
+	add(serif, para(3, 700, 1, 0.04, 0.05)...)
+	add(serif, lineGeom{page: 3})
+	// A page of Song with FangSong examples at its size, and a box of Hei.
+	add(serif, para(4, 100, 5, 0.1, 0.06)...)
+	add(fangsong, para(4, 500, 4, -0.13, 0.12)...)
+	add(serif, para(4, 800, 4, 0.08, 0.055)...)
+	add(sans, para(4, 1100, 3, -0.22, 0.02)...)
+	got, _ := kinds(lines, true, true)
+	for i := range lines {
+		if got[i] != want[i] {
+			t.Errorf("line %d, page %d at %.0f: %s, want %s", i, lines[i].page, lines[i].top, faceNames[got[i]], faceNames[want[i]])
+		}
+	}
+
+	// A paragraph's lines follow each other across a line mostly of
+	// English between them, as their paragraph, but not across a gap.
+	_, paras := kinds([]lineGeom{line(0, 100, true, 0.1, 0.05), line(0, 154, false, 0.1, 0.05),
+		line(0, 208, true, 0.1, 0.05), line(0, 400, true, 0.1, 0.05)}, true, true)
+	if wantParas := [][]int{{0, 2}, {1}, {3}}; !slices.EqualFunc(paras, wantParas, slices.Equal) {
+		t.Errorf("paragraphs %v, want %v", paras, wantParas)
+	}
+}
+
 // TestKindsShort sets lines too few or too short to tell their kind by, as
 // the document's lines of their script mostly are: in a sans-serif
 // document, a heading leaning a little to serif, as bold sans-serif faces
@@ -1950,6 +2017,204 @@ func TestHeavyPage(t *testing.T) {
 	}
 }
 
+// TestSmallType redraws pages of body text with footnotes in smaller type,
+// printed heavier for its size, as small type is, and one of them bold:
+// the footnotes are weighed against each other, not the body, and only the
+// bold one is set bold.
+func TestSmallType(t *testing.T) {
+	d, fonts := testTextDoc(t)
+	faceOf := func(data []byte, size float64) font.Face {
+		sf, err := opentype.Parse(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		face, err := opentype.NewFace(sf, &opentype.FaceOptions{Size: size, DPI: 72, Hinting: font.HintingNone})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return face
+	}
+	body, note, noteBold := faceOf(fonts.Sans.Data, 40), faceOf(fonts.Sans.Data, 26), faceOf(fonts.SansBold.Data, 26)
+	defer closeOrFail(t, body)
+	defer closeOrFail(t, note)
+	defer closeOrFail(t, noteBold)
+	bodyText := []string{"本书分上下两篇，上篇解决语序的问题。", "英语四种句式的主干，也就是动词的形式。", "的表达后，再分别为四种句式找到标记。",
+		"格。英语这三种修饰成分比汉语复杂。", "情况强调某一成分，最后是比较句等。", "形式部分是按照标记语法身份来写的。"}
+	notes := []string{"①数字来源于网络，目前大脑容量仍有争议。", "②也可以通过重读某个单词来强调。"}
+	type drawn struct {
+		page, line int
+		bold       bool
+	}
+	var noteLines []drawn
+	var pages []*textPage
+	// How much darker small type's edges are: its lines measure a sixth
+	// heavier than the body's, as a grammar book's footnotes do.
+	const darker = 1.6
+	for p := range 4 {
+		img := image.NewRGBA(image.Rect(0, 0, 1200, 900))
+		draw.Draw(img, img.Rect, image.White, image.Point{}, draw.Src)
+		var read []ocr.Line
+		for k, text := range bodyText {
+			base := 80 + 80*k
+			dr := font.Drawer{Dst: img, Src: image.Black, Face: body, Dot: fixed.P(60, base)}
+			dr.DrawString(text)
+			read = append(read, ocr.Line{Score: 1, Text: text, Box: ocr.Quad{{X: 54, Y: float64(base - 46)},
+				{X: float64(dr.Dot.X.Ceil() + 6), Y: float64(base - 46)}, {X: float64(dr.Dot.X.Ceil() + 6), Y: float64(base + 14)},
+				{X: 54, Y: float64(base + 14)}}})
+		}
+		for k, text := range notes {
+			base := 640 + 50*k
+			bold := p == 3 && k == 1
+			// Printed heavier for its size, its strokes' edges darker than
+			// the body's, as small type's are.
+			face := note
+			if bold {
+				face = noteBold
+			}
+			mask := image.NewAlpha(img.Rect)
+			dr := font.Drawer{Dst: mask, Src: image.Opaque, Face: face, Dot: fixed.P(60, base)}
+			dr.DrawString(text)
+			x1 := dr.Dot.X.Ceil()
+			for y := range img.Rect.Dy() {
+				for x := range img.Rect.Dx() {
+					if a := float64(mask.AlphaAt(x, y).A) / 255; a > 0 {
+						v := uint8(255 * (1 - min(1, darker*a)) * float64(img.RGBAAt(x, y).R) / 255)
+						img.SetRGBA(x, y, color.RGBA{v, v, v, 255})
+					}
+				}
+			}
+			noteLines = append(noteLines, drawn{p, len(read), bold})
+			read = append(read, ocr.Line{Score: 1, Text: text, Box: ocr.Quad{{X: 56, Y: float64(base - 30)},
+				{X: float64(x1 + 4), Y: float64(base - 30)}, {X: float64(x1 + 4), Y: float64(base + 9)},
+				{X: 56, Y: float64(base + 9)}}})
+		}
+		pages = append(pages, d.redraw(img, read, 1200, 900))
+	}
+	d.setLines()
+	for _, n := range noteLines {
+		p := pages[n.page]
+		code := d.sets[p.set].codes[p.lines[n.line].cids[0]-1]
+		if got := code.face == sansBold; got != n.bold {
+			t.Errorf("page %d note %d set bold %v, want %v", n.page, n.line, got, n.bold)
+		}
+	}
+}
+
+// TestRaisedMark redraws a paragraph one of whose lines has a footnote's
+// reference printed raised over its text, as 英语人① is: the line is set
+// in its paragraph's face and size, not taller by the mark, as a grammar
+// book's was, in sans-serif and a fifth larger. A footnote's own number,
+// starting its line, and a mark printed level with the text, as in a
+// list, leave the line's height as it is.
+func TestRaisedMark(t *testing.T) {
+	d, fonts := testTextDoc(t)
+	faceOf := func(size float64) font.Face {
+		sf, err := opentype.Parse(fonts.Serif.Data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		face, err := opentype.NewFace(sf, &opentype.FaceOptions{Size: size, DPI: 72, Hinting: font.HintingNone})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return face
+	}
+	body, small := faceOf(40), faceOf(22)
+	defer closeOrFail(t, body)
+	defer closeOrFail(t, small)
+	// drawLine draws before, then a mark raised by raise pixels in small
+	// type, or level and full size where raise is 0, or none where it is
+	// less, then after, on a line
+	// whose baseline is at base, and returns its box, which takes in the
+	// mark, as the recognizer's does.
+	drawLine := func(img *image.RGBA, before, after string, raise, base int) ocr.Quad {
+		dr := font.Drawer{Dst: img, Src: image.Black, Face: body, Dot: fixed.P(60, base)}
+		dr.DrawString(before)
+		if raise > 0 {
+			mark := font.Drawer{Dst: img, Src: image.Black, Face: small, Dot: fixed.Point26_6{X: dr.Dot.X, Y: fixed.I(base - raise)}}
+			mark.DrawString("①")
+			dr.Dot.X = mark.Dot.X
+		} else if raise == 0 {
+			dr.DrawString("①")
+		}
+		dr.DrawString(after)
+		end := float64(dr.Dot.X.Ceil() + 6)
+		return ocr.Quad{{X: 54, Y: float64(base - 56)}, {X: end, Y: float64(base - 56)}, {X: end, Y: float64(base + 14)}, {X: 54, Y: float64(base + 14)}}
+	}
+	newPage := func() *image.RGBA {
+		img := image.NewRGBA(image.Rect(0, 0, 1200, 800))
+		draw.Draw(img, img.Rect, image.White, image.Point{}, draw.Src)
+		return img
+	}
+
+	img := newPage()
+	before, after := "候，很看不惯英语人", "打招呼，整天说早上好、晚上好。"
+	texts := []string{"它就开始接受英语了，我们的学习就毫无障碍了。", before + "①" + after,
+		"一点儿不像中国人一样问吃了吗。", "还有登机为什么跟上船一样呢。", "但是当我了解了英语词根词源。"}
+	var read []ocr.Line
+	for k, text := range texts {
+		box := drawLine(img, text, "", -1, 80+80*k)
+		if k == 1 {
+			box = drawLine(img, before, after, 26, 80+80*k)
+		}
+		read = append(read, ocr.Line{Score: 1, Text: text, Box: box})
+	}
+	page := d.redraw(img, read, 1200, 800)
+	d.setLines()
+	var sizes []float64
+	for k, l := range page.lines {
+		if k != 1 {
+			sizes = append(sizes, l.size)
+		}
+	}
+	slices.Sort(sizes)
+	mid := sizes[len(sizes)/2]
+	for k, l := range page.lines {
+		if face := d.sets[page.set].codes[l.cids[0]-1].face; face != serif {
+			t.Errorf("line %d set in %s, want serif", k, faceNames[face])
+		}
+		if math.Abs(l.size/mid-1) > 0.03 {
+			t.Errorf("line %d set at %.1f, want %.1f, as its paragraph's", k, l.size, mid)
+		}
+	}
+
+	// The line's ink, measured, with its mark or without.
+	measured := func(before, after string, raise int) (ink, ink) {
+		img := newPage()
+		f := lineFrame(drawLine(img, before, after, raise, 100))
+		p := newPixels(img)
+		p.whiten()
+		text := before + "①" + after
+		sh := d.shape(text, serif)
+		in := p.measure(f, sh.aspect())
+		return in, raisedMark(text, sh, in)
+	}
+	for _, c := range []struct {
+		name          string
+		before, after string
+		raise         int
+	}{
+		{"a footnote's number", "", "“英语人”指所有以英语为母语的人。", 0},
+		{"a mark level with the text", "其一", "是英语人重视时间。", 0},
+	} {
+		if in, got := measured(c.before, c.after, c.raise); got.t1 != in.t1 || got.mark != 0 {
+			t.Errorf("%s: the ink's top at %.1f, mark at %.1f, want %.1f and none", c.name, got.t1, got.mark, in.t1)
+		}
+	}
+	plain := func() ink {
+		img := newPage()
+		f := lineFrame(drawLine(img, before+"人", after, -1, 100)) // a character in the mark's stead
+		p := newPixels(img)
+		p.whiten()
+		return p.measure(f, d.shape(before+"人"+after, serif).aspect())
+	}()
+	in, got := measured(before, after, 26)
+	if want := plain.t1 - plain.t0; math.Abs(got.t1-got.t0-want) > 1.5 || in.t1-in.t0 < want+5 || got.mark != in.t1 {
+		t.Errorf("a raised mark: the ink %.1f high, %.1f with the mark, its top at %.1f, want %.1f high, the mark's top at %.1f",
+			got.t1-got.t0, in.t1-in.t0, got.mark, want, in.t1)
+	}
+}
+
 // TestWordFaces redraws a caption whose verb is set bold, "Look up", among
 // lines set regular, and sets each word in its face; and an example set
 // italic after a label set upright, whose words it slants.
@@ -2318,8 +2583,9 @@ func TestNeighborInk(t *testing.T) {
 
 // TestLevel redraws a chapter opener's heading, printed level, whose box
 // the recognizer tilted, as round a heading whose last characters stand
-// taller than its first: it is set level with the page's lines. On a page
-// scanned askew, whose lines all tilt, a line keeps their tilt. And a
+// taller than its first: it is set level with the page's lines. A page
+// scanned askew, whose lines all tilt, is turned level, and its lines
+// with it, wherever they lie on it. And a
 // label's box, no longer than three times its height, as a circled
 // number's, is not leveled: as the recognizer draws it, it says nothing
 // of how its text runs.
@@ -2351,7 +2617,9 @@ func TestLevel(t *testing.T) {
 		want         float64 // the slope it is set at
 	}{
 		{"a heading's box tilted", 0, -0.047, 0},
-		{"a page scanned askew", -0.03, -0.03, -0.03},
+		{"a page scanned askew", -0.03, -0.03, 0},
+		{"a page scanned askew the other way", 0.02, 0.02, 0},
+		{"a heading's box tilted on a page scanned askew", 0.02, -0.03, 0},
 	} {
 		img := image.NewRGBA(image.Rect(0, 0, 1000, 700))
 		draw.Draw(img, img.Rect, image.White, image.Point{}, draw.Src)
@@ -2383,9 +2651,71 @@ func TestLevel(t *testing.T) {
 		if got := page.lines[0].dy / page.lines[0].dx; math.Abs(got+c.want) > 0.005 {
 			t.Errorf("%s: the heading set at a slope of %.3f, want %.3f", c.name, -got, c.want)
 		}
+		for k, l := range page.lines[1:] {
+			if got := l.dy / l.dx; math.Abs(got) > 0.002 {
+				t.Errorf("%s: line %d set at a slope of %.4f, want level", c.name, k+1, -got)
+			}
+		}
 	}
 	if _, ok := level(frame{u: ocr.Point{X: 1}, v: ocr.Point{Y: -1}, length: 60, height: 40}, 0.05); ok {
 		t.Error("a label's box leveled")
+	}
+}
+
+// TestLevelFeet measures a chapter opener's heading, "Chapter 01", printed
+// level, whose box the recognizer tilted, and the same heading printed
+// along the tilted box: in the box turned level, the first's feet run
+// level, as the baseline does, and the second's rise along it, so only
+// the first is told level, wherever the box's edges lie by a pixel.
+func TestLevelFeet(t *testing.T) {
+	d, fonts := testTextDoc(t)
+	sf, err := opentype.Parse(fonts.SansBold.Data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	face, err := opentype.NewFace(sf, &opentype.FaceOptions{Size: 80, DPI: 72, Hinting: font.HintingNone})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeOrFail(t, face)
+	const text, slope, base = "Chapter 01", -0.042, 200
+	for _, along := range []bool{false, true} {
+		line := image.NewRGBA(image.Rect(0, 0, 1000, 150))
+		draw.Draw(line, line.Rect, image.White, image.Point{}, draw.Src)
+		dr := font.Drawer{Dst: line, Src: image.Black, Face: face, Dot: fixed.P(100, 100)}
+		dr.DrawString(text)
+		end := dr.Dot.X.Ceil()
+		img := image.NewRGBA(image.Rect(0, 0, 1000, 400))
+		draw.Draw(img, img.Rect, image.White, image.Point{}, draw.Src)
+		mid := float64(100+end) / 2
+		for x := range 1000 {
+			shift := 0
+			if along {
+				shift = int(math.Round((float64(x) - mid) * slope))
+			}
+			for y := range 150 {
+				if line.RGBAAt(x, y).R < 255 {
+					img.Set(x, base-100+y+shift, line.At(x, y))
+				}
+			}
+		}
+		p := newPixels(img)
+		for _, grow := range []float64{0, 1} {
+			at := func(x, y float64) ocr.Point {
+				dx, dy := x-mid, y-float64(base-30)
+				return ocr.Point{X: mid + dx - dy*slope, Y: float64(base-30) + dy + dx*slope}
+			}
+			f := lineFrame(ocr.Quad{at(92, base-75), at(float64(end+8), base-75), at(float64(end+8), base+22+grow), at(92, base+22+grow)})
+			g, ok := level(f, 0)
+			if !ok {
+				t.Fatal("the box not leveled")
+			}
+			turn := math.Atan2(g.u.Y, g.u.X) - math.Atan2(f.u.Y, f.u.X)
+			aspect := d.shape(text, sans).aspect()
+			if got := p.levelFeet(f, p.measure(f, aspect), g, p.measure(g, aspect), turn); got == along {
+				t.Errorf("printed along the box %v, its box %.0f pixels lower: told level %v, want %v", along, grow, got, !along)
+			}
+		}
 	}
 }
 
@@ -2666,9 +2996,10 @@ func TestLevelColumn(t *testing.T) {
 
 // TestKeepTitles redraws a title page's title, two columns side by side at
 // one size, one of which the recognizer was unsure of, beside lines of
-// smaller text, one of which it was unsure of too: the title's columns
-// are both kept as printed, in the face they were printed in, not one in
-// the text faces, and the small lines but for the one are set.
+// smaller text, one of which it was unsure of too, less than unsureScore,
+// as of a misread label: the title's columns are both kept as printed, in
+// the face they were printed in, not one in the text faces, and the small
+// lines but for the one are set.
 func TestKeepTitles(t *testing.T) {
 	d, fonts := testTextDoc(t)
 	sf, err := opentype.Parse(fonts.SansBold.Data)
@@ -2695,7 +3026,7 @@ func TestKeepTitles(t *testing.T) {
 		end := dr.Dot.X.Ceil()
 		score := float32(1)
 		if k == 1 {
-			score = 0.8
+			score = 0.7
 		}
 		lines = append(lines, ocr.Line{Score: score, Text: text, Box: ocr.Quad{{X: 394, Y: float64(base - 40)},
 			{X: float64(end + 6), Y: float64(base - 40)}, {X: float64(end + 6), Y: float64(base + 12)}, {X: 394, Y: float64(base + 12)}}})
@@ -2727,6 +3058,94 @@ func TestKeepTitles(t *testing.T) {
 		"民主与建设出版社出版": true, "第二章句式的势利眼": false} {
 		if got, ok := hidden[text]; !ok || got != want {
 			t.Errorf("%s kept as printed %v, want %v (lines %v)", text, got, want, hidden)
+		}
+	}
+}
+
+// TestKeepShaded redraws a table whose cells are shaded a pale gray, one a
+// little paler than the others, as near white as paper is taken to be, as
+// a grammar book's are: the cells are all kept as printed, not the paler
+// one set on white among them; and a line on the white paper below them
+// is set.
+func TestKeepShaded(t *testing.T) {
+	d, fonts := testTextDoc(t)
+	sf, err := opentype.Parse(fonts.Serif.Data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	face, err := opentype.NewFace(sf, &opentype.FaceOptions{Size: 40, DPI: 72, Hinting: font.HintingNone})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeOrFail(t, face)
+	img := image.NewRGBA(image.Rect(0, 0, 1200, 700))
+	draw.Draw(img, img.Rect, image.White, image.Point{}, draw.Src)
+	var lines []ocr.Line
+	add := func(text string, x, base int) {
+		dr := font.Drawer{Dst: img, Src: image.Black, Face: face, Dot: fixed.P(x, base)}
+		dr.DrawString(text)
+		end := dr.Dot.X.Ceil()
+		lines = append(lines, ocr.Line{Score: 1, Text: text, Box: ocr.Quad{{X: float64(x - 6), Y: float64(base - 44)},
+			{X: float64(end + 6), Y: float64(base - 44)}, {X: float64(end + 6), Y: float64(base + 12)}, {X: float64(x - 6), Y: float64(base + 12)}}})
+	}
+	cells := [][2]string{{"十二点五十分", "正常的时间表达"}, {"差十分一点", "强调离一点还有多长时间"}, {"给我钱", "强调给我而不是给别人"}}
+	for r, row := range cells {
+		for c, text := range row {
+			// Each cell shaded 210, but the first column's second, 218.
+			shade := uint8(210)
+			if r == 1 && c == 0 {
+				shade = 218
+			}
+			cell := image.Rect(40+400*c, 60+100*r, 440+400*c+300*c, 158+100*r)
+			draw.Draw(img, cell, image.NewUniform(color.RGBA{shade, shade, shade, 255}), image.Point{}, draw.Src)
+			add(text, cell.Min.X+20, cell.Min.Y+68)
+		}
+	}
+	add("感受到了吗？双重标准是为了表达不同的强调内容。", 60, 520)
+	add("这种表达，重要的是前面几分钟，如果我们一点上课。", 60, 600)
+	page := d.redraw(img, lines, 1200, 700)
+	d.setLines()
+	for k, l := range page.lines {
+		if want := k < 6; l.hidden != want {
+			t.Errorf("line %d kept as printed %v, want %v", k, l.hidden, want)
+		}
+	}
+}
+
+// TestSetUnsure redraws a paragraph one of whose lines the recognizer was
+// unsure of, as of a line with a character or two misread, and a label
+// alone it was as unsure of: the paragraph's line is set with the others,
+// not kept as printed among them, and the label is kept so.
+func TestSetUnsure(t *testing.T) {
+	d, fonts := testTextDoc(t)
+	sf, err := opentype.Parse(fonts.Serif.Data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	face, err := opentype.NewFace(sf, &opentype.FaceOptions{Size: 40, DPI: 72, Hinting: font.HintingNone})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeOrFail(t, face)
+	img := image.NewRGBA(image.Rect(0, 0, 1200, 700))
+	draw.Draw(img, img.Rect, image.White, image.Point{}, draw.Src)
+	var lines []ocr.Line
+	add := func(text string, x, base int, score float32) {
+		dr := font.Drawer{Dst: img, Src: image.Black, Face: face, Dot: fixed.P(x, base)}
+		dr.DrawString(text)
+		end := dr.Dot.X.Ceil()
+		lines = append(lines, ocr.Line{Score: score, Text: text, Box: ocr.Quad{{X: float64(x - 6), Y: float64(base - 44)},
+			{X: float64(end + 6), Y: float64(base - 44)}, {X: float64(end + 6), Y: float64(base + 12)}, {X: float64(x - 6), Y: float64(base + 12)}}})
+	}
+	add("抓住英语思维，你会发现英语语法", 60, 100, 1)
+	add("英语语法根本没有那么复杂，语法", 60, 160, 0.84)
+	add("的众多不同只不过是思维差异引起", 60, 220, 1)
+	add("思维语法", 800, 500, 0.84)
+	page := d.redraw(img, lines, 1200, 700)
+	d.setLines()
+	for k, want := range []bool{false, false, false, true} {
+		if got := page.lines[k].hidden; got != want {
+			t.Errorf("line %d kept as printed %v, want %v", k, got, want)
 		}
 	}
 }
