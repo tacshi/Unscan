@@ -859,6 +859,12 @@ func TestUpdates(t *testing.T) {
 	f.openSettings()
 	tt.Frame()
 	wantTexts(t, tt, "Settings", "Updates", "Last checked: Mar 4, 2025")
+	// A version found shows in its place.
+	f.updates.available = "2026.11.0"
+	tt.Frame()
+	wantTexts(t, tt, "Version 2026.11.0 is available")
+	f.updates.available = ""
+	tt.Frame()
 	// Below the fonts, which a window this short scrolls.
 	r, ok := tt.Find("Fonts")
 	if !ok {

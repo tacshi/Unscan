@@ -1,5 +1,6 @@
 {
   "name": "Unscan",
+  "slug": "unscan",
   "identifier": "app.capyvibe.unscan",
   "version": "0.1.0",
   "out": "build",

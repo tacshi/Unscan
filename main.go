@@ -640,8 +640,8 @@ func loadEngine() (*pdfocr.Converter, error) {
 }
 
 func main() {
-	// Checks for updates once a day, and offers them in a window of native
-	// UI, as Sparkle does.
+	// Checks for updates soon after launch and once a day, and offers them
+	// in a window of native UI, as Sparkle does.
 	mygo.Use(native.Plugin)
 	a := &app{sidebar: true, comparing: true}
 	var win *mygo.Window
@@ -760,7 +760,7 @@ func main() {
 		readUpdates := func() updatePrefs {
 			return updatePrefs{
 				enabled: canUpdate, checks: updater.AutomaticChecks(), downloads: updater.AutomaticDownloads(),
-				lastCheck: updater.LastCheck(),
+				lastCheck: updater.LastCheck(), available: updater.AvailableVersion(),
 			}
 		}
 		a.updates = readUpdates()
