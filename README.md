@@ -14,7 +14,7 @@
   <a href="go.mod"><img src="https://img.shields.io/github/go-mod/go-version/tacshi/Unscan" alt="Go version"></a>
   <img src="https://img.shields.io/badge/platform-macOS%20%28Apple%20silicon%29-lightgrey" alt="Platform: macOS on Apple silicon">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="License: MIT"></a>
-  <a href="https://awesomemygo.dev/apps/unscan"><img src="https://awesomemygo.dev/badge.svg" alt="Listed on Awesome MyGo"></a>
+  <a href="https://awesomemygo.dev/apps/unscan"><img src="https://awesomemygo.dev/badge.svg" alt="Listed on Awesome MyGo" height="20"></a>
 </p>
 
 <p align="center">
