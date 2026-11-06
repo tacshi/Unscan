@@ -41,13 +41,14 @@ fi
 cd "$(dirname "$0")/.."
 
 name=$(plutil -extract name raw -o - mygo.json)
+slug=$(plutil -extract slug raw -o - mygo.json)
 version=$(plutil -extract version raw -o - mygo.json)
 identity=${MACOS_SIGNING_IDENTITY:--}
 notary=${NOTARY_PROFILE:-}
 out=build/release
 dir="$out/darwin-arm64"
 app="$dir/$name.app"
-dmg="$dir/$name $version arm64.dmg"
+dmg="$dir/$slug-$version-arm64.dmg"
 
 if [[ -n "$notary" && "$identity" == - ]]; then
 	echo "error: notarizing needs a Developer ID: set MACOS_SIGNING_IDENTITY" >&2

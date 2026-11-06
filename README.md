@@ -14,6 +14,7 @@
   <a href="go.mod"><img src="https://img.shields.io/github/go-mod/go-version/tacshi/Unscan" alt="Go version"></a>
   <img src="https://img.shields.io/badge/platform-macOS%20%28Apple%20silicon%29-lightgrey" alt="Platform: macOS on Apple silicon">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="License: MIT"></a>
+  <a href="https://awesomemygo.dev/apps/unscan"><img src="https://awesomemygo.dev/badge.svg" alt="Listed on Awesome MyGo"></a>
 </p>
 
 <p align="center">
@@ -80,8 +81,8 @@ the right, as **Compare with Original** shows them:
 
 - **Local and private.** OCR runs on your computer, on a Mac's GPU
   too. Nothing is uploaded: the
-  app's only connection is its daily check for updates, which Settings
-  turns off.
+  app's only connection is its check for updates, as it starts and then
+  daily, which Settings turns off.
 - **Leaves digital pages alone.** Pages that already have text, such as
   born-digital ones, are kept as they are, in both PDFs. A scan read by
   OCR before, whose text is an invisible layer over its pages, is read
@@ -187,16 +188,17 @@ in the sidebar shows it again.
 #### Updates
 
 Unscan keeps itself up to date from this repository's GitHub releases.
-It checks once a day, and when a new version is out, a window shows its
-release notes and offers to install it, skip it or remind you later;
-installing downloads only what changed, where it can, and relaunches into
-it. **Unscan › Check for Updates…** checks now (on Linux and Windows,
-**File › Check for Updates…**). In **Settings…**, **Check for updates
-automatically** turns the daily checks off, and **Download and install
-updates automatically** installs what they find without asking, for the
-next launch. Updates are signed, and Unscan installs only those signed
-with its key. It updates itself where it can replace its app, as in
-`/Applications`; development builds never do.
+It checks soon after it starts and once a day while it runs, and when a
+new version is out, a window shows its release notes and offers to
+install it, skip it or remind you later; installing downloads only what
+changed, where it can, and relaunches into it. **Unscan › Check for
+Updates…** checks now (on Linux and Windows, **File › Check for
+Updates…**). In **Settings…**, **Check for updates automatically** turns
+these checks off, **Download and install updates automatically** installs
+what they find without asking, for the next launch, and a version found
+shows beside **Check Now**. Updates are signed, and Unscan installs only
+those signed with its key. It updates itself where it can replace its
+app, as in `/Applications`; development builds never do.
 
 ### Command line
 
@@ -264,7 +266,7 @@ Good to know:
 
 ### Requirements
 
-- Go 1.27.2 or later.
+- Go 1.27.3 or later.
 - macOS on Apple silicon to run the app and build its releases. ONNX
   Runtime is also fetched for Linux and Windows (amd64 and arm64) for
   cross-platform builds. Intel Macs are not supported (see

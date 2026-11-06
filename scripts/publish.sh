@@ -73,6 +73,7 @@ if $upload; then
 fi
 
 name=$(plutil -extract name raw -o - mygo.json)
+slug=$(plutil -extract slug raw -o - mygo.json)
 tag="v$version"
 stage=build/publish
 
@@ -229,7 +230,7 @@ MACOS_SIGNING_IDENTITY=$identity NOTARY_PROFILE=$notary MYGO_UPDATER_PRIVATE_KEY
 
 cp "$backup" mygo.json
 built=build/release/darwin-arm64
-dmg="$built/$name $version arm64.dmg"
+dmg="$built/$slug-$version-arm64.dmg"
 [[ -f "$dmg" ]] || die "the build made no $dmg"
 xcrun stapler validate "$dmg" >/dev/null || die "$dmg is not notarized"
 asset="$stage/$name-$version-arm64.dmg"

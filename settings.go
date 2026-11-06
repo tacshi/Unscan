@@ -10,9 +10,10 @@ import (
 // keeps, and whether this copy of the app can update itself at all.
 type updatePrefs struct {
 	enabled   bool      // a release build, in a folder it can write to
-	checks    bool      // check for updates in the background, once a day
+	checks    bool      // check for updates in the background, at launch and daily
 	downloads bool      // install those found without asking, for the next launch
 	lastCheck time.Time // when the app last checked, or zero
+	available string    // the newer version the last check found, or ""
 }
 
 // openSettings shows the fonts retyped PDFs are set in, and how the app
@@ -59,7 +60,8 @@ func (a *app) settingsDialog(c *ui.Context) {
 }
 
 // updatesField shows whether the app checks for updates and installs them
-// by itself, which the user may change, and when it last checked.
+// by itself, which the user may change, and the version it found or when it
+// last checked.
 func (a *app) updatesField(c *ui.Context) {
 	t := c.Theme()
 	u := &a.updates
@@ -72,11 +74,14 @@ func (a *app) updatesField(c *ui.Context) {
 			ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
 				ui.Button(c.Key("check"), "Check Now").OnClick(a.fx.checkUpdates)
 				if u.enabled {
-					last := "Not checked yet"
-					if !u.lastCheck.IsZero() {
-						last = "Last checked: " + when(u.lastCheck, time.Now())
+					status := "Not checked yet"
+					switch {
+					case u.available != "":
+						status = "Version " + u.available + " is available"
+					case !u.lastCheck.IsZero():
+						status = "Last checked: " + when(u.lastCheck, time.Now())
 					}
-					ui.Text(c, last).FontSize(12).TextColor(t.TextMuted).Grow(1).MinWidth(0).SingleLine()
+					ui.Text(c, status).FontSize(12).TextColor(t.TextMuted).Grow(1).MinWidth(0).SingleLine()
 				}
 			})
 		})
