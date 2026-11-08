@@ -405,6 +405,21 @@ func TestHistory(t *testing.T) {
 	}
 }
 
+// TestHistoryKey keys a row of the sidebar by its folder's name, which a
+// reading of the same PDF again has its own of, and a result without a
+// folder by itself.
+func TestHistoryKey(t *testing.T) {
+	a := &result{file: "/scans/a.pdf", dir: "/history/read-1"}
+	again := &result{file: "/scans/a.pdf", dir: "/history/read-2"}
+	bare, bare2 := &result{}, &result{}
+	if got := a.key(); got != "read-1" {
+		t.Errorf("key %v, not read-1", got)
+	}
+	if a.key() == again.key() || bare.key() == bare2.key() || bare.key() != any(bare) {
+		t.Errorf("keys %v, %v, %p, %p", a.key(), again.key(), bare.key(), bare2.key())
+	}
+}
+
 // TestHistoryOnDisk reads the history from folders, as convertFile writes
 // them: those of readings that did not end are left out, and removed once
 // they are a day old.
@@ -535,9 +550,19 @@ func TestCompare(t *testing.T) {
 	if f.split <= 0.5 || f.split >= 0.75 {
 		t.Errorf("split %v after a drag to the right", f.split)
 	}
+	// A drag with the right button moves nothing.
+	dragged := f.split
+	div, _ = tt.Find("Divider")
+	x, y = div.X+div.W/2, div.Y+div.H/2
+	tt.PressButton(1, x, y)
+	tt.Move(x-200, y)
+	tt.ReleaseButton(1, x-200, y)
+	tt.Frame()
+	if f.split != dragged {
+		t.Errorf("split %v after a right-button drag, not %v", f.split, dragged)
+	}
 	// The arrows go on turning the page, as the drag leaves the keyboard
 	// focus where it was; from Tab, they move the divider.
-	dragged := f.split
 	tt.Key(0, ui.KeyLeft)
 	tt.Frame()
 	if f.at != 0 || f.split != dragged {
@@ -1094,6 +1119,12 @@ func TestGoToPage(t *testing.T) {
 	if f.jumping || f.at != 4 {
 		t.Errorf("after a click elsewhere, jumping %v, at page %d", f.jumping, f.at+1)
 	}
+
+	// The field takes no more digits than the last page's number has.
+	jump("23", ui.KeyEnter)
+	if f.at != 1 {
+		t.Errorf("23 typed in a document of 5 pages shows page %d", f.at+1)
+	}
 }
 
 // TestQueueFailure goes on with the queue past a PDF that cannot be read,
@@ -1119,6 +1150,33 @@ func TestQueueFailure(t *testing.T) {
 	tt.Frame()
 	if len(f.history) != 2 || f.history[0].file != filepath.Join(f.dir, "c.pdf") || f.err != "" || f.file != "" {
 		t.Errorf("history %+v, error %q, reading %q", f.history, f.err, f.file)
+	}
+}
+
+// TestQueueFailureAway keeps the toast of a PDF that cannot be read while
+// the user is in another app until they come back, since a toast's time
+// runs while its window is in the background.
+func TestQueueFailureAway(t *testing.T) {
+	read := readFake(t)
+	f := newFixture(t, func(ctx context.Context, path string, p pdfocr.Progress) (*result, error) {
+		if filepath.Base(path) == "b.pdf" {
+			return nil, errors.New("damaged")
+		}
+		return read(ctx, path, p)
+	})
+	later := &spawnLater{}
+	f.fx.spawn = later.spawn
+	tt := ui.NewTester(f.view, 960, 720)
+	f.drop([]string{filepath.Join(f.dir, "a.pdf"), filepath.Join(f.dir, "b.pdf"), filepath.Join(f.dir, "c.pdf")})
+	tt.SetWindowActive(false)
+	for later.step() {
+	}
+	tt.Frame()
+	tt.Advance(time.Minute)
+	tt.SetWindowActive(true)
+	wantTexts(t, tt, "Couldn’t read “b.pdf”")
+	if len(f.history) != 2 {
+		t.Errorf("history %+v", f.history)
 	}
 }
 
@@ -1183,4 +1241,87 @@ func TestBrowseWhileReading(t *testing.T) {
 	if f.phase != done || f.result.file != f.scan || len(f.history) != 2 {
 		t.Errorf("phase %v, showing %+v", f.phase, f.result)
 	}
+}
+
+// TestAccessibility checks what screen readers are told of the window as
+// PDFs are read and one is shown: the names, roles and states of its
+// controls.
+func TestAccessibility(t *testing.T) {
+	f := newFixture(t, func(ctx context.Context, path string, p pdfocr.Progress) (*result, error) {
+		pages := make([]pdfocr.Page, 3)
+		for i := range pages {
+			pages[i] = pdfocr.Page{Text: fmt.Sprint("Page ", i+1), Lines: 1}
+		}
+		p(0, len(pages))
+		return &result{pages: pages, pdf: tempFile(t, "%PDF"), textPDF: tempFile(t, "%PDF text"), dir: t.TempDir()}, nil
+	})
+	later := &spawnLater{}
+	f.fx.spawn = later.spawn
+	tt := ui.NewTester(f.view, 960, 720)
+	f.drop([]string{filepath.Join(f.dir, "a.pdf"), filepath.Join(f.dir, "b.pdf")})
+	tt.Frame()
+	if p := access(t, tt, ui.RoleProgress, "Reading a.pdf"); p.Now >= p.Min {
+		t.Errorf("progress %v of a PDF whose pages aren't counted yet", p.Now)
+	}
+	later.step()
+	tt.Frame()
+	// The sidebar's progress, as a.pdf shows, its page loading.
+	if b := access(t, tt, ui.RoleButton, "Reading b.pdf"); b.Description != "Opening…" {
+		t.Errorf("the row of the PDF being read is %+v", b)
+	}
+	access(t, tt, ui.RoleProgress, "Loading page 1")
+	f.fx.spawn = func(fn func()) { fn() }
+	for later.step() {
+		tt.Frame()
+	}
+	tt.Frame()
+
+	if b := access(t, tt, ui.RoleButton, "Previous Page"); !b.Disabled || b.Description != "Previous Page (←)" {
+		t.Errorf("on the first page, Previous Page is %+v", b)
+	}
+	if access(t, tt, ui.RoleButton, "Next Page").Disabled {
+		t.Error("Next Page is disabled on the first page")
+	}
+	access(t, tt, ui.RoleImage, "Page 1")
+	if !access(t, tt, ui.RoleRadio, "Searchable PDF").Checked || access(t, tt, ui.RoleRadio, "Retyped PDF").Checked {
+		t.Error("the form shown is not the one checked")
+	}
+	if !access(t, tt, ui.RoleToggleButton, "Compare with Original").Disabled {
+		t.Error("the searchable PDF can be compared with itself")
+	}
+	if row := access(t, tt, ui.RoleListItem, "a.pdf"); !row.Selected || row.PosInSet != 2 || row.SetSize != 2 {
+		t.Errorf("the row of the PDF shown is %+v", row)
+	}
+	if access(t, tt, ui.RoleListItem, "b.pdf").Selected {
+		t.Error("the row of the PDF not shown is selected")
+	}
+
+	click(t, tt, "Next Page")
+	click(t, tt, "Next Page")
+	if !access(t, tt, ui.RoleButton, "Next Page").Disabled {
+		t.Error("Next Page is enabled on the last page")
+	}
+	access(t, tt, ui.RoleImage, "Page 3")
+	click(t, tt, "Retyped PDF")
+	if !access(t, tt, ui.RoleRadio, "Retyped PDF").Checked {
+		t.Error("Retyped PDF is not checked once chosen")
+	}
+	if b := access(t, tt, ui.RoleToggleButton, "Compare with Original"); b.Disabled || !b.Checked {
+		t.Errorf("comparing the retyped PDF, the toggle is %+v", b)
+	}
+	click(t, tt, "Go to Page")
+	if in := access(t, tt, ui.RoleTextField, "Page"); in.Placeholder != "3" || !in.Focused {
+		t.Errorf("the field of the page's number is %+v", in)
+	}
+}
+
+// access returns what assistive technology sees of the element of role
+// named name.
+func access(t *testing.T, tt *ui.Tester, role ui.Role, name string) ui.AccessInfo {
+	t.Helper()
+	a, ok := tt.AccessByRole(role, name)
+	if !ok {
+		t.Fatalf("no element of role %v named %q in %q", role, name, tt.Texts())
+	}
+	return a
 }

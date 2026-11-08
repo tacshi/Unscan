@@ -348,8 +348,9 @@ func (a *app) pageNumber(c *ui.Context, pages int) {
 		return
 	}
 	ui.Row(c).Gap(t.Space(1.5)).Padding(0, t.Space(2)).Children(func() {
+		// No longer than the number of the last page.
 		in := ui.TextInput(c, &a.jumpTo).Width(t.Space(14)).Placeholder(strconv.Itoa(a.at + 1)).
-			Label("Page").FontFeatures("tnum").AutoFocus()
+			Label("Page").FontFeatures("tnum").MaxLength(len(strconv.Itoa(pages))).AutoFocus()
 		leave := func() {
 			a.jumping = false
 			a.pageArea.Focus(c)
@@ -362,7 +363,7 @@ func (a *app) pageNumber(c *ui.Context, pages int) {
 			leave()
 		case in.Shortcut(0, ui.KeyEscape):
 			leave()
-		case !in.Focused():
+		case in.FocusLeft():
 			a.jumping = false // the focus went elsewhere, where it stays
 		}
 		ui.Textf(c, "of %d", pages).FontFeatures("tnum")
@@ -434,11 +435,15 @@ func (a *app) compare(c *ui.Context, page pdfocr.Page, w, h float32) {
 		// dragged, and the arrows then move it rather than turn the page:
 		// this grip, over the split's, drags it with the focus left where
 		// it was. The divider takes the focus from Tab alone, as the
-		// arrows move it then.
+		// arrows move it then. A double click on the grip shares the room
+		// in half again, as the split's SplitReset would on its own.
 		grip := t.Space(1.5) // as wide as the split's
 		g := ui.Box(c).Absolute().Top(0).Bottom(0).Left(left - (grip-1)/2).Width(grip).Cursor(ui.CursorResizeEW)
 		dx, _, held := g.Dragged()
-		if held && dx != 0 {
+		switch {
+		case g.DoubleClicked():
+			a.split = 0
+		case held && dx != 0:
 			a.split = min(max(left+dx, least), w-1-least) / w
 		}
 		if held || g.Hovered() {
@@ -472,7 +477,7 @@ func (a *app) pageImage(c *ui.Context, form int, w, h float32) {
 	ui.Column(c).Grow(1).MinHeight(0).Center().Padding(pageMargin).Children(func() {
 		switch {
 		case !ok:
-			ui.Spinner(c)
+			ui.Spinner(c).Label(fmt.Sprintf("Loading page %d", a.at+1))
 		case p.err != nil:
 			ui.Text(c, "This page can’t be shown: "+p.err.Error()).TextColor(t.TextMuted).MaxWidth(440).TextAlign(ui.Center)
 		default:
@@ -502,8 +507,15 @@ func (a *app) pageText(c *ui.Context, page pdfocr.Page) {
 	})
 }
 
-// showToast shows the message left by what the user did last.
+// showToast shows the message left by what the user did last, and those
+// of the PDFs that could not be read, once the user is in the window.
 func (a *app) showToast(c *ui.Context) {
+	if len(a.failed) > 0 && c.WindowActive() {
+		for _, n := range a.failed {
+			errorToast(c, n)
+		}
+		a.failed = nil
+	}
 	n := a.toast
 	if n == nil {
 		return
@@ -514,6 +526,10 @@ func (a *app) showToast(c *ui.Context) {
 		c.ToastAction(n.title, revealLabel(), func() { reveal(path) })
 		return
 	}
+	errorToast(c, *n)
+}
+
+func errorToast(c *ui.Context, n toast) {
 	c.AddToast(ui.Toast{Title: n.title, Description: n.detail, Type: "error", Timeout: 8 * time.Second})
 }
 

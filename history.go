@@ -172,7 +172,7 @@ func (a *app) historySidebar(c *ui.Context) {
 		a.chosen = slices.Index(a.history, a.result)
 	}
 	l := &a.historyList
-	l.Key = func(i int) any { return a.history[i] }
+	l.Key = func(i int) any { return a.history[i].key() }
 	l.Label = func(i int) string { return filepath.Base(a.history[i].file) }
 	l.Selected = &a.chosen
 	removeChosen := func() {
@@ -230,16 +230,34 @@ func (a *app) historySidebar(c *ui.Context) {
 	})
 }
 
+// key names r among the sidebar's rows: the name of its folder, short and
+// the same from one launch to the next, as automation and the inspector
+// show it; r itself when it has no folder.
+func (r *result) key() any {
+	if r.dir == "" {
+		return r
+	}
+	return filepath.Base(r.dir)
+}
+
 // readingRow shows the PDF being read and how far it has come: chosen, its
 // progress shows.
 func (a *app) readingRow(c *ui.Context) {
 	t := c.Theme()
 	value, status, _ := a.status()
-	row := ui.ButtonBase(c.Key("reading")).Label("Reading "+filepath.Base(a.file)).
+	// The progress inside, which a button keeps from screen readers, they
+	// read as its description.
+	row := ui.ButtonBase(c.Key("reading")).Label("Reading "+filepath.Base(a.file)).Description(status).
 		Padding(t.Space(1.5), t.Space(2)).Radius(t.Radius).OnClick(a.watch)
 	switch {
 	case a.phase == working:
-		row.Background(t.Accent.Alpha(0.14))
+		// Gray while the user is in another app, as the history's chosen
+		// row fades.
+		tint := t.Accent
+		if !c.WindowActive() {
+			tint = t.TextMuted
+		}
+		row.Background(tint.Alpha(0.14))
 	case row.Pressed():
 		row.Background(t.SurfacePressed)
 	case row.Hovered():
