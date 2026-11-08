@@ -445,7 +445,7 @@ func (c *Converter) readPages(ctx context.Context, inst pdfium.Pdfium, input io.
 			}
 			layered := r.layered
 			r = r.upright(page.Turns)
-			lines := traditionalForms(page.Lines)
+			lines := chineseForms(page.Lines)
 			read := r.layout(lines)
 			read.page.Turns, read.page.Layered = page.Turns, layered
 			if text == nil {
