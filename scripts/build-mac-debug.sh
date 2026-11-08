@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Builds a debug Unscan.app for Apple silicon, quickly: MyGo's development
-# features (the inspector of native UI) are kept, the app is signed ad hoc,
+# features (the inspector of native UI, and automation for mygo-automation
+# when MYGO_AUTOMATION names a socket) are kept, the app is signed ad hoc,
 # and no disk image is made.
 #
 #   scripts/build-mac-debug.sh          # build/debug/darwin-arm64/Unscan.app
@@ -38,7 +39,7 @@ echo "==> Checking the models and ONNX Runtime"
 go run ./cmd/fetchdeps -platforms darwin-arm64
 
 echo "==> Building $name (debug)"
-go tool mygo build -debug -skip-dmg -platform darwin/arm64 -o "$out"
+GOFLAGS="${GOFLAGS:+$GOFLAGS }-tags=e2e" go tool mygo build -debug -skip-dmg -platform darwin/arm64 -o "$out"
 
 echo "==> Built $app ($(du -sh "$app" | awk '{print $1}'))"
 if $open_app; then

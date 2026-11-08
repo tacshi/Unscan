@@ -1,0 +1,3 @@
+interface:
+  display_name: "MyGo Automation"
+  short_description: "Drive a running MyGo app's native UI"

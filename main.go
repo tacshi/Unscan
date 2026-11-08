@@ -78,6 +78,9 @@ type app struct {
 	broken string // why the models could not load, so that nothing can be read
 	err    string // why the last PDF could not be read
 	toast  *toast // to show in the next build
+	// The PDFs that could not be read, to say so once the window is active:
+	// a toast's time runs while the user is in another app.
+	failed []toast
 
 	file        string    // the PDF being read, or ""
 	queue       []string  // the PDFs to read after it, in turn
@@ -328,7 +331,7 @@ func (a *app) read() {
 				if len(a.queue) == 0 && a.result == nil {
 					a.err = msg + ": " + err.Error()
 				} else {
-					a.toast = &toast{title: msg, detail: err.Error()}
+					a.failed = append(a.failed, toast{title: msg, detail: err.Error()})
 				}
 			} else {
 				res.file = path

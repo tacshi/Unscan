@@ -323,7 +323,7 @@ go tool mygo build    # build/darwin-arm64/Unscan.app and a .dmg
 For macOS, two scripts wrap it:
 
 ```sh
-scripts/build-mac-debug.sh [--open]   # build/debug/darwin-arm64/Unscan.app, with the native UI inspector
+scripts/build-mac-debug.sh [--open]   # build/debug/darwin-arm64/Unscan.app, with the native UI inspector and automation
 scripts/build-mac-release.sh          # tests, then build/release/darwin-arm64/Unscan.app and its .dmg
 ```
 
@@ -424,7 +424,30 @@ internal/ocr/            PP-OCRv6: detection, cropping, recognition; orientation
 internal/pdfocr/         rendering, the text layer, grafting it onto the PDF, the retyped PDF, and previews
 internal/ttf/            TrueType parsing (fonts and collections) and subsetting, for the retyped PDF
 internal/testscan/       synthetic scans and scanned PDFs for tests
+automation.go            built with -tags e2e: lets mygo-automation drive the app
 docs/                    how it works, in depth, the app icon's source (icon.svg), and the screenshots
+```
+
+### Inspecting and driving the app
+
+Development builds (`go tool mygo dev` and `scripts/build-mac-debug.sh`)
+keep MyGo's [inspector of native UI](https://github.com/egoist/mygo/blob/main/docs/ui/inspector.md):
+⌥⌘I or F12 opens it beside the content. Its Styles tab edits an
+element's styles as the window follows, and **Copy as Go** gives what
+changed as calls to paste into the view.
+
+Built with `-tags e2e`, as the debug build is, the app also lets
+[`mygo-automation`](https://github.com/egoist/mygo/blob/main/docs/plugins/automation.md)
+drive it, as an agent checking a change does: it reads the window's
+elements as screen readers do, presses them, types, and takes
+screenshots. The app listens only when `MYGO_AUTOMATION` names a socket,
+and release builds leave automation out whatever their tags.
+
+```sh
+go install github.com/egoist/mygo/plugins/automation/cmd/mygo-automation   # the MyGo of go.mod
+GOFLAGS=-tags=e2e MYGO_AUTOMATION="$TMPDIR/unscan.sock" go tool mygo dev
+mygo-automation open --socket "$TMPDIR/unscan.sock"
+mygo-automation snapshot -i
 ```
 
 ## Known limitations and roadmap
