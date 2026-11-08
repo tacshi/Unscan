@@ -1670,32 +1670,58 @@ func TestLeaderDots(t *testing.T) {
 }
 
 // TestTraditional tells traditional Chinese from simplified by the
-// characters either has alone, and sets a page in traditional Chinese in
-// its forms, 說 for the 説 the recognizer reads, but leaves a page in
-// simplified Chinese, or Japanese, as it was read.
+// characters either has alone, and sets a page in each in its forms: 說
+// and 髮 for the 説 and 髪 the recognizer reads in traditional Chinese, and
+// 汉语 for the 漢語 it reads in simplified Chinese, but for a line in
+// traditional Chinese by itself, or in Japanese; a page in Japanese, or in
+// both alike, it leaves as it was read.
 func TestTraditional(t *testing.T) {
 	if s, tc := []rune(simplified), []rune(traditional); len(s) != len(tc) {
 		t.Fatalf("%d simplified characters, %d traditional", len(s), len(tc))
 	}
 	for _, c := range []struct {
-		texts []string
-		want  bool
+		texts            []string
+		trad, simplified bool
 	}{
-		{[]string{"見面與問候", "說「您好。」", "Meeting and Greeting"}, true},
-		{[]string{"见面与问候", "说“您好。”"}, false},
-		{[]string{"説明書を読む"}, false},
-		{[]string{"Meeting and Greeting", "目錄"}, false}, // too little to tell
+		{[]string{"見面與問候", "說「您好。」", "Meeting and Greeting"}, true, false},
+		{[]string{"见面与问候", "说“您好。”"}, false, true},
+		{[]string{"説明書を読む"}, false, false},
+		{[]string{"Meeting and Greeting", "目錄"}, false, false}, // too little to tell
+		{[]string{"汉语", "漢語"}, false, false},                   // both alike
 	} {
-		if got := isTraditional(c.texts); got != c.want {
-			t.Errorf("%q traditional %v, want %v", c.texts, got, c.want)
+		if got := isTraditional(c.texts); got != c.trad {
+			t.Errorf("%q traditional %v, want %v", c.texts, got, c.trad)
+		}
+		if got := isSimplified(c.texts); got != c.simplified {
+			t.Errorf("%q simplified %v, want %v", c.texts, got, c.simplified)
 		}
 	}
-	page := traditionalForms([]ocr.Line{{Text: "見面與問候"}, {Text: "説「您好。」"}})
-	if page[1].Text != "說「您好。」" {
-		t.Errorf("a traditional page's 説 set as %q", page[1].Text)
+	lines := func(texts ...string) []ocr.Line {
+		ls := make([]ocr.Line, len(texts))
+		for i, t := range texts {
+			ls[i].Text = t
+		}
+		return ls
 	}
-	if page := traditionalForms([]ocr.Line{{Text: "说明书"}, {Text: "説明書を読む"}}); page[1].Text != "説明書を読む" {
-		t.Errorf("another page's 説 set as %q", page[1].Text)
+	for _, c := range []struct {
+		name      string
+		read, set []string
+	}{
+		{"a traditional page", []string{"見面與問候", "説「您好。」", "分髪", "染髪"},
+			[]string{"見面與問候", "說「您好。」", "分髮", "染髮"}},
+		{"a simplified page", []string{"英语語法根本沒有那么复杂，语", "易，但其实，漢语人学英语比英语人学漢语容易。因為汉语的句型有"},
+			[]string{"英语语法根本没有那么复杂，语", "易，但其实，汉语人学英语比英语人学汉语容易。因为汉语的句型有"}},
+		{"a simplified page quoting traditional Chinese", []string{"这本书用简体中文写成，在这里引用了一句话：", "繁體字：這一行使用傳統字形。"},
+			[]string{"这本书用简体中文写成，在这里引用了一句话：", "繁體字：這一行使用傳統字形。"}},
+		{"a page in both alike", []string{"汉语", "漢語"}, []string{"汉语", "漢語"}},
+		{"a simplified page with a line of Japanese", []string{"说明书", "説明書を読む"}, []string{"说明书", "説明書を読む"}},
+	} {
+		got := chineseForms(lines(c.read...))
+		for i, l := range got {
+			if l.Text != c.set[i] {
+				t.Errorf("%s: %q set as %q, want %q", c.name, c.read[i], l.Text, c.set[i])
+			}
+		}
 	}
 }
 

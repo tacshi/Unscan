@@ -472,8 +472,11 @@ For each scanned page, at the resolution it was read at:
    does, but for characters they lack; its lines are measured and judged
    in the SC faces all the same. On a page in it, characters the
    recognizer reads in the forms of Japanese or simplified Chinese, a
-   stroke or two apart, as 説 for 說, are read as traditional Chinese
-   draws them, in every output. Each character is set
+   stroke or two apart, as 説 for 說 or 髪 for 髮, are read as traditional
+   Chinese draws them, in every output; and on a page in simplified
+   Chinese, characters it reads in traditional forms, as 漢語 for 汉语,
+   are read in simplified ones, but for a line in traditional Chinese by
+   itself, as a quotation, or in Japanese. Each character is set
    in the color of its ink, as a heading in black with its translation in
    blue is, measured across its advance where it is first set, and a word
    of Latin letters or digits in the color most of its characters are,
